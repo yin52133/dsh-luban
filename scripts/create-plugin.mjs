@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
-import { constants } from 'node:fs'
+import { lstat, mkdir, readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createStagedDirectoryPublisher, safeChildPath } from './path-boundary.mjs'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const REPOSITORY_ROOT = resolve(SCRIPT_DIR, '..')
@@ -44,12 +44,14 @@ Options:
   --dry-run                Explicitly request the default non-writing mode.
   --help                    Show this message.
 
-The target must stay inside the selected workspace and must be empty. Existing
-files are never overwritten.`
+The target must stay inside the selected workspace and must not already exist.
+Existing files are never overwritten.`
 }
 
 function parseCli(argv) {
   const options = { client: false, dryRun: true }
+  let explicitWrite = false
+  let explicitDryRun = false
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
     const next = () => {
@@ -79,9 +81,11 @@ function parseCli(argv) {
         break
       case '--write':
         options.dryRun = false
+        explicitWrite = true
         break
       case '--dry-run':
         options.dryRun = true
+        explicitDryRun = true
         break
       case '--help':
         options.help = true
@@ -89,6 +93,9 @@ function parseCli(argv) {
       default:
         throw new Error(`Unknown option: ${arg}`)
     }
+  }
+  if (explicitWrite && explicitDryRun) {
+    throw new Error('--write and --dry-run are mutually exclusive')
   }
   return options
 }
@@ -111,19 +118,14 @@ function assertInside(root, target) {
   }
 }
 
-async function exists(path) {
+async function assertAvailableTarget(target) {
   try {
-    await access(path, constants.F_OK)
-    return true
-  } catch {
-    return false
+    await lstat(target)
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && error.code === 'ENOENT') return
+    throw error
   }
-}
-
-async function assertEmptyTarget(target) {
-  if (!(await exists(target))) return
-  const entries = await readdir(target)
-  if (entries.length > 0) throw new Error(`Refusing to overwrite non-empty target: ${target}`)
+  throw new Error(`Refusing to overwrite existing target: ${target}`)
 }
 
 function render(source, values, sourceName) {
@@ -157,7 +159,8 @@ export async function generatePlugin(input) {
   const templateRoot = resolve(input.templateRoot ?? DEFAULT_TEMPLATE_ROOT)
   const target = resolve(workspaceRoot, input.output ?? `packages/dsh-luban-${name}`)
   assertInside(workspaceRoot, target)
-  await assertEmptyTarget(target)
+  const safeTarget = await safeChildPath(workspaceRoot, target, 'Plugin output')
+  await assertAvailableTarget(safeTarget.target)
 
   const packageName = `dsh-luban-${name}`
   const pluginId = `luban-${name}`
@@ -193,11 +196,14 @@ export async function generatePlugin(input) {
     return { target, files: rendered.map((item) => item.destination), dryRun: true }
   }
 
-  await mkdir(target, { recursive: true })
-  for (const item of rendered) {
-    const destination = resolve(target, item.destination)
-    await mkdir(dirname(destination), { recursive: true })
-    await writeFile(destination, item.content, { encoding: 'utf8', flag: 'wx' })
+  await mkdir(workspaceRoot, { recursive: true })
+  const publisher = await createStagedDirectoryPublisher(workspaceRoot, target, 'Plugin output')
+  try {
+    for (const item of rendered) await publisher.writeText(item.destination, item.content)
+    await publisher.publish()
+  } catch (error) {
+    await publisher.abort()
+    throw error
   }
   return { target, files: rendered.map((item) => item.destination), dryRun: false }
 }

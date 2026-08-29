@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { Buffer } from 'node:buffer'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -19,6 +19,7 @@ import { prepareMarketEntry } from '../release/prepare-market-entry.mjs'
 import { verifyArtifactManifest } from '../release/publish.mjs'
 import { validateDshEngineRange, validateRepository } from '../release/validate-release.mjs'
 import { secretGatePlan } from '../release/verify-secret-gate.mjs'
+import { createStagedDirectoryPublisher, pathIsWithin } from '../path-boundary.mjs'
 
 const TEST_DIR = fileURLToPath(new URL('.', import.meta.url))
 const REPOSITORY_ROOT = resolve(TEST_DIR, '..', '..')
@@ -54,6 +55,7 @@ afterEach(async () => {
 describe('M12 plugin scaffolder', () => {
   it('defaults to a non-writing preview and refuses traversal', async () => {
     const root = await temporaryRoot()
+    expect(pathIsWithin(root, join(root, '..plugins', 'sample'))).toBe(true)
     const preview = await generatePlugin({ name: 'sample', workspaceRoot: root, client: true })
     expect(preview.dryRun).toBe(true)
     expect(preview.files).toContain('src/client/index.ts')
@@ -63,6 +65,28 @@ describe('M12 plugin scaffolder', () => {
     await expect(
       generatePlugin({ name: 'sample', workspaceRoot: root, output: '../outside' }),
     ).rejects.toThrow(/child of the workspace/)
+  })
+
+  it('rejects conflicting write modes without creating the requested output', async () => {
+    const root = await temporaryRoot()
+    const target = join(root, 'conflicting-output')
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(REPOSITORY_ROOT, 'scripts/create-plugin.mjs'),
+        '--name',
+        'sample',
+        '--output',
+        target,
+        '--dry-run',
+        '--write',
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    )
+
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('mutually exclusive')
+    await expect(access(target)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('builds a loadable rc2 lazy-CJS client and ships lifecycle tests', async () => {
@@ -81,6 +105,7 @@ describe('M12 plugin scaffolder', () => {
     const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
     expect(manifest.dsh.client.platform).toBe('web')
     expect(manifest.exports['./client'].default).toBe('./dist/client.js')
+    expect(manifest.exports['./client'].types).toBe('./dist/client/index.d.ts')
 
     runNode(join(REPOSITORY_ROOT, 'node_modules/tsdown/dist/run.mjs'), [], packageRoot)
     runNode(
@@ -88,15 +113,123 @@ describe('M12 plugin scaffolder', () => {
       ['--emitDeclarationOnly', '-p', 'tsconfig.json'],
       packageRoot,
     )
+    const clientTypes = join(packageRoot, 'dist/client/index.d.ts')
+    expect(await readFile(clientTypes, 'utf8')).toContain('export declare function apply')
+    await writeFile(
+      join(packageRoot, 'client-types.probe.ts'),
+      "import { apply } from 'dsh-luban-sample/client'\nvoid apply\n",
+      'utf8',
+    )
+    runNode(
+      join(REPOSITORY_ROOT, 'node_modules/typescript/bin/tsc'),
+      [
+        '--noEmit',
+        '--ignoreConfig',
+        '--module',
+        'NodeNext',
+        '--moduleResolution',
+        'NodeNext',
+        '--target',
+        'ES2024',
+        '--strict',
+        '--skipLibCheck',
+        'client-types.probe.ts',
+      ],
+      packageRoot,
+    )
+    const hostProbe = runNode(
+      '--input-type=module',
+      [
+        '--eval',
+        `const plugin = await import(${JSON.stringify(manifest.name)}); process.stdout.write(JSON.stringify({ name: plugin.name, apply: typeof plugin.apply }))`,
+      ],
+      packageRoot,
+    )
+    expect(JSON.parse(hostProbe)).toEqual({ name: 'luban-sample', apply: 'function' })
     const bundle = await readFile(join(packageRoot, 'dist/client.js'), 'utf8')
     expect(bundle).toContain('window.__ModuleLoader__.load')
     expect(bundle).toContain('id: "dsh-luban-sample"')
     runNode(join(REPOSITORY_ROOT, 'node_modules/vitest/vitest.mjs'), ['run', 'tests'], packageRoot)
 
+    const hostOnly = await generatePlugin({
+      name: 'host-only',
+      workspaceRoot: root,
+      dryRun: false,
+    })
+    const hostOnlyManifest = JSON.parse(
+      await readFile(join(hostOnly.target, 'package.json'), 'utf8'),
+    )
+    runNode(join(REPOSITORY_ROOT, 'node_modules/tsdown/dist/run.mjs'), [], hostOnly.target)
+    const hostOnlyProbe = runNode(
+      '--input-type=module',
+      [
+        '--eval',
+        `const plugin = await import(${JSON.stringify(hostOnlyManifest.name)}); process.stdout.write(JSON.stringify({ name: plugin.name, apply: typeof plugin.apply }))`,
+      ],
+      hostOnly.target,
+    )
+    expect(JSON.parse(hostOnlyProbe)).toEqual({ name: 'luban-host-only', apply: 'function' })
+
     await expect(
       generatePlugin({ name: 'sample', workspaceRoot: root, client: true, dryRun: false }),
     ).rejects.toThrow(/overwrite/)
   }, 30_000)
+
+  it('rejects a packages junction that would scaffold outside the workspace', async () => {
+    const root = await temporaryRoot()
+    const outside = await temporaryRoot()
+    await symlink(
+      outside,
+      join(root, 'packages'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+
+    await expect(
+      generatePlugin({ name: 'sample', workspaceRoot: root, dryRun: false }),
+    ).rejects.toThrow(/junction|outside its configured root/u)
+    await expect(access(join(outside, 'dsh-luban-sample', 'package.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
+
+  it('rejects an embedded staging junction without touching its external target', async () => {
+    const root = await temporaryRoot()
+    const outside = await temporaryRoot()
+    const marker = join(outside, 'keep.txt')
+    await writeFile(marker, 'keep', 'utf8')
+    const publisher = await createStagedDirectoryPublisher(
+      root,
+      join(root, 'packages', 'dsh-luban-sample'),
+      'Plugin output',
+    )
+    await symlink(
+      outside,
+      join(publisher.stagingPath, 'src'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+
+    await expect(publisher.writeText('src/index.ts', 'unsafe')).rejects.toThrow(
+      /appeared unexpectedly|junction/u,
+    )
+    await expect(publisher.abort()).resolves.toBe(false)
+    expect(await readFile(marker, 'utf8')).toBe('keep')
+    await expect(access(join(outside, 'index.ts'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(access(join(root, 'packages', 'dsh-luban-sample'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
+
+  it('removes only identity-matched staging entries after a mid-generation failure', async () => {
+    const root = await temporaryRoot()
+    const target = join(root, 'packages', 'dsh-luban-sample')
+    const publisher = await createStagedDirectoryPublisher(root, target, 'Plugin output')
+    await publisher.writeText('src/index.ts', 'first')
+
+    await expect(publisher.writeText('src/index.ts', 'duplicate')).rejects.toThrow(/overwrite/u)
+    await expect(publisher.abort()).resolves.toBe(true)
+    await expect(access(publisher.stagingPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(access(target)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
 })
 
 describe('M12 install and safety plans', () => {

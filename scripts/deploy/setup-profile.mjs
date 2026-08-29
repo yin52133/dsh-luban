@@ -1,21 +1,16 @@
 #!/usr/bin/env node
 
-import { constants } from 'node:fs'
-import { copyFile, mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, parse, relative, resolve } from 'node:path'
+import { join, parse, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL, URL } from 'node:url'
+import { createStagedDirectoryPublisher, pathIsWithin, safeChildPath } from '../path-boundary.mjs'
 
 const SCRIPT_ROOT = fileURLToPath(new URL('.', import.meta.url))
 const REPOSITORY_ROOT = resolve(SCRIPT_ROOT, '..', '..')
 const TEMPLATE_ROOT = join(REPOSITORY_ROOT, 'profiles')
 const PROFILE_FILES = Object.freeze(['package.json', 'cordis.patch.yml', 'README.md'])
 const PROFILE_NAMES = new Set(['win-debug', 'ubuntu-server'])
-
-function pathIsWithin(root, target) {
-  const rel = relative(resolve(root), resolve(target))
-  return rel === '' || (rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\'))
-}
 
 function defaultDshHome(env = process.env, userHome = homedir()) {
   const configured = env.DSH_HOME?.trim()
@@ -71,21 +66,23 @@ async function validateTemplate(plan) {
 export async function setupProfile(options = {}) {
   const plan = profileSetupPlan(options)
   await validateTemplate(plan)
+  await safeChildPath(plan.dshHome, join(plan.dshHome, 'profiles'), 'Profile directory')
+  await safeChildPath(plan.dshHome, plan.target, 'Profile target')
   if (plan.dryRun) return plan
 
-  const profilesRoot = join(plan.dshHome, 'profiles')
-  await mkdir(profilesRoot, { recursive: true })
-  let created = false
+  await mkdir(plan.dshHome, { recursive: true })
+  const publisher = await createStagedDirectoryPublisher(
+    plan.dshHome,
+    plan.target,
+    'Profile target',
+  )
   try {
-    await mkdir(plan.target)
-    created = true
     for (const file of plan.files) {
-      await copyFile(join(plan.source, file), join(plan.target, file), constants.COPYFILE_EXCL)
+      await publisher.copyExclusive(join(plan.source, file), file)
     }
+    await publisher.publish()
   } catch (error) {
-    if (created && pathIsWithin(profilesRoot, plan.target)) {
-      await rm(plan.target, { recursive: true, force: true })
-    }
+    await publisher.abort()
     if (error?.code === 'EEXIST') {
       throw new Error(`Refusing to overwrite existing profile: ${plan.target}`)
     }

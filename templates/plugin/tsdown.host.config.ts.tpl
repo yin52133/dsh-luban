@@ -12,4 +12,7 @@ export default defineConfig({
   deps: {
     neverBundle: ['@deepseek-ai/cordis'],
   },
+  outputOptions: {
+    entryFileNames: 'index.js',
+  },
 })

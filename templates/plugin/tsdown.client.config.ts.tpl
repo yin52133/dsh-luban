@@ -27,6 +27,9 @@ export default defineConfig([
     deps: {
       neverBundle: ['@deepseek-ai/cordis'],
     },
+    outputOptions: {
+      entryFileNames: 'index.js',
+    },
   },
   {
     name: `${__PACKAGE_NAME_JSON__}/client`,

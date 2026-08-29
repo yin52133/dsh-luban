@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, parse, resolve } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
@@ -103,5 +103,26 @@ describe('profile deployment setup', () => {
           )
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('"dryRun": true')
+  })
+
+  it('rejects a profiles junction that would write outside DSH_HOME', async () => {
+    const dshHome = await temporaryRoot()
+    const outside = await temporaryRoot()
+    await mkdir(outside, { recursive: true })
+    await symlink(
+      outside,
+      join(dshHome, 'profiles'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+
+    await expect(setupProfile({ profile: 'win-debug', dshHome })).rejects.toThrow(
+      /junction|outside its configured root/u,
+    )
+    await expect(setupProfile({ profile: 'win-debug', dshHome, apply: true })).rejects.toThrow(
+      /junction|outside its configured root/u,
+    )
+    await expect(access(join(outside, 'win-debug', 'package.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
   })
 })
