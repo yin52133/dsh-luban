@@ -279,6 +279,19 @@ describe('AuthSidecar integration', () => {
     })
     expect(login.status).toBe(200)
     expect(login.headers.get('set-cookie')).toMatch(/; Secure/u)
+    const cookie = cookieHeader(splitSetCookie(login.headers.get('set-cookie')))
+    const redirect = await fetch(`${harness.baseUrl}/redirect`, {
+      headers: {
+        cookie,
+        host: '127.0.0.1',
+        origin: 'https://proxy.example.test',
+        'x-forwarded-host': 'proxy.example.test',
+        'x-forwarded-proto': 'https',
+      },
+      redirect: 'manual',
+    })
+    expect(redirect.status).toBe(302)
+    expect(redirect.headers.get('location')).toBe('https://proxy.example.test/target')
   })
 })
 
