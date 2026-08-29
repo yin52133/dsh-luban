@@ -1,0 +1,108 @@
+# M10 Windows Debug 模块（luban-win-debug）设计（Windows 专属）
+
+嵌入式工程师的 Windows 侧作战面板：串口日志、烧录/复位、GDB、adb/fastboot、远程设备、桌面自动化——全部收敛到统一的 ChannelAdapter 通道层，日志片段可一键送入 dsh 会话。
+
+## 版本记录
+
+| 版本 | 日期       | 作者  | 变更说明                                             |
+| ---- | ---------- | ----- | ---------------------------------------------------- |
+| v0.1 | 2026-08-29 | Maintainers | 初稿：串口/烧录/GDB/adb-fastboot/桌面自动化/远程/通道层 |
+
+## 1. 概述与目标
+
+- **解决**：R11——win 端 debug 与串口操作成体系；日志/寄存器/断点信息能直接进 dsh 会话让 AI 参与排障。
+- **不解决**：图形化 IDE（Keil/IAR/Eclipse）的替代；示波器等仪器控制（后置扩展）。
+- **需求映射**：R11。
+- **平台属性**：**win 专属**（平台守卫同 M09；linux 下禁用并提示）。
+
+## 2. 功能清单
+
+| 编号 | 功能 | 优先级 | 里程碑 | 验收口径 |
+| --- | --- | --- | --- | --- |
+| M10-F001 | 串口通道适配器：COM 口枚举、参数配置（波特率等）、开关与热插拔感知、日志流 | P1 | MS2 | 拔插设备后列表自动更新 |
+| M10-F002 | 串口日志监视 UI：实时滚动、关键字过滤/高亮、时间戳、选中片段一键注入会话 | P1 | MS2 | 选中片段以文件+摘录形式进会话 |
+| M10-F003 | 烧录/复位命令编排：openocd / J-Link / esptool / STM32CubeProgrammer 命令模板化，一键执行，输出解析为结构化结果 | P1 | MS2 | 烧录失败时错误行高亮并可直接问 AI |
+| M10-F004 | GDB 调试会话托管：openocd+gdb 会话起停、断点/变量/寄存器快照导出进会话 | P2 | MS2 | 快照为结构化文本可被会话引用 |
+| M10-F005 | adb/fastboot 通道：设备列表、常用刷机流程模板、状态解析 | P1 | MS2 | 设备 offline/ unauthorized 状态可辨识 |
+| M10-F006 | 桌面自动化适配：Windows-MCP / CursorTouch 类能力以 B 档接入（MCP 服务配置与启停封装） | P2 | MS2 | 可经 dsh 调用桌面自动化工具 |
+| M10-F007 | 远程设备通道：ssh 到开发板、telnet、网络串口服务器（TCP 透传） | P2 | MS2 | 网络串口与本地串口在 UI 无差别 |
+| M10-F008 | ChannelAdapter 统一通道接口：所有通道实现同一契约（开/关/读写/命令/生命周期/事件），UI 与会话注入不感知通道类型 | P1 | MS2 | 新增通道类型零 UI 改动 |
+
+## 3. 流程图（串口日志 → 会话排障）
+
+```mermaid
+flowchart TD
+    A["M10-F001 串口打开（COMx @ 波特率）"] --> B["M10-F008 ChannelAdapter 统一日志流"]
+    B --> C["M10-F002 监视 UI：滚动/过滤/高亮"]
+    C --> D{"用户动作"}
+    D -- "选中片段 → 注入会话" --> E["片段写临时文件 + 摘录"]
+    E --> F["dsh 会话收到：摘录 + 文件路径 + 通道元数据<br/>（波特率/设备/时间窗）"]
+    F --> G["AI 分析：错误定位/建议命令"]
+    G --> H["用户回 UI 一键执行建议命令<br/>（烧录/复位模板 M10-F003）"]
+    D -- "执行命令模板" --> H
+```
+
+## 4. 接口设计
+
+```typescript
+/** ChannelAdapter —— L1 HAL 契约（串口/adb/gdb/ssh/tcp 全部实现它） */
+export interface ChannelAdapter {
+  readonly kind: 'serial' | 'adb' | 'fastboot' | 'gdb' | 'ssh' | 'telnet' | 'tcp-serial';
+  list(): Promise<ChannelEndpoint[]>;
+  open(endpoint: ChannelEndpoint, opts: OpenOptions): Promise<ChannelHandle>;
+}
+
+export interface ChannelHandle {
+  write(data: Uint8Array | string): Promise<void>;
+  readEvents(): AsyncIterable<ChannelDataEvent>;   // 数据/状态变化统一走事件
+  exec?(cmd: string): Promise<ExecResult>;          // 命令型通道（adb/gdb/ssh）
+  close(): Promise<void>;
+}
+
+/** WinDebugService —— L3 装配：模板、监视、会话注入 */
+export interface WinDebugService {
+  captureSnippet(handle: ChannelHandle, range: SnippetRange): Promise<SnippetFile>;
+  injectToSession(sessionId: SessionId, snippet: SnippetFile): Promise<void>;
+  runTemplate(templateId: string, params: Record<string, string>): Promise<ExecResult>;
+}
+```
+
+## 5. 数据模型
+
+见 `04-interfaces/data-models.md#channel`。要点：`ChannelEndpoint`（kind+地址参数）、`SnippetFile`（片段内容、时间窗、通道元数据、落盘路径）。
+
+## 6. 配置设计
+
+```yaml
+- insert:
+    - id: luban-win-debug
+      name: dsh-luban-win-debug
+      config:
+        serial: { defaultBaud: 115200, timestamp: true }
+        templatesDir: "templates"        # 用户可增补烧录模板（yaml）
+        snippet: { dir: ".luban/snippets", maxLines: 500 }
+        desktopMcp:                      # M10-F006：B 档 MCP 接入
+          enabled: false
+          command: ""                    # 具体命令写在本地配置，不入库
+```
+
+## 7. 依赖与边界
+
+- 下层：serialport（或系统 API 封装）、外部工具链 openocd/J-Link/esptool/adb/fastboot/gdb（全部 **B 档**外部引擎，逐个登记 license 与版本）；M06 复用其注入通道。
+- 复用档位：C 档参考各类串口监视器的过滤/高亮交互（需求级）；通道层为原创抽象。
+- 平台属性：**win 专属**；串口枚举等 HAL 实现留 linux 接口（网络串口在 ubuntu 也可能用），仅 UI 面板 win 专属。
+
+## 8. 非功能与安全
+
+- 串口独占冲突：打开被占用的口时给出占用者提示；烧录前设备占用检查。
+- 模板命令执行前回显确认（危险命令如 erase 二次确认）；日志片段落盘前正则打码 token/密码（P6.1）。
+- 外部工具路径经配置解析，缺失时给出安装指引而非崩溃。
+
+## 9. checklist 映射
+
+M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
+
+## 10. 开放问题
+
+- 用户实际使用的调试探针与目标芯片清单（决定首批命令模板覆盖：J-Link？OpenOCD？esptool？）。
+- serialport 原生模块在 pnpm + electron-free 环境的构建配置（M12-F001 脚手架验证）。

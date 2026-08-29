@@ -1,0 +1,164 @@
+{
+  "$schema": "./design/04-interfaces/data-models.md#checklist-json-v1",
+  "meta": {
+    "project": "dsh-luban",
+    "description": "功能进度台账：与 design/01-overview/trace-matrix.md 及各模块文档功能清单三处一致，由 scripts/validate-design.mjs 校验",
+    "version": "0.1.0",
+    "updatedAt": "2026-08-29",
+    "idRules": "R=需求(只增不改) M=模块 F=功能点(只增不改，废弃置dropped) MS=里程碑"
+  },
+  "statusLegend": {
+    "todo": "未开发",
+    "doing": "开发中",
+    "review": "待验收",
+    "done": "已完成",
+    "blocked": "受阻（notes 说明原因）",
+    "dropped": "已废弃（设计文档标记，不删除）"
+  },
+  "milestones": [
+    {
+      "id": "MS1",
+      "name": "服务器线基座",
+      "goal": "Ubuntu 端能用：认证 + 看板 + 保活 + systemd 常驻",
+      "order": 1,
+      "featureIds": [
+        "M01-F001", "M01-F002", "M01-F003", "M01-F004", "M01-F005", "M01-F006",
+        "M02-F001", "M02-F002", "M02-F003", "M02-F010",
+        "M03-F001", "M03-F002", "M03-F003", "M03-F004",
+        "M09-F001",
+        "M12-F001", "M12-F005"
+      ]
+    },
+    {
+      "id": "MS2",
+      "name": "嵌入式 debug 线",
+      "goal": "Win 端可用：串口/adb/烧录/GDB/远程 + browser-use + 首次上架市场",
+      "order": 2,
+      "featureIds": [
+        "M10-F001", "M10-F002", "M10-F003", "M10-F004", "M10-F005", "M10-F006", "M10-F007", "M10-F008",
+        "M11-F001", "M11-F002", "M11-F004",
+        "M02-F004", "M02-F007", "M02-F008", "M02-F009",
+        "M12-F002", "M12-F003", "M12-F004", "M12-F006"
+      ]
+    },
+    {
+      "id": "MS3",
+      "name": "HUD/上下文线",
+      "goal": "体验升级：HUD + 上下文压缩 + plan 模式 + 粘贴图 + 夜间自主调度",
+      "order": 3,
+      "featureIds": [
+        "M04-F001", "M04-F002", "M04-F003", "M04-F004",
+        "M06-F001", "M06-F002", "M06-F003", "M06-F004",
+        "M07-F001", "M07-F002", "M07-F003", "M07-F004", "M07-F005", "M07-F006",
+        "M08-F001", "M08-F002", "M08-F003", "M08-F004", "M08-F005",
+        "M02-F005", "M02-F006",
+        "M11-F003"
+      ]
+    },
+    {
+      "id": "MS4",
+      "name": "协同完善",
+      "goal": "双机 session 共享与控制权交接、服务器命令集完善",
+      "order": 4,
+      "featureIds": [
+        "M05-F001", "M05-F002", "M05-F003", "M05-F004",
+        "M09-F002", "M09-F003", "M09-F004",
+        "M01-F007",
+        "M03-F005"
+      ]
+    }
+  ],
+  "requirements": [
+    { "id": "R01", "title": "Ubuntu 端可直接用网页操作 dsh", "modules": ["M01", "M09"], "status": "todo" },
+    { "id": "R02", "title": "tmux 等保活；重启后后台继续工作直到完成", "modules": ["M03"], "status": "todo" },
+    { "id": "R03", "title": "任务看板（todo/执行中/已完成）+ agent 自主领单", "modules": ["M02"], "status": "todo" },
+    { "id": "R04", "title": "注册到 dsh 插件市场", "modules": ["M12"], "status": "todo" },
+    { "id": "R05", "title": "plan 工作模式", "modules": ["M04"], "status": "todo" },
+    { "id": "R06", "title": "Ubuntu 与 Windows 共享 session 与控制权限", "modules": ["M05"], "status": "todo" },
+    { "id": "R07", "title": "粘贴图片让 dsh 能访问", "modules": ["M06"], "status": "todo" },
+    { "id": "R08", "title": "HUD：context used/max/占比、workspace、模型、思考深度、tpm、rpm", "modules": ["M07"], "status": "todo" },
+    { "id": "R09", "title": "Codex 式上下文系统，参考 pi 压缩项目", "modules": ["M08"], "status": "todo" },
+    { "id": "R10", "title": "一套服务器端（Ubuntu）操作模式", "modules": ["M09"], "status": "todo" },
+    { "id": "R11", "title": "Windows 端操作模式：远程、debug、串口、adb/fastboot、桌面与浏览器自动化", "modules": ["M10", "M11"], "status": "todo" }
+  ],
+  "features": [
+    { "id": "M01-F001", "requirement": "R01", "module": "M01", "title": "用户账户体系（本地账户文件 + 口令哈希）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-29" },
+    { "id": "M01-F002", "requirement": "R01", "module": "M01", "title": "登录会话与 token", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-29" },
+    { "id": "M01-F003", "requirement": "R01", "module": "M01", "title": "Web 认证门禁中间件", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-29" },
+    { "id": "M01-F004", "requirement": "R10", "module": "M01", "title": "端口与监听地址配置", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-29" },
+    { "id": "M01-F005", "requirement": "R01", "module": "M01", "title": "失败锁定与审计日志", "priority": "P1", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-29" },
+    { "id": "M01-F006", "requirement": "R01", "module": "M01", "title": "双端部署适配（win/ubuntu 同一实现）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-29" },
+    { "id": "M01-F007", "requirement": "R01", "module": "M01", "title": "HTTPS/反代适配", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M02-F001", "requirement": "R03", "module": "M02", "title": "任务 CRUD 与状态机", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F002", "requirement": "R03", "module": "M02", "title": "看板 Web UI（列视图/拖拽/过滤）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F003", "requirement": "R03", "module": "M02", "title": "任务范围标签（host/workspace/优先级/验收标准）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F004", "requirement": "R03", "module": "M02", "title": "agent 领单 API（原子认领 + 乐观锁）", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F005", "requirement": "R03", "module": "M02", "title": "夜间自主调度器（时间窗/限额/白名单/熔断）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F006", "requirement": "R03", "module": "M02", "title": "产出回写与次日复核", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F007", "requirement": "R03", "module": "M02", "title": "SSE 事件广播", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F008", "requirement": "R03", "module": "M02", "title": "taskctl CLI（与 Web 同源 API）", "priority": "P2", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F009", "requirement": "R03", "module": "M02", "title": "数据导入器（dashi/cloader JSON → luban）", "priority": "P3", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+    { "id": "M02-F010", "requirement": "R03", "module": "M02", "title": "存储层（JSON 文件 + 存储适配器接口）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M03-F001", "requirement": "R02", "module": "M03", "title": "tmux 会话托管（ubuntu）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M03-keepalive.md", "updatedAt": "2026-08-29" },
+    { "id": "M03-F002", "requirement": "R02", "module": "M03", "title": "Windows 保活替代（计划任务/服务）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M03-keepalive.md", "updatedAt": "2026-08-29" },
+    { "id": "M03-F003", "requirement": "R02", "module": "M03", "title": "重启恢复（开机自启 + 会话重建）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M03-keepalive.md", "updatedAt": "2026-08-29" },
+    { "id": "M03-F004", "requirement": "R02", "module": "M03", "title": "心跳巡检与健康上报", "priority": "P1", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M03-keepalive.md", "updatedAt": "2026-08-29" },
+    { "id": "M03-F005", "requirement": "R02", "module": "M03", "title": "长任务断点记录（进度快照续跑）", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M03-keepalive.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M04-F001", "requirement": "R05", "module": "M04", "title": "plan 模式状态机", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M04-plan.md", "updatedAt": "2026-08-29" },
+    { "id": "M04-F002", "requirement": "R05", "module": "M04", "title": "plan 文档落盘与引用", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M04-plan.md", "updatedAt": "2026-08-29" },
+    { "id": "M04-F003", "requirement": "R05", "module": "M04", "title": "审批交互（Web 批准/驳回/修订）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M04-plan.md", "updatedAt": "2026-08-29" },
+    { "id": "M04-F004", "requirement": "R05", "module": "M04", "title": "plan 模板与检查清单", "priority": "P3", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M04-plan.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M05-F001", "requirement": "R06", "module": "M05", "title": "会话注册表", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M05-session-share.md", "updatedAt": "2026-08-29" },
+    { "id": "M05-F002", "requirement": "R06", "module": "M05", "title": "跨机控制权交接（互斥锁）", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M05-session-share.md", "updatedAt": "2026-08-29" },
+    { "id": "M05-F003", "requirement": "R06", "module": "M05", "title": "会话状态同步与断线重连", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M05-session-share.md", "updatedAt": "2026-08-29" },
+    { "id": "M05-F004", "requirement": "R06", "module": "M05", "title": "权限分级（观察者/操作者/所有者）", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M05-session-share.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M06-F001", "requirement": "R07", "module": "M06", "title": "剪贴板图片捕获（web 粘贴）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M06-image-paste.md", "updatedAt": "2026-08-29" },
+    { "id": "M06-F002", "requirement": "R07", "module": "M06", "title": "图片落盘与命名（workspace 附件目录）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M06-image-paste.md", "updatedAt": "2026-08-29" },
+    { "id": "M06-F003", "requirement": "R07", "module": "M06", "title": "会话引用注入（dsh 可访问路径）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M06-image-paste.md", "updatedAt": "2026-08-29" },
+    { "id": "M06-F004", "requirement": "R07", "module": "M06", "title": "图片预览与清理策略", "priority": "P3", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M06-image-paste.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M07-F001", "requirement": "R08", "module": "M07", "title": "TelemetryProvider 多源聚合接口", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M07-hud.md", "updatedAt": "2026-08-29" },
+    { "id": "M07-F002", "requirement": "R08", "module": "M07", "title": "context 用量（used/max/占比）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M07-hud.md", "updatedAt": "2026-08-29" },
+    { "id": "M07-F003", "requirement": "R08", "module": "M07", "title": "环境信息（workspace/模型/思考深度）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M07-hud.md", "updatedAt": "2026-08-29" },
+    { "id": "M07-F004", "requirement": "R08", "module": "M07", "title": "tpm/rpm 滑动窗口统计", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M07-hud.md", "updatedAt": "2026-08-29" },
+    { "id": "M07-F005", "requirement": "R08", "module": "M07", "title": "HUD 展示（web 状态栏 + CLI 头部）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M07-hud.md", "updatedAt": "2026-08-29" },
+    { "id": "M07-F006", "requirement": "R08", "module": "M07", "title": "阈值提醒（占比超限提示压缩）", "priority": "P3", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M07-hud.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M08-F001", "requirement": "R09", "module": "M08", "title": "压缩策略接口（策略模式）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M08-context.md", "updatedAt": "2026-08-29" },
+    { "id": "M08-F002", "requirement": "R09", "module": "M08", "title": "阈值触发自动压缩（分段摘要）", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M08-context.md", "updatedAt": "2026-08-29" },
+    { "id": "M08-F003", "requirement": "R09", "module": "M08", "title": "虚拟文件归档（旧上下文外置可检索）", "priority": "P3", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M08-context.md", "updatedAt": "2026-08-29" },
+    { "id": "M08-F004", "requirement": "R09", "module": "M08", "title": "压缩审计与回放", "priority": "P3", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M08-context.md", "updatedAt": "2026-08-29" },
+    { "id": "M08-F005", "requirement": "R09", "module": "M08", "title": "与长任务/夜间模式协同", "priority": "P2", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M08-context.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M09-F001", "requirement": "R10", "module": "M09", "title": "headless/web profile systemd 启动器", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M09-server-mode.md", "updatedAt": "2026-08-29" },
+    { "id": "M09-F002", "requirement": "R10", "module": "M09", "title": "服务器命令集（编译/构建队列）", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M09-server-mode.md", "updatedAt": "2026-08-29" },
+    { "id": "M09-F003", "requirement": "R10", "module": "M09", "title": "资源看护（磁盘/负载/超时）", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M09-server-mode.md", "updatedAt": "2026-08-29" },
+    { "id": "M09-F004", "requirement": "R10", "module": "M09", "title": "构建产物管理", "priority": "P3", "milestone": "MS4", "status": "todo", "designDoc": "design/03-modules/M09-server-mode.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M10-F001", "requirement": "R11", "module": "M10", "title": "串口通道适配器", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M10-win-debug.md", "updatedAt": "2026-08-29" },
+    { "id": "M10-F002", "requirement": "R11", "module": "M10", "title": "串口日志监视 UI 与过滤捕获", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M10-win-debug.md", "updatedAt": "2026-08-29" },
+    { "id": "M10-F003", "requirement": "R11", "module": "M10", "title": "烧录/复位命令编排", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M10-win-debug.md", "updatedAt": "2026-08-29" },
+    { "id": "M10-F004", "requirement": "R11", "module": "M10", "title": "GDB 调试会话托管", "priority": "P2", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M10-win-debug.md", "updatedAt": "2026-08-29" },
+    { "id": "M10-F005", "requirement": "R11", "module": "M10", "title": "adb/fastboot 通道", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M10-win-debug.md", "updatedAt": "2026-08-29" },
+    { "id": "M10-F006", "requirement": "R11", "module": "M10", "title": "桌面自动化适配（Windows-MCP 类，B 档）", "priority": "P2", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M10-win-debug.md", "updatedAt": "2026-08-29" },
+    { "id": "M10-F007", "requirement": "R11", "module": "M10", "title": "远程设备通道（ssh/telnet/网络串口）", "priority": "P2", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M10-win-debug.md", "updatedAt": "2026-08-29" },
+    { "id": "M10-F008", "requirement": "R11", "module": "M10", "title": "ChannelAdapter 统一通道接口", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M10-win-debug.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M11-F001", "requirement": "R11", "module": "M11", "title": "browser-use 适配层（B 档，双平台）", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M11-browser.md", "updatedAt": "2026-08-29" },
+    { "id": "M11-F002", "requirement": "R11", "module": "M11", "title": "浏览器任务模板（登录态/站点清单）", "priority": "P2", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M11-browser.md", "updatedAt": "2026-08-29" },
+    { "id": "M11-F003", "requirement": "R11", "module": "M11", "title": "看板联动自动执行", "priority": "P3", "milestone": "MS3", "status": "todo", "designDoc": "design/03-modules/M11-browser.md", "updatedAt": "2026-08-29" },
+    { "id": "M11-F004", "requirement": "R11", "module": "M11", "title": "双平台浏览器内核收口", "priority": "P2", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M11-browser.md", "updatedAt": "2026-08-29" },
+
+    { "id": "M12-F001", "requirement": "R04", "module": "M12", "title": "包脚手架与 dsh manifest 规范落地", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-29" },
+    { "id": "M12-F002", "requirement": "R04", "module": "M12", "title": "市场注册 PR + topic 打标", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-29" },
+    { "id": "M12-F003", "requirement": "R04", "module": "M12", "title": "发布流水线（tag→Release→npm 同步）", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-29" },
+    { "id": "M12-F004", "requirement": "R04", "module": "M12", "title": "A 档第三方插件安装脚本", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-29" },
+    { "id": "M12-F005", "requirement": "R04", "module": "M12", "title": "安全门禁（gitleaks + files 白名单 + publish dry-run）", "priority": "P0", "milestone": "MS1", "status": "todo", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-29" },
+    { "id": "M12-F006", "requirement": "R04", "module": "M12", "title": "README 与版本记录规范落地（每包模板/engines.dsh 对齐）", "priority": "P1", "milestone": "MS2", "status": "todo", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-29" }
+  ]
+}

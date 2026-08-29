@@ -1,0 +1,100 @@
+# M04 Plan 工作模式模块（luban-plan）设计
+
+在动手改代码前先出计划、人批准后再执行的工作模式：plan 文档化、可审批、可追溯，并与任务看板打通。
+
+## 版本记录
+
+| 版本 | 日期       | 作者  | 变更说明                              |
+| ---- | ---------- | ----- | ------------------------------------- |
+| v0.1 | 2026-08-29 | Maintainers | 初稿：状态机/落盘/审批交互/模板与检查单 |
+
+## 1. 概述与目标
+
+- **解决**：R05——重要变更先 plan 后执行；夜间自主任务（M02-F005）的产出也更可信（先 plan 再动手）。
+- **不解决**：替 dsh 内建的工具审批机制（不 hack L0）。
+- **需求映射**：R05。
+- **平台属性**：双端公用。
+
+## 2. 功能清单
+
+| 编号 | 功能 | 优先级 | 里程碑 | 验收口径 |
+| --- | --- | --- | --- | --- |
+| M04-F001 | plan 模式状态机：`draft → in-review → approved → executing → completed`（+`rejected`/`revising`），约束会话行为：非 approved 不允许执行类工具 | P2 | MS3 | 状态迁移非法时拒绝并提示 |
+| M04-F002 | plan 文档落盘与引用：plan 存为 workspace 内 `docs/plans/<date>-<slug>.md`，任务卡/会话可引用其路径 | P2 | MS3 | plan 可从看板卡直达 |
+| M04-F003 | 审批交互：Web UI 批准/驳回/修订意见回传会话；agent 收到结构化反馈 | P2 | MS3 | 驳回意见进入会话上下文 |
+| M04-F004 | plan 模板与检查清单：影响范围/修改位置/验证方式四要素模板（源自全局工作规约），缺失要素时提醒 | P3 | MS3 | 模板生成的 plan 四要素齐全 |
+
+## 3. 流程图
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 人（Web/CLI）
+    participant A as agent 会话
+    participant P as PlanService (M04)
+    participant T as TaskStore (M02)
+    A->>P: 提交 plan（draft，四要素模板）
+    P->>P: 校验要素完整性 → in-review
+    P-->>U: 通知（看板/SSE）
+    U->>P: 批准 / 驳回（附意见）
+    alt 批准
+        P->>A: approved（解除执行类工具限制）
+        A->>T: 关联任务卡状态 → doing
+        A->>P: 执行完成 → completed（附产出引用）
+    else 驳回
+        P->>A: rejected + 结构化意见
+        A->>P: 修订后重新提交（revising → in-review）
+    end
+```
+
+## 4. 接口设计
+
+```typescript
+export interface PlanService {
+  submit(input: PlanInput): Promise<Plan>;                 // agent 或人提交
+  decide(id: PlanId, decision: PlanDecision, reviewer: Actor): Promise<Plan>;
+  get(id: PlanId): Promise<Plan | null>;
+  listFor(taskId?: TaskId): Promise<Plan[]>;
+  /** 会话行为门禁：工具调用前询问（agent 侧适配器） */
+  guard(): PlanGuard;
+}
+export interface PlanGuard {
+  assertExecutable(tool: string, plan: Plan | null): { ok: boolean; reason?: string };
+}
+```
+
+## 5. 数据模型
+
+见 `04-interfaces/data-models.md#plan`。要点：四要素（背景/影响范围/修改位置/验证方式）、关联 `taskId`、`decisions[]` 审批历史。
+
+## 6. 配置设计
+
+```yaml
+- insert:
+    - id: luban-plan
+      name: dsh-luban-plan
+      config:
+        plansDir: "docs/plans"          # 相对 workspace
+        requireApprovalFor: ["edit", "bash", "write"]   # 受门禁工具清单
+        autoApproveFor: []              # 夜间模式下可豁免的工具（默认空）
+        template: bundled-default
+```
+
+## 7. 依赖与边界
+
+- 下层：无（纯 L2 状态机 + 文档落盘）；协作：M02（plan 与任务卡互链）、M01（审批人身份）。
+- 复用档位：**C 档**——参考 dsh/codex 类工具的 plan-approve 交互模式（需求级），实现原创。
+- 平台属性：双端公用。
+
+## 8. 非功能与安全
+
+- plan 文档属于 workspace 仓库内容，遵循用户现有 git 流程；审批操作经认证。
+- 夜间自主任务的 plan 审批策略单独配置（默认：夜间任务必须有 plan，但「执行豁免清单」为空，即全走人审——若无人在线则只做研究不落改动，M02-F006 复核时一并处理）。
+
+## 9. checklist 映射
+
+M04-F001 ~ M04-F004 共 4 项，与 `checklist.json` 一一对应。
+
+## 10. 开放问题
+
+- agent 会话内「工具门禁」的挂接点需实测（dsh hook/插件工具包装能力），决定 guard 的实现层。

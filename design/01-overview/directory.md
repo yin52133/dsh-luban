@@ -1,0 +1,82 @@
+# 仓库目录设计（Monorepo）
+
+## 版本记录
+
+| 版本 | 日期       | 作者  | 变更说明                                      |
+| ---- | ---------- | ----- | --------------------------------------------- |
+| v0.1 | 2026-08-29 | Maintainers | 初稿：pnpm monorepo 结构与包命名规范          |
+
+## 1. 总览
+
+```text
+dsh-luban/
+├── README.md                    # 项目门面（遵循 06-release README 规范）
+├── checklist.json               # 功能进度台账（与设计文档 F 编号双向一致）
+├── LICENSE                      # MIT
+├── .gitignore                   # 含敏感文件红线（06-release）
+├── .github/
+│   └── workflows/
+│       ├── ci.yml               # lint + typecheck + test + gitleaks 密钥扫描
+│       └── release.yml          # tag → GitHub Release → npm publish 同步
+├── design/                      # 设计文档（本目录，唯一设计权威来源）
+│   ├── README.md
+│   ├── TEMPLATE.md
+│   ├── 01-overview/             # vision / architecture / directory / trace-matrix
+│   ├── 02-principles/           # principles
+│   ├── 03-modules/              # M01-M12 各模块详细设计
+│   ├── 04-interfaces/           # api-overview / data-models
+│   ├── 05-deployment/           # deploy-windows / deploy-ubuntu
+│   ├── 06-release/              # release-principles
+│   └── 07-references/           # reference-analysis
+├── scripts/
+│   ├── validate-design.mjs      # 设计一致性校验（F 编号三处一致等）
+│   ├── install-3rd-party.ps1    # A 档：Windows 直装 dshmarket / better-sidebar / dsh-memory
+│   ├── install-3rd-party.sh     # A 档：Ubuntu 同上
+│   ├── deploy/                  # 双端 profile 生成与部署脚本
+│   └── release/                 # 版本对齐、tag、npm publish 辅助
+├── packages/
+│   ├── core/                    # @luban/core：L1 HAL + L2 服务 + 契约定义（不发布到市场）
+│   ├── dsh-luban-auth/          # M01
+│   ├── dsh-luban-taskboard/     # M02
+│   ├── dsh-luban-keepalive/     # M03
+│   ├── dsh-luban-plan/          # M04
+│   ├── dsh-luban-session-share/ # M05
+│   ├── dsh-luban-image-paste/   # M06
+│   ├── dsh-luban-hud/           # M07
+│   ├── dsh-luban-context/       # M08
+│   ├── dsh-luban-server-mode/   # M09（ubuntu 专属，engine 包内做平台守卫）
+│   ├── dsh-luban-win-debug/     # M10（win 专属）
+│   └── dsh-luban-browser/       # M11
+└── profiles/
+    ├── win-debug/               # Windows profile 模板（package.json + cordis.patch.yml）
+    └── ubuntu-server/           # Ubuntu profile 模板
+```
+
+## 2. 插件包内部结构（统一约定）
+
+```text
+packages/dsh-luban-<name>/
+├── package.json          # 含 dsh 字段（engines/bundle.patch/client.inject）
+├── cordis.patch.yml      # bundle patch：insert 本插件（config 放 config: 段）
+├── src/
+│   ├── index.ts          # cordis 插件入口（L3：装配 L2 服务）
+│   ├── server/           # 服务端逻辑（路由、SSE、任务处理）
+│   └── client/           # L4：web 组件（client-ui 槽位注入）
+├── README.md             # 每包必有（06-release 模板）
+└── tests/                # vitest；L2 逻辑可脱离 dsh 单测
+```
+
+## 3. 命名与依赖规范
+
+| 项 | 规范 |
+| --- | --- |
+| 插件包名 | `dsh-luban-<module>`（无 scope，与 dsh 社区惯例一致，利于市场检索） |
+| 内部核心包 | `@luban/core`（私有用途，仍随仓库发布 npm 以便插件 peer 依赖） |
+| cordis 插件 id | `luban-<module>`（patch 中的 `id:`） |
+| 版本 | 全仓库统一版本号（fixed locking），见 06-release |
+| 依赖方向 | 插件包 → `@luban/core` → 仅外部依赖；**禁止**插件包互相依赖，跨插件协作只走 `04-interfaces` 契约与事件总线 |
+| 平台专属依赖 | 用 `optionalDependencies` + 运行时平台守卫（如 serialport 仅 win 使用路径加载） |
+
+## 4. 设计阶段与本目录的对应关系
+
+当前仓库处于**设计阶段**：本目录与 `design/` 已建；`packages/`、`profiles/`、`.github/` 随 MS1 开发落地，落地的文件必须与本文档结构一致；结构变更需先改本文档并追加版本记录。
