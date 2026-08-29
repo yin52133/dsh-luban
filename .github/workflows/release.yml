@@ -16,6 +16,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Require the tag commit to come from mainline
+        shell: bash
+        run: |
+          git fetch --no-tags origin +refs/heads/mainline:refs/remotes/origin/mainline
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/mainline
       - name: Scan the complete tag history for secrets
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
@@ -29,6 +34,12 @@ jobs:
         with:
           node-version: 22.19.0
           cache: pnpm
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.11.8'
+          enable-cache: true
+          cache-dependency-glob: tools/browser-bridge/uv.lock
       - name: Prove the tag gate rejects a synthetic leak
         shell: bash
         run: |
@@ -40,13 +51,21 @@ jobs:
           "$RUNNER_TEMP/gitleaks" git "$GITHUB_WORKSPACE" --config "$GITHUB_WORKSPACE/.gitleaks.toml" --redact --verbose
           node scripts/release/verify-secret-gate.mjs --verify --binary "$RUNNER_TEMP/gitleaks"
       - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+      - run: uv lock --check --project tools/browser-bridge
+      - run: uv run --project tools/browser-bridge --locked ruff check tools/browser-bridge/src tools/browser-bridge/tests
+      - run: uv run --project tools/browser-bridge --locked ruff format --check tools/browser-bridge/src tools/browser-bridge/tests
+      - run: uv run --project tools/browser-bridge --locked python -m unittest discover -s tools/browser-bridge/tests -v
+      - run: uv run --project tools/browser-bridge --locked python -m compileall -q tools/browser-bridge/src tools/browser-bridge/tests
       - run: node scripts/validate-design.mjs
       - run: node scripts/release/validate-release.mjs
       - run: node scripts/release/audit-packages.mjs --dry-run
+      - run: node scripts/install-3rd-party.mjs --platform windows --profile win-debug --dry-run
+      - run: node scripts/install-3rd-party.mjs --platform ubuntu --profile ubuntu-server --dry-run
       - name: Verify tag and build release payloads
         run: node scripts/release/pack-artifacts.mjs --prepare --tag "${GITHUB_REF_NAME}" --output .release-artifacts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

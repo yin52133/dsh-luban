@@ -11,6 +11,7 @@
 | v0.3 | 2026-08-30 | Codex | 回填可复现发布、安全门禁与人工市场边界验证 |
 | v0.4 | 2026-08-30 | Codex | 补齐 tag 发布工作流的独立全历史扫描与合成泄漏证明 |
 | v0.5 | 2026-08-30 | Codex | 补齐双端 profile 安全生成器及隔离配置解析验证 |
+| v0.6 | 2026-08-30 | Codex | 要求 tag 来源于 mainline，并让制品构建复用完整 TS/Python CI 门禁 |
 
 ## 1. 概述与目标
 
@@ -39,9 +40,11 @@ flowchart TD
     A["合并到 mainline（CI 绿：lint+test+gitleaks）"] --> B["release 脚本：统一版本号 + engines.dsh 对齐 + CHANGELOG"]
     B --> C["git tag v<semver> 推送"]
     C --> D["release.yml 触发"]
-    D --> E{"门禁检查（M12-F005）"}
+    D --> D1{"tag commit 是 origin/mainline 的祖先？"}
+    D1 -- "否 / 无法确认" --> X
+    D1 -- 是 --> E{"门禁检查（M12-F005）"}
     E -- "gitleaks 命中 / files 越界" --> X["失败：禁止发布并告警"]
-    E -- 通过 --> F["构建各包（pnpm build + pack dry-run 审计）"]
+    E -- 通过 --> F["完整 TS/Python CI 门禁 + pack dry-run 审计"]
     F --> G["GitHub Release（附 changelog 与产物）"]
     F --> H["npm publish（files 白名单生效）"]
     G & H --> I["核对：tag ↔ Release ↔ npm 版本一致（M12-F003 口径）"]
@@ -130,15 +133,19 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
   `dsh.bundle.patch`、可选 `dsh.client`、`./client` export、lazy-CJS 构建与 host/client 生命周期测试。
 - 市场 entry 工具只输出预览；写文件必须同时提供显式批准与批准人，且仍不创建 PR 或修改 topic。
   本轮未执行任何外部市场、GitHub topic 或发布操作。
-- tag 工作流先在只读权限 job 中校验、构建并产出带 SHA-256 manifest 的不可变 tarball；受保护的
-  release environment 先创建可恢复 draft Release，再发布同一 tarball 到 npm，成功后才公开 Release。
+- tag 工作流先在只读权限 job 中显式拉取 `origin/mainline`，并以 `git merge-base --is-ancestor`
+  fail closed 地拒绝不属于 mainline 历史的 tag；通过后才执行校验、构建并产出带 SHA-256 manifest
+  的不可变 tarball。受保护的 release environment 先创建可恢复 draft Release，再发布同一 tarball
+  到 npm，成功后才公开 Release。
 - Windows/Ubuntu 包装脚本共享固定的三项 A 档版本锁，默认 dry-run，只有 `--apply` 才以参数数组调用
   `dsh plugin --profile ... add`；本轮两个平台计划均已验证，未安装外部插件。
 - `scripts/deploy/setup-windows.ps1` 与 `setup-ubuntu.sh` 共享 allowlist 生成器，默认仅输出计划，
   显式 apply 才创建 profile；已有目标一律拒绝覆盖，失败时只回滚本次新建目录。
 - gitleaks pre-commit、mainline CI 与 tag 发布工作流均固定扫描器版本；tag job 在生成任何 tarball
-  前独立执行全历史扫描与带校验和的合成密钥拒绝证明。npm `files` 白名单、pack dry-run、
-  tag/版本/CHANGELOG/README/DSH 基线验证均已落地；发布入口在本地和未批准 CI 中 fail closed。
+  前独立执行全历史扫描与带校验和的合成密钥拒绝证明，并固定 uv `0.11.8` 复跑
+  format/lint/typecheck/build/test、uv lock、ruff、9 项 Python 测试、compileall 与发布校验。npm
+  `files` 白名单、pack dry-run、tag/版本/CHANGELOG/README/DSH 基线验证均已落地；发布入口在本地和
+  未批准 CI 中 fail closed。
 - M12 的 15 项脚手架、profile 生成、安装、安全、市场与不可变发布测试通过；真实 Ubuntu profile、
   完整插件挂载、CI tag、npm、
   GitHub Release、市场 PR 与 topic 仍需在获得明确授权后验收。

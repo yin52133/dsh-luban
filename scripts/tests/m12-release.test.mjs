@@ -152,19 +152,48 @@ describe('M12 install and safety plans', () => {
 })
 
 describe('M12 release policy', () => {
-  it('blocks tag artifacts behind the pinned history scan and synthetic leak proof', async () => {
+  it('fails closed unless the tag comes from mainline and every CI-equivalent gate passes', async () => {
     const workflow = await readFile(join(REPOSITORY_ROOT, '.github/workflows/release.yml'), 'utf8')
-    const pack = workflow.indexOf('pack-artifacts.mjs --prepare')
-    const historyScan = workflow.indexOf(
+    const validateJob = workflow.slice(0, workflow.indexOf('\n  publish:'))
+    const orderedGates = [
+      'git fetch --no-tags origin +refs/heads/mainline:refs/remotes/origin/mainline',
+      'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/mainline',
       'gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e',
-    )
-    const syntheticGate = workflow.indexOf(
+      'astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9',
+      '"$RUNNER_TEMP/gitleaks" git "$GITHUB_WORKSPACE"',
       'scripts/release/verify-secret-gate.mjs --verify --binary',
-    )
+      'pnpm install --frozen-lockfile',
+      'pnpm format:check',
+      'pnpm lint',
+      'pnpm typecheck',
+      'pnpm build',
+      'pnpm test',
+      'uv lock --check --project tools/browser-bridge',
+      'uv run --project tools/browser-bridge --locked ruff check tools/browser-bridge/src tools/browser-bridge/tests',
+      'uv run --project tools/browser-bridge --locked ruff format --check tools/browser-bridge/src tools/browser-bridge/tests',
+      'uv run --project tools/browser-bridge --locked python -m unittest discover -s tools/browser-bridge/tests -v',
+      'uv run --project tools/browser-bridge --locked python -m compileall -q tools/browser-bridge/src tools/browser-bridge/tests',
+      'node scripts/validate-design.mjs',
+      'node scripts/release/validate-release.mjs',
+      'node scripts/release/audit-packages.mjs --dry-run',
+      'node scripts/install-3rd-party.mjs --platform windows --profile win-debug --dry-run',
+      'node scripts/install-3rd-party.mjs --platform ubuntu --profile ubuntu-server --dry-run',
+      'pack-artifacts.mjs --prepare',
+    ]
 
-    expect(historyScan).toBeGreaterThan(-1)
-    expect(syntheticGate).toBeGreaterThan(historyScan)
-    expect(pack).toBeGreaterThan(syntheticGate)
+    let previous = -1
+    for (const gate of orderedGates) {
+      const position = validateJob.indexOf(gate)
+      expect(position, `${gate} must exist after the preceding release gate`).toBeGreaterThan(
+        previous,
+      )
+      previous = position
+    }
+
+    expect(validateJob).not.toContain('continue-on-error')
+    expect(validateJob).toContain('fetch-depth: 0')
+    expect(validateJob).toContain("version: '0.11.8'")
+    expect(validateJob).toContain('cache-dependency-glob: tools/browser-bridge/uv.lock')
     expect(workflow).toContain('GITLEAKS_VERSION: 8.30.1')
     expect(workflow).toContain(
       'gitleaks" git "$GITHUB_WORKSPACE" --config "$GITHUB_WORKSPACE/.gitleaks.toml"',
