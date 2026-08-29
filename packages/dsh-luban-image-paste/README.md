@@ -6,6 +6,8 @@ session injection for Windows and Ubuntu.
 ## Features
 
 - Focusable Web drop zone for Ctrl+V image paste and file drag-and-drop.
+- Settings-slot registration and paste/drop source routing are covered by client
+  contract tests; multi-file input skips invalid or oversized entries.
 - `luban-img` CLI capture with fixed PowerShell, `wl-paste`, or `xclip` commands;
   commands use argument arrays, `shell: false`, a timeout, and bounded output.
 - PNG, JPEG, and WebP magic-byte validation with a default 10 MiB upload limit.

@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：捕获/落盘/注入/预览清理 四功能 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 注入、附件安全边界与验证证据 |
+| v0.3 | 2026-08-30 | Codex | 补齐 Settings 挂载、paste/drop 路由与多文件边界验证 |
 
 ## 1. 概述与目标
 
@@ -107,11 +108,12 @@ M06-F001 ~ M06-F004 共 4 项，与 `checklist.json` 一一对应。
 
 - `/luban-image-paste` 提供认证上传、最近列表、原图预览、注入、删除与 TTL cleanup；M01 统一处理
   Cookie/CSRF，内部 DSH WebServer 必须保持 loopback。
-- Web Settings 客户端覆盖 paste/drop、预览、注入、删除和 cleanup；`luban-img` 从环境读取 Cookie/CSRF，
+- Web Settings 客户端通过 `settings.section` 插槽挂载，覆盖 paste/drop、预览、注入、删除和 cleanup；
+  多文件输入会跳过类型不符、空文件和超限文件再选择首个合法图片。`luban-img` 从环境读取 Cookie/CSRF，
   可只上传或立即注入 Markdown/绝对路径引用。
 - 附件索引记录 SHA-256、压缩报告与 `referencedBy`。注入在 per-image/session mutex 内先登记引用，
   `followup` 失败则回滚；被引用附件无论年龄都不会被自动或手动删除。
-- 本地 Prettier、严格类型、ESLint、构建、55 项 M06 测试、真实 Sharp 截断 JPEG 探针、Cordis
+- 本地 Prettier、严格类型、ESLint、构建、58 项 M06 测试、真实 Sharp 截断 JPEG 探针、Cordis
   route/timer 卸载测试、release metadata 与 pack dry-run 通过。
 
 ## 11. 目标环境验收

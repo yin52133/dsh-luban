@@ -81,6 +81,14 @@ export function acceptedImageFile(file: File): boolean {
   )
 }
 
+/** Return the first complete browser image that can pass the upload boundary. */
+export function selectAcceptedImage(files: Iterable<File>): File | undefined {
+  for (const file of files) {
+    if (acceptedImageFile(file)) return file
+  }
+  return undefined
+}
+
 async function boundedResponseText(response: Response): Promise<string> {
   const declared = Number.parseInt(response.headers.get('content-length') ?? '', 10)
   if (Number.isFinite(declared) && declared > MAX_JSON_RESPONSE_BYTES) {
@@ -296,9 +304,7 @@ export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode 
   }
 
   const paste = (event: ClipboardEvent<HTMLElement>): void => {
-    const file = [...event.clipboardData.files].find((candidate): boolean =>
-      ACCEPTED_MIMES.has(candidate.type.toLowerCase()),
-    )
+    const file = selectAcceptedImage(event.clipboardData.files)
     if (file === undefined) {
       setError('Clipboard does not contain a PNG, JPEG, or WebP image')
       return
@@ -309,9 +315,7 @@ export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode 
 
   const drop = (event: DragEvent<HTMLElement>): void => {
     event.preventDefault()
-    const file = [...event.dataTransfer.files].find((candidate): boolean =>
-      ACCEPTED_MIMES.has(candidate.type.toLowerCase()),
-    )
+    const file = selectAcceptedImage(event.dataTransfer.files)
     if (file === undefined) {
       setError('Drop a PNG, JPEG, or WebP image')
       return

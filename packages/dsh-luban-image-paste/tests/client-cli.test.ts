@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { run } from '../src/cli.js'
-import { acceptedImageFile, uploadImage } from '../src/client/index.js'
+import {
+  acceptedImageFile,
+  apply as applyClient,
+  ImagePasteSection,
+  selectAcceptedImage,
+  uploadImage,
+} from '../src/client/index.js'
 import type { ClipboardAdapter } from '../src/types.js'
 import { PNG_BYTES } from './helpers.js'
 
@@ -10,7 +17,38 @@ function clipboard(): ClipboardAdapter {
   }
 }
 
+afterEach((): void => {
+  vi.unstubAllGlobals()
+})
+
 describe('browser capture helpers', () => {
+  it('registers the image paste section through the DSH settings slot', (): void => {
+    let registered: Readonly<Record<string, unknown>> | undefined
+    let component: unknown
+    const context = {
+      slots: {
+        inject(name: string, factory: () => void): void {
+          expect(name).toBe('settings.section')
+          factory()
+        },
+        register(options: Readonly<Record<string, unknown>>, value: unknown): () => void {
+          registered = options
+          component = value
+          return (): void => undefined
+        },
+      },
+    }
+
+    applyClient(context as unknown as Context)
+
+    expect(registered).toMatchObject({
+      name: 'settings.section',
+      id: 'luban-image-paste',
+      label: 'Images',
+    })
+    expect(component).toBe(ImagePasteSection)
+  })
+
   it('accepts only bounded supported browser files', () => {
     expect(acceptedImageFile(new File([PNG_BYTES], 'scope.png', { type: 'image/png' }))).toBe(true)
     expect(acceptedImageFile(new File([PNG_BYTES], 'scope.gif', { type: 'image/gif' }))).toBe(false)
@@ -22,6 +60,61 @@ describe('browser capture helpers', () => {
         }),
       ),
     ).toBe(false)
+  })
+
+  it('skips invalid and oversized entries before choosing a valid pasted image', (): void => {
+    const gif = new File([PNG_BYTES], 'scope.gif', { type: 'image/gif' })
+    const oversized = new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.png', {
+      type: 'image/png',
+    })
+    const valid = new File([PNG_BYTES], 'scope.png', { type: 'image/png' })
+
+    expect(selectAcceptedImage([gif, oversized, valid])).toBe(valid)
+    expect(selectAcceptedImage([gif, oversized])).toBeUndefined()
+  })
+
+  it('uploads paste and drop sources through the authenticated route', async (): Promise<void> => {
+    const urls: string[] = []
+    const fetcher: typeof fetch = (input): Promise<Response> => {
+      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input
+      urls.push(url)
+      if (url === '/luban-auth/session') {
+        return Promise.resolve(Response.json({ csrfToken: 'csrf' }))
+      }
+      return Promise.resolve(
+        Response.json({
+          image: {
+            id: 'image-1',
+            relPath: '.luban/attachments/scope.png',
+            sha256: 'a'.repeat(64),
+            source: url.includes('source=drop') ? 'drop' : 'paste',
+            referencedBy: [],
+            createdAt: 1,
+            mime: 'image/png',
+            bytes: PNG_BYTES.byteLength,
+            originalName: 'scope.png',
+            compression: {
+              status: 'unchanged',
+              originalBytes: PNG_BYTES.byteLength,
+              outputBytes: PNG_BYTES.byteLength,
+            },
+            previewUrl: '/luban-image-paste/images/image-1/content',
+          },
+        }),
+      )
+    }
+    vi.stubGlobal('fetch', fetcher)
+    const file = new File([PNG_BYTES], 'scope.png', { type: 'image/png' })
+
+    await uploadImage(file, 'paste')
+    await uploadImage(file, 'drop')
+
+    expect(urls).toEqual([
+      '/luban-auth/session',
+      '/luban-image-paste/images?source=paste&name=scope.png',
+      '/luban-auth/session',
+      '/luban-image-paste/images?source=drop&name=scope.png',
+    ])
   })
 
   it('times out when an authenticated upload response body stalls', async () => {
