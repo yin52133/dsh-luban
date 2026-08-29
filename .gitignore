@@ -42,6 +42,8 @@ node_modules/
 jspm_packages/
 .venv/
 .uv-cache/
+__pycache__/
+*.py[cod]
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/

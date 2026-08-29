@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：适配层/任务模板/看板联动/内核收口 |
 | v0.2 | 2026-08-30 | Codex | 固化 browser-use 版本并采用 uv 管理本地桥接环境 |
+| v0.3 | 2026-08-30 | Codex | 记录 JSONL 桥接、模板发布、鉴权 API 与看板联动实现验证 |
 
 ## 1. 概述与目标
 
@@ -92,6 +93,18 @@ export interface BrowserTaskSpec {
 
 M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
 
-## 10. 开放问题
+## 10. 实现与验证记录
+
+- TypeScript Host 通过有界串行队列管理 `uv run --locked` JSONL 子进程；协议覆盖启动、
+  进度、截图、结构化结果、取消、超时和稳定错误码，敏感环境变量仅按名称白名单传递。
+- Python 3.12 桥接项目固定 `browser-use==0.13.8` 并提交 `uv.lock`；发布构建将桥接项目和
+  内置 YAML 模板复制到 `dist/`，运行环境落在用户数据目录而非全局 Python。
+- `/luban-browser` HTTP/SSE API 复用 `lubanAuth`，会话入口统一为 `/luban-auth/login`；
+  自动任务仅响应已由 agent 认领且带 `browser`、`auto-ok` 和唯一模板标签的看板卡片。
+- 本地 ESLint、严格类型、构建、12 项 TypeScript 测试、9 项 `uv --locked` Python 测试、
+  compileall、ESM 导入及 npm pack 白名单均通过；测试使用假进程/引擎，未访问真实网站、
+  浏览器或模型提供商。
+
+## 11. 开放问题
 
 - browser-use 在 ubuntu 无桌面环境下的 headless 稳定性实测；若依赖 playwright，其浏览器下载与离线部署方式写入部署文档。

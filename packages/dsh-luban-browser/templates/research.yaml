@@ -1,0 +1,23 @@
+id: research
+title: Whitelisted web research
+goal: >-
+  Visit the supplied start URL and answer: ${question}
+startUrl: ${url}
+allowDomains:
+  - example.com
+timeoutSec: 300
+maxSteps: 30
+profile:
+  mode: isolated
+outputSchema:
+  type: object
+  required:
+    - summary
+    - sources
+  properties:
+    summary:
+      type: string
+    sources:
+      type: array
+      items:
+        type: string
