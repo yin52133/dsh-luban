@@ -1,0 +1,12 @@
+- insert:
+    - id: luban-auth
+      name: dsh-luban-auth
+      config:
+        host: 0.0.0.0
+        port: 42600
+        upstream: http://127.0.0.1:3080
+        sessionTtlHours: 72
+        maxFailures: 5
+        lockoutMinutes: 15
+        usersFile: ~/.dsh/luban/auth/users.json
+        auditDirectory: ~/.dsh/luban/logs/auth

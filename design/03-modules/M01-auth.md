@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：账户/会话/门禁/配置/锁定审计 全量设计 |
 | v0.2 | 2026-08-30 | Codex | 采用认证 sidecar 保护 DSH 全部 Web 暴露面   |
+| v0.3 | 2026-08-30 | Codex | 回填 sidecar、Argon2id、代理安全与 Cordis 验证证据 |
 
 ## 1. 概述与目标
 
@@ -105,7 +106,7 @@ export type AuthEvent =
         sessionTtlHours: 72
         maxFailures: 5         # 连续失败锁定阈值
         lockoutMinutes: 15
-        usersFile: "~/.dsh/luban/auth/users.yaml"   # 经 HAL 解析，win/ubuntu 各自 home
+        usersFile: "~/.dsh/luban/auth/users.json"   # 经 HAL 解析，win/ubuntu 各自 home
 ```
 
 ## 7. 依赖与边界
@@ -125,7 +126,17 @@ export type AuthEvent =
 
 M01-F001 ~ M01-F007 共 7 项，与 `checklist.json` 一一对应（脚本校验）。
 
-## 10. 开放问题
+## 10. 实现与验证记录
 
-- **已决**：DSH 0.1.1 的 `WebServer` 无全局 middleware，普通插件无法拦截既有 exact/prefix/fallback 路由；采用本模块 sidecar + 内部 loopback DSH 的部署形态。M12-F001 必须验证 `/api` WebSocket、SSE、插件 bundle 与 SPA fallback 均可透传。
+- `AuthManager` 使用真实 Argon2id、256-bit 随机会话 secret 的服务端摘要、持久账户锁定、
+  角色与全端吊销；账户状态和 30 天 JSONL 审计均走原子文件边界且不记录口令/token。
+- `AuthSidecar` 是唯一 LAN listener，upstream 强制 loopback；集成测试覆盖 HTTP、SSE、
+  WebSocket upgrade、流式背压、Host/Origin/CSRF/CIDR/body-size、trustProxy 与 Secure cookie。
+- `tests/cordis.integration.test.ts` 使用真实 Cordis Context 验证 `ctx.lubanAuth` 提供与 effect
+  卸载；其余 7 个测试文件覆盖首启、登录/过期/登出、锁定/限速、账户角色与审计。
+- 本地严格类型、ESLint、Prettier、构建、30 项测试及 pack 白名单均通过；Windows/Ubuntu
+  workflow 保留目标环境复核，公网部署仍必须由外层 TLS 终结。
+
+## 11. 开放问题
+
 - 是否需要多管理员/只读账户：M05-F004 权限分级落地时统一设计角色表。
