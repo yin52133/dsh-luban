@@ -5,6 +5,7 @@
 | 版本 | 日期       | 作者  | 变更说明                                  |
 | ---- | ---------- | ----- | ----------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：L0-L4 分层、模块矩阵、双端公用原则 |
+| v0.2 | 2026-08-30 | Codex | 对齐 DSH 0.1.1 manifest，并确定 M01 认证 sidecar |
 
 ## 1. 分层模型（L0-L4）
 
@@ -40,9 +41,10 @@ flowchart TD
 
 ## 2. 与 dsh 的对接机制（已核实）
 
-- 每个插件是一个 npm 包，`package.json` 携带 `dsh` 字段：`engines.dsh`（版本对齐）、`bundle.patch`（指向随包的 `cordis.patch.yml`）、`client.inject`（web 端注入 client-runtime/locale/ui-slots）。
+- 每个插件是一个 npm 包：顶层 `engines.dsh` 声明版本基线；`dsh.bundle.patch` 指向随包的 `cordis.patch.yml`；有浏览器端的包通过 `dsh.client` + `exports["./client"]` 暴露预构建的 lazy-CJS client bundle。
 - 挂载：profile 的 `package.json` 依赖本包 → `dsh.profile.bundles` 有序追加 → 热启停靠 profile 的 `cordis.patch.yml` 写 `disabled`（约 1s HMR 生效）。
 - 插件配置一律放在 patch 条目的 `config:` 段（顶层字段会被静默忽略，这是 cordis-plugin-loader 的已核实行为）。
+- DSH `WebServer` 没有全局 middleware，路由匹配为 exact → 最长 prefix → fallback；M01 因此以认证 sidecar 作为唯一 LAN 入口，内部 DSH WebServer 只监听 `127.0.0.1`。sidecar 认证后反代 SPA、`/api`、WebSocket、SSE 与 `/plugins`，普通插件路由不得自行暴露到 LAN。
 
 ## 3. 模块矩阵（双端公用 vs 平台专属）
 

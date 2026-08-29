@@ -7,6 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：脚手架/市场/流水线/安装脚本/门禁/规范 |
+| v0.2 | 2026-08-30 | Codex | 对齐 DSH 0.1.1 bundle/client 与 lazy-CJS 契约 |
 
 ## 1. 概述与目标
 
@@ -19,7 +20,7 @@
 
 | 编号 | 功能 | 优先级 | 里程碑 | 验收口径 |
 | --- | --- | --- | --- | --- |
-| M12-F001 | 包脚手架与 manifest 规范：生成 `dsh-luban-*` 包骨架（package.json 的 `dsh` 字段：engines/bundle.patch/client.inject；cordis.patch.yml 模板），在一个最简插件上验证双端可挂载/可热启停 | P0 | MS1 | 最简插件在双端 profile 挂载成功 |
+| M12-F001 | 包脚手架与 manifest 规范：生成 `dsh-luban-*` 包骨架（顶层 `engines.dsh`、`dsh.bundle.patch`、可选 `dsh.client` + `exports["./client"]`；cordis.patch.yml 模板），在一个最简 host/client 插件上验证双端可挂载/可热启停 | P0 | MS1 | 最简插件在双端 profile 挂载成功，client bundle 可加载 |
 | M12-F002 | 市场注册：向 awesome-dsh-plugin 仓库提 PR（entry），GitHub 仓库打 `dsh-plugin` 等 topic | P1 | MS2 | 市场检索可见并可安装 |
 | M12-F003 | 发布流水线：git tag → CI 构建 → GitHub Release（changelog）→ npm publish，同 tag 同内容；版本号全仓统一 | P1 | MS2 | tag 与 npm 版本一一对应 |
 | M12-F004 | A 档第三方安装脚本：win(.ps1)/ubuntu(.sh) 直装 dshmarket、dsh-better-sidebar、dsh-memory 原版到目标 profile（版本锁定可选 latest） | P1 | MS2 | 双端脚本一键装齐且可重复执行 |
@@ -71,16 +72,25 @@ scripts/install-3rd-party.sh  [--profile ubuntu-server] [--version latest|<pin>]
 {
   "name": "dsh-luban-<module>",
   "version": "<全仓统一>",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "license": "MIT",
   "repository": "github:yin52133/dsh-luban",
-  "engines": { "dsh": ">=0.1.1-rc.1" },
+  "engines": { "node": "^22.19.0 || >=24.0.0", "dsh": ">=0.1.1-rc.1" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./client": { "types": "./dist/client/index.d.ts", "default": "./dist/client.js" },
+    "./package.json": "./package.json"
+  },
   "dsh": {
-    "engines": { "dsh": ">=0.1.1-rc.1" },
     "bundle": { "patch": "./cordis.patch.yml" },
-    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-runtime", "@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-client-ui-slots"] }
+    "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-runtime"] }
   }
 }
 ```
+
+`dsh.client.inject` 按模块填写真实 Cordis client 服务依赖；React、Cordis、slots 等 Web Shell 基线模块不得重复打包。浏览器产物必须是 `window.__ModuleLoader__.load({ id, factory })` lazy-CJS 格式，实际存在于 `exports["./client"]` 指向的位置。`cordis.patch.yml` 只插入一次 host 包行，client 由 Loader 从同包 manifest 自动发现。
 
 ## 5. 数据模型
 
@@ -108,4 +118,4 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
 ## 10. 开放问题
 
 - awesome-dsh-plugin PR 的 entry 字段细则与审核周期（M12-F002 执行时确认）。
-- client-ui 槽位清单实测后，脚手架模板补全 client 段默认值。
+- client-ui 槽位按模块从官方 SlotMap 选择并做 profile 实测；脚手架只提供 lazy-CJS 构建、manifest 与生命周期模板，不虚构通用页面槽位。

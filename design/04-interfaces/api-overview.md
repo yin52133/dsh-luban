@@ -5,6 +5,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：契约汇总、依赖关系、事件总线登记表 |
+| v0.2 | 2026-08-30 | Codex | 统一插件 HTTP 路由为 `/luban-<module>/...` |
 
 ## 1. 契约一览与依赖方向
 
@@ -99,9 +100,9 @@ flowchart LR
 
 ## 4. Web API 组织约定
 
-- 各插件的 HTTP 端点统一前缀 `/luban/<module>/...`（如 `/luban/taskboard/tasks`、`/luban/auth/login`），避免与 dsh 内建路由冲突。
-- 除 `/luban/auth/login` 外所有端点经 M01 门禁中间件（P6.2）。
-- SSE 端点约定 `GET /luban/<module>/events`，断线重连携带 `Last-Event-ID` 做补发。
+- 各插件的 HTTP 端点统一前缀 `/luban-<module>/...`（如 `/luban-taskboard/tasks`、`/luban-auth/login`），与 cordis 插件 id `luban-<module>` 一致并避免和 dsh 内建路由冲突。
+- 除 `/luban-auth/login` 外所有端点经 M01 门禁中间件（P6.2）。
+- SSE 端点约定 `GET /luban-<module>/events`，断线重连携带 `Last-Event-ID` 做补发。
 
 ## 5. 变更流程
 

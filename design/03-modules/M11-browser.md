@@ -7,13 +7,14 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：适配层/任务模板/看板联动/内核收口 |
+| v0.2 | 2026-08-30 | Codex | 固化 browser-use 版本并采用 uv 管理本地桥接环境 |
 
 ## 1. 概述与目标
 
 - **解决**：R11 扩展——browser-use 在 windows 与 ubuntu 双端集成；网页类任务（查 datasheet、抓 issue、监控页面变化）可交给 agent。
 - **不解决**：反爬对抗、需要复杂登录态的灰色场景；不重写浏览器自动化引擎（B 档纪律）。
 - **需求映射**：R11（用户明确要求 win/ubuntu 双端集成）。
-- **平台属性**：双端公用；浏览器内核差异收口在 HAL（M11-F004）。
+- **平台属性**：双端公用；浏览器内核差异收口在 HAL（M11-F004）。Python 桥接服务随插件构建到 `dist/browser-bridge/`，由 `uv run --locked` 创建和运行隔离环境，不使用全局 pip。
 
 ## 2. 功能清单
 
@@ -73,11 +74,12 @@ export interface BrowserTaskSpec {
         kernel: auto               # auto | chrome | edge | chromium-headless
         templatesDir: "browser-templates"
         defaults: { maxSteps: 30, timeoutSec: 300, allowDomains: [] }
+        bridge: { runner: uv, python: "3.12", browserUseVersion: "0.13.8" }
 ```
 
 ## 7. 依赖与边界
 
-- 下层：browser-use（**B 档**：python 侧服务/子进程接入或其 node 桥，实施时按其 license 与集成成本定形态；license 核实结果登记 07-references）；HAL 浏览器内核。
+- 下层：browser-use `0.13.8`（**B 档**、MIT）：Python JSONL 子进程桥接，仅写适配层；使用随包的 `pyproject.toml` + `uv.lock`，环境目录落在用户数据目录而非仓库或 npm 包目录；HAL 浏览器内核。
 - 协作：M02（任务卡联动）、M10（win 桌面侧可与浏览器任务互补）。
 - 平台属性：双端公用。
 

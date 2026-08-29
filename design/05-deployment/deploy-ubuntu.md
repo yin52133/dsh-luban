@@ -5,6 +5,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：systemd 常驻、tmux 保活、网页访问链路 |
+| v0.2 | 2026-08-30 | Codex | 增加 M11 browser-use 的 uv 隔离环境要求 |
 
 ## 1. 目标形态
 
@@ -21,7 +22,7 @@ flowchart LR
 
 ## 2. 安装步骤（设计口径）
 
-1. **前置**：Node ≥ 22、pnpm ≥ 10、tmux、git；建议专用用户（如 `dsh`）。
+1. **前置**：Node ≥ 22、pnpm ≥ 10、uv ≥ 0.11、tmux、git；建议专用用户（如 `dsh`）。
 2. **profile**：`scripts/deploy/setup-ubuntu.sh` 生成 `~/.dsh/profiles/ubuntu-server/`。
 3. **安装套件**：`dsh plugin --profile ubuntu-server add dsh-luban-auth ... dsh-luban-server-mode`。
 4. **A 档直装**：`scripts/install-3rd-party.sh --profile ubuntu-server`。
@@ -71,4 +72,4 @@ sequenceDiagram
 
 ## 5. 浏览器自动化（M11）无桌面注意点
 
-ubuntu-server 无显示环境：M11-F004 HAL 默认走无头 Chromium；playwright 浏览器二进制在安装脚本中预下载（或配置离线包），部署文档给出磁盘占用预估。
+ubuntu-server 无显示环境：M11-F004 HAL 默认走无头 Chromium；插件以 `uv run --locked` 启动随包 Python 项目，隔离环境位于 `~/.dsh/luban/browser/uv-env`，禁止使用全局 pip；Chromium 在安装脚本中预下载（或配置离线包），部署文档给出磁盘占用预估。

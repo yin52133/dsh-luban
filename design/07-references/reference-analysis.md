@@ -7,6 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：A/B/C 档台账建立，标注核实状态 |
+| v0.2 | 2026-08-30 | Codex | 核实 browser-use 0.13.8 为 MIT 并确定 uv 集成形态 |
 
 ## 1. A 档 · 插件级安装原版（不进入本仓库代码）
 
@@ -20,7 +21,7 @@
 
 | 项目/工具 | 集成形态 | License（状态） | 用于模块 | 备注 |
 | --- | --- | --- | --- | --- |
-| browser-use | python 服务/子进程 + 适配层 | 待核实（BSD 类预期） | M11 | 双端内核差异由 HAL 收口 |
+| browser-use 0.13.8 | Python JSONL 子进程 + TypeScript 适配层；`uv run --locked` | **MIT（已核实：[LICENSE](https://github.com/browser-use/browser-use/blob/main/LICENSE)）** | M11 | Python ≥3.11；项目固定 3.12，双端内核差异由 HAL 收口 |
 | Windows-MCP / CursorTouch | MCP 服务配置接入 | 待核实 | M10-F006 | 凭据走系统凭据管理器 |
 | tmux | 命令行调用 | GPL（系统工具，独立进程使用不传染） | M03 | 仅 exec 调用 |
 | OpenOCD / J-Link / esptool / STM32CubeProgrammer | 命令模板 exec | 各自许可（待核实登记） | M10-F003 | 外部工具路径可配 |
@@ -46,7 +47,7 @@
 ## 4. 核实任务清单（随开发推进更新）
 
 - [ ] dsh-market / dsh-better-sidebar / dsh-memory 的 LICENSE 文件核验并登记（M12-F004 执行时）
-- [ ] browser-use license + python 集成成本评估（M11-F001 前）
+- [x] browser-use license + python 集成成本评估（MIT；0.13.8；uv 隔离 JSONL 子进程）
 - [ ] cloader / maochiy / dsh-web-ui 三家 taskboard license 核验（M02-F009 导入器前）
 - [ ] pi-mono / pi-agentic-compaction license 核验（M08-F001 前；核实为 MIT 后允许读源码级参考）
 - [ ] 全部 B 档外部工具版本与许可登记（M10 各通道落地时）

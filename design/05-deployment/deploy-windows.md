@@ -5,6 +5,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：profile 组成、安装步骤、保活、A 档直装 |
+| v0.2 | 2026-08-30 | Codex | 增加 M11 browser-use 的 uv 隔离环境要求 |
 
 ## 1. 目标形态
 
@@ -24,7 +25,7 @@ flowchart LR
 
 ## 2. 安装步骤（设计口径，脚本随 M12-F004 落地）
 
-1. **前置**：Node ≥ 22、pnpm ≥ 10；`npm i -g @deepseek-ai/dsh`；确认 `dsh --version`。
+1. **前置**：Node ≥ 22、pnpm ≥ 10、uv ≥ 0.11；`npm i -g @deepseek-ai/dsh`；确认 `dsh --version` 与 `uv --version`。
 2. **创建 profile**：`scripts/deploy/setup-windows.ps1` 生成 `%DSH_HOME%\profiles\win-debug\`（package.json + `dsh.profile.bundles` + `cordis.patch.yml` 模板），不改官方 preset。
 3. **安装本套件**：`dsh plugin --profile win-debug add dsh-luban-auth dsh-luban-taskboard ...`（monorepo 发布后逐包，或本地 `file:` 联调）。
 4. **A 档直装**：`scripts/install-3rd-party.ps1 -Profile win-debug`（装 dshmarket、dsh-better-sidebar、dsh-memory 原版，可选版本 pin）。
@@ -47,6 +48,7 @@ flowchart LR
 
 - 串口：pnpm 构建脚本允许清单需包含原生模块（本机 profile 的 `pnpm-workspace.yaml` 设置 onlyBuiltDependencies）。
 - 桌面自动化（M10-F006）：MCP 服务以独立进程配置接入，凭据走系统凭据管理器。
+- 浏览器桥接（M11）：插件以 `uv run --locked` 启动随包 Python 项目，隔离环境位于 `%DSH_HOME%\luban\browser\uv-env`，禁止使用全局 pip。
 - 防火墙：首次监听提示放行私网；文档明确「仅限可信局域网」。
 
 ## 5. 升级与回退

@@ -7,10 +7,11 @@
 | 版本 | 日期       | 作者  | 变更说明                                    |
 | ---- | ---------- | ----- | ------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：账户/会话/门禁/配置/锁定审计 全量设计 |
+| v0.2 | 2026-08-30 | Codex | 采用认证 sidecar 保护 DSH 全部 Web 暴露面   |
 
 ## 1. 概述与目标
 
-- **解决**：dsh web profile 默认无认证暴露在局域网（社区同类插件 dsh-web 的 LAN 模式即无认证）；任何浏览器先登录才能使用看板、会话等功能。
+- **解决**：dsh web profile 默认无认证暴露在局域网（社区同类插件 dsh-web 的 LAN 模式即无认证）；任何浏览器先登录才能使用看板、会话等功能。DSH 内部 WebServer 固定 loopback，M01 sidecar 是唯一 LAN 入口并代理全部 HTTP/WebSocket/SSE 流量。
 - **不解决**：公网暴露（明确不支持，公网场景交给 HTTPS 反代 + M01-F007）；OAuth/LDAP 等企业级身份源。
 - **需求映射**：R01（Ubuntu 网页可用）、R10（服务器模式）、R06（M05 控制权交接依赖本模块身份）。
 - **平台属性**：双端公用（win/ubuntu 同一实现，M01-F006）。
@@ -69,6 +70,12 @@ export interface AuthService {
   onChange(listener: (evt: AuthEvent) => void): Unsubscribe;
 }
 
+/** AuthGateway —— LAN 唯一入口；认证后反代内部 loopback DSH WebServer */
+export interface AuthGateway {
+  start(): Promise<{ publicUrl: string; upstreamUrl: string }>;
+  stop(): Promise<void>;
+}
+
 export interface VerifyResult {
   ok: boolean;
   reason?: 'bad-credentials' | 'locked' | 'unknown-user';
@@ -94,6 +101,7 @@ export type AuthEvent =
       config:
         port: 42600            # 默认端口（可自定义）
         host: 0.0.0.0
+        upstream: "http://127.0.0.1:3080"  # 内部 DSH WebServer，必须仅 loopback
         sessionTtlHours: 72
         maxFailures: 5         # 连续失败锁定阈值
         lockoutMinutes: 15
@@ -102,7 +110,7 @@ export type AuthEvent =
 
 ## 7. 依赖与边界
 
-- 下层：argon2（哈希）、HAL 文件适配器；上层的 M05 权限分级复用 `AuthService`。
+- 下层：argon2（哈希）、HAL 文件适配器、Node HTTP/upgrade 反向代理；上层的 M05 权限分级复用 `AuthService`。
 - 复用档位：**C 档**——dsh-web-auth/dsh-web-lan-access（社区，license 未核实）仅作需求参考；登录页 UI 原创。
 - 平台属性：双端公用。
 
@@ -119,5 +127,5 @@ M01-F001 ~ M01-F007 共 7 项，与 `checklist.json` 一一对应（脚本校验
 
 ## 10. 开放问题
 
-- dsh web 服务器的路由/中间件注入点需在 M12-F001 脚手架阶段实测（备选：独立 sidecar 进程 + 反代，架构不变，仅部署形态不同）。
+- **已决**：DSH 0.1.1 的 `WebServer` 无全局 middleware，普通插件无法拦截既有 exact/prefix/fallback 路由；采用本模块 sidecar + 内部 loopback DSH 的部署形态。M12-F001 必须验证 `/api` WebSocket、SSE、插件 bundle 与 SPA fallback 均可透传。
 - 是否需要多管理员/只读账户：M05-F004 权限分级落地时统一设计角色表。
