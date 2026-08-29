@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+.venv
+pnpm-lock.yaml
+uv.lock
+design/**/*.md
+checklist.json

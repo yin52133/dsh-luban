@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+  - tools/*
+
+allowBuilds:
+  '@serialport/bindings-cpp': true
+  argon2: true
+  esbuild: true
+  sharp: true

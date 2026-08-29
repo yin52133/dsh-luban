@@ -40,6 +40,8 @@ build/Release
 # Dependency directories
 node_modules/
 jspm_packages/
+.venv/
+.uv-cache/
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
@@ -155,3 +157,5 @@ secrets.*
 !*.key.example
 luban-data/
 backups/
+.luban/
+browser-profiles/

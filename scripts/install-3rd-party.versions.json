@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-08-30",
+  "registry": "https://registry.npmjs.org/",
+  "packages": {
+    "dshmarket": "1.36.0",
+    "dsh-better-sidebar": "0.17.1",
+    "dsh-memory": "0.1.0"
+  }
+}

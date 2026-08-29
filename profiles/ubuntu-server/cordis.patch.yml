@@ -1,0 +1,3 @@
+# Machine-local overrides belong here after this template is copied into
+# $DSH_HOME/profiles/ubuntu-server. Keep credentials outside profile files.
+[]
