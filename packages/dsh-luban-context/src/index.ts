@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { AuthService, TelemetryAggregator } from '@luban/core'
+import type { AuthService, LubanEventMap, TelemetryAggregator } from '@luban/core'
 import { LubanError, modulePrefix, systemClock } from '@luban/core'
 import { Config as ConfigSchema, type Config as ContextConfig, parseConfig } from './config.js'
 import { DshCompactionContextFactory, DshCompactionCoordinator } from './dsh-context.js'
@@ -16,6 +16,10 @@ import {
 declare module '@deepseek-ai/cordis' {
   interface Context {
     lubanCompaction: CompactionEngineWithReplay
+  }
+
+  interface Events {
+    'luban.compaction.done'(payload: LubanEventMap['luban.compaction.done']): void
   }
 }
 
@@ -62,6 +66,9 @@ export function apply(ctx: Context, input: Partial<ContextConfig> = {}): void {
     config,
     factory: new DshCompactionContextFactory(ctx.agents, config, systemClock),
     clock: systemClock,
+    events: {
+      emit: (_event, payload): void => ctx.emit('luban.compaction.done', payload),
+    },
   })
   engine.register(new SummarizeStrategy())
   engine.register(new VirtualFileStrategy())

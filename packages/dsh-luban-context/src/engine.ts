@@ -4,7 +4,7 @@ import type {
   CompactionContext,
   CompactionEngine,
   CompactionStrategy,
-  LubanEventBus,
+  LubanEventMap,
   SessionId,
   SessionRef,
   TelemetrySnapshot,
@@ -34,6 +34,10 @@ export interface CompactionCadence {
   readonly strategyId: string
 }
 
+export interface CompactionEventSink {
+  emit(event: 'luban.compaction.done', payload: LubanEventMap['luban.compaction.done']): void
+}
+
 export interface CompactionEngineWithReplay extends CompactionEngine {
   markScope(sessionId: SessionId, scope: CompactionTaskScope): void
   profile(scope: CompactionTaskScope): CompactionCadence
@@ -52,7 +56,7 @@ export class DefaultCompactionEngine implements CompactionEngineWithReplay {
   readonly #config: Config
   readonly #factory: CompactionContextFactory
   readonly #clock: Clock
-  readonly #events: LubanEventBus | undefined
+  readonly #events: CompactionEventSink | undefined
   readonly #strategies = new Map<string, CompactionStrategy>()
   readonly #scopeBySession = new Map<SessionId, CompactionTaskScope>()
   readonly #strategyByScope = new Map<CompactionTaskScope, string>()
@@ -64,7 +68,7 @@ export class DefaultCompactionEngine implements CompactionEngineWithReplay {
     readonly config: Config
     readonly factory: CompactionContextFactory
     readonly clock: Clock
-    readonly events?: LubanEventBus
+    readonly events?: CompactionEventSink
   }) {
     this.#config = options.config
     this.#factory = options.factory
