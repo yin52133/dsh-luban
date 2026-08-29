@@ -1,0 +1,15 @@
+# Windows-only host plugin. The web client is discovered through dsh.client.
+- insert:
+    - id: luban-win-debug
+      name: dsh-luban-win-debug
+      config:
+        serial:
+          defaultBaud: 115200
+          timestamp: true
+          pollIntervalMs: 1500
+        snippet:
+          dir: ~/.dsh/luban/win-debug/snippets
+          maxLines: 500
+        desktopMcp:
+          enabled: false
+          command: ''

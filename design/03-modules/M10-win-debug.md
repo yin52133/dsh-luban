@@ -7,6 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                                             |
 | ---- | ---------- | ----- | ---------------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：串口/烧录/GDB/adb-fastboot/桌面自动化/远程/通道层 |
+| v0.2 | 2026-08-30 | Codex | 回填安全通道层、工具模板与会话注入实现验证           |
 
 ## 1. 概述与目标
 
@@ -104,5 +105,24 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
 
 ## 10. 开放问题
 
-- 用户实际使用的调试探针与目标芯片清单（决定首批命令模板覆盖：J-Link？OpenOCD？esptool？）。
-- serialport 原生模块在 pnpm + electron-free 环境的构建配置（M12-F001 脚手架验证）。
+- 首批 OpenOCD、J-Link、esptool 与 STM32CubeProgrammer 安全模板已落地；仍需按目标硬件 profile
+  登记并验证调试探针、芯片、工具版本和参数组合。
+- `serialport` 13 作为可选依赖按需动态加载，并已在 pnpm + Node.js 22 环境安装与构建；仍需目标
+  Windows 主机、Node ABI、真实 COM 设备的拔插与占用冲突验收。
+
+## 11. 实现与验证记录
+
+- 七类 `ChannelAdapter` 统一实现开关、读写、命令、生命周期和事件契约；Windows 平台守卫在非
+  Windows 主机 fail closed，网络通道虽使用可移植抽象但不会跨平台挂载本插件。
+- 可选 `serialport` HAL 提供 COM 枚举、参数化打开、有界数据流和非重入热插拔轮询；缺少原生模块时
+  返回明确安装指引，不影响其他通道加载。
+- Settings 面板提供实时滚动、时间戳、文本/正则过滤、高亮和范围选择；片段经正则打码、有界截取、
+  原子落盘后，以文件路径、摘录、通道元数据和时间窗注入 rc2 会话。
+- OpenOCD、J-Link、esptool、STM32CubeProgrammer、adb 与 fastboot 内置模板使用固定可执行文件、
+  参数数组、根目录约束和 `shell: false`；擦除等危险操作要求精确二次确认，错误行结构化返回。
+- OpenOCD/GDB 托管、adb/fastboot 状态、SSH 命令白名单、telnet/TCP 透传及默认关闭的 stdio MCP
+  均复用有界输出、超时、取消和生命周期清理，并可将快照注入会话。
+- `/luban-win-debug` REST/SSE 要求 M01 会话与 CSRF，限制请求体、事件和输出；客户端使用 DSH rc2
+  lazy-CJS 加载器，服务注册为 `ctx.lubanWinDebug`。
+- 本地 Prettier、ESLint、严格类型检查、构建、24 项测试、发布元数据和 npm pack 白名单审计通过；
+  测试使用 fake provider/runner/connector，未连接真实设备、网络或外部工具进程。
