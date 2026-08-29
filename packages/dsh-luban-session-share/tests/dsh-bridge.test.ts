@@ -142,8 +142,75 @@ describe('rc2 DSH bridge', (): void => {
     if (truncated.done === false && truncated.value.event === 'session') {
       expect(truncated.value.data).toMatchObject({ type: 'output', at: 460 })
       if (truncated.value.data.type === 'output') {
-        expect(truncated.value.data.text).toHaveLength(65_556)
+        expect(Buffer.byteLength(truncated.value.data.text, 'utf8')).toBe(64 * 1024)
         expect(truncated.value.data.text).toMatch(/\[output truncated\]\n$/u)
+      }
+    }
+
+    bridge.sessionEvent(dshSession, {
+      type: 'assistant/chunk',
+      seq: 14,
+      time: 461,
+      data: {
+        turn: 3,
+        step: 1,
+        chunk: { type: 'text-delta', index: 0, text: '\uD83D' },
+      },
+    })
+    bridge.sessionEvent(dshSession, {
+      type: 'assistant/chunk',
+      seq: 15,
+      time: 462,
+      data: {
+        turn: 3,
+        step: 1,
+        chunk: { type: 'text-delta', index: 0, text: '\uDE42' },
+      },
+    })
+    bridge.sessionEvent(dshSession, {
+      type: 'turn/end',
+      seq: 16,
+      time: 463,
+      data: { turn: 3, reason: { kind: 'completed' } },
+    })
+    await expect(stream.next()).resolves.toMatchObject({
+      value: { event: 'session', data: { type: 'output', text: '🙂', at: 463 } },
+    })
+
+    bridge.sessionEvent(dshSession, {
+      type: 'assistant/chunk',
+      seq: 17,
+      time: 464,
+      data: {
+        turn: 4,
+        step: 1,
+        chunk: { type: 'text-delta', index: 0, text: `${'🙂'.repeat(16_000)}\uD83D` },
+      },
+    })
+    bridge.sessionEvent(dshSession, {
+      type: 'assistant/chunk',
+      seq: 18,
+      time: 465,
+      data: {
+        turn: 4,
+        step: 1,
+        chunk: { type: 'text-delta', index: 0, text: `\uDE42${'🙂'.repeat(1_000)}` },
+      },
+    })
+    bridge.sessionEvent(dshSession, {
+      type: 'turn/end',
+      seq: 19,
+      time: 466,
+      data: { turn: 4, reason: { kind: 'completed' } },
+    })
+    const multibyte = await stream.next()
+    expect(multibyte.done).toBe(false)
+    if (multibyte.done === false && multibyte.value.event === 'session') {
+      expect(multibyte.value.data).toMatchObject({ type: 'output', at: 466 })
+      if (multibyte.value.data.type === 'output') {
+        expect(Buffer.byteLength(multibyte.value.data.text, 'utf8')).toBe(64 * 1024)
+        expect(multibyte.value.data.text).not.toContain('\uFFFD')
+        expect(multibyte.value.data.text).toMatch(/\[output truncated\]\n$/u)
       }
     }
     controller.abort()

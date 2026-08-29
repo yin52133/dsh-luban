@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -50,6 +50,49 @@ describe('ContextArchiveRepository', () => {
           clock: { now: (): number => 1 },
         }),
     ).toThrow(/inside the workspace/u)
+  })
+
+  it('rejects a symlink or Windows junction before creating an archive outside the workspace', async () => {
+    const workspace = join(directory, 'workspace')
+    const outside = join(directory, 'outside')
+    await Promise.all([mkdir(join(workspace, '.luban'), { recursive: true }), mkdir(outside)])
+    await symlink(
+      outside,
+      join(workspace, '.luban', 'context-archive'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    const repository = new ContextArchiveRepository({
+      workspace,
+      archiveDir: '.luban/context-archive',
+      sessionId: asSessionId('linked-root'),
+      clock: { now: (): number => 1 },
+    })
+
+    await expect(
+      repository.archive({ startSeq: 0, endSeq: 0, estTokens: 1 }, 'must stay inside'),
+    ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    await expect(readdir(outside)).resolves.toEqual([])
+  })
+
+  it('fails closed when the canonical session directory identity is replaced', async () => {
+    const workspace = join(directory, 'workspace')
+    const outside = join(directory, 'outside')
+    await Promise.all([mkdir(workspace), mkdir(outside)])
+    const repository = new ContextArchiveRepository({
+      workspace,
+      archiveDir: '.luban/context-archive',
+      sessionId: asSessionId('identity-change'),
+      clock: { now: (): number => 1 },
+    })
+    await expect(repository.entries()).resolves.toEqual([])
+    const sessionDirectory = join(workspace, '.luban', 'context-archive', 'identity-change')
+    await rename(sessionDirectory, `${sessionDirectory}-original`)
+    await symlink(outside, sessionDirectory, process.platform === 'win32' ? 'junction' : 'dir')
+
+    await expect(
+      repository.archive({ startSeq: 0, endSeq: 0, estTokens: 1 }, 'must stay inside'),
+    ).rejects.toMatchObject({ code: 'E_IO' })
+    await expect(readdir(outside)).resolves.toEqual([])
   })
 
   it('preserves distinct generations that reuse a surface range and retries idempotently', async () => {

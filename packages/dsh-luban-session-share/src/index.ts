@@ -99,9 +99,33 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
   }
   const bridge = new DshSessionBridge({ agents: ctx.agents, registry, host, owner })
   bridge.initialize([])
-  const taskStore = ctx.get('lubanTaskStore')
   const api = new SessionShareHttpApi(registry, auth, config.replayLimit)
   ctx.provide('lubanSessionRegistry', registry)
+
+  ctx.inject(['lubanTaskStore'], (taskContext): (() => void) => {
+    const taskStore = taskContext.get('lubanTaskStore')
+    if (taskStore === undefined) {
+      throw new LubanError('E_UNAVAILABLE', 'lubanTaskStore injection became unavailable')
+    }
+    let active = true
+    const refreshTaskLinks = (): void => {
+      if (!active) return
+      void taskStore
+        .query({})
+        .then((tasks): void => {
+          if (active) bridge.syncTasks(tasks)
+        })
+        .catch((): void => {
+          if (active) ctx.logger.warn('luban-session-share: task link refresh failed')
+        })
+    }
+    const unregisterTasks = taskStore.subscribe(refreshTaskLinks)
+    refreshTaskLinks()
+    return (): void => {
+      active = false
+      unregisterTasks()
+    }
+  })
 
   ctx.effect(() => {
     const unregisterRoute = ctx.webServer.register({
@@ -122,14 +146,6 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
       bridge.sessionEvent(session, event),
     )
     const unregisterKeepalive = keepalive.onEvent((event): void => bridge.keepaliveEvent(event))
-    const refreshTaskLinks = (): void => {
-      if (taskStore === undefined) return
-      void taskStore
-        .query({})
-        .then((tasks): void => bridge.syncTasks(tasks))
-        .catch((): void => ctx.logger.warn('luban-session-share: task link refresh failed'))
-    }
-    const unregisterTasks = taskStore?.subscribe(refreshTaskLinks)
     const refresh = (): void => {
       void registry.refreshPeers().then((issues): void => {
         for (const issue of issues) ctx.logger.warn(`luban-session-share: ${issue}`)
@@ -137,12 +153,10 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
       registry.sweepExpired()
     }
     refresh()
-    refreshTaskLinks()
     const timer = setInterval(refresh, config.peerRefreshSec * 1_000)
     timer.unref()
     return (): void => {
       clearInterval(timer)
-      unregisterTasks?.()
       unregisterKeepalive()
       unregisterSessionEvent()
       unregisterStatus()

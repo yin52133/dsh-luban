@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, relative, resolve } from 'node:path'
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import type {
   Clock,
   CompactionAuditRecord,
@@ -24,6 +34,113 @@ export interface ArchiveIndexEntry {
 interface ArchiveState {
   readonly schemaVersion: 1
   readonly entries: readonly ArchiveIndexEntry[]
+}
+
+interface DirectoryIdentity {
+  readonly device: number | bigint
+  readonly inode: number | bigint
+  readonly birthtimeMs: number | bigint
+}
+
+interface DirectoryBoundary {
+  readonly path: string
+  readonly identity: DirectoryIdentity
+}
+
+interface RepositoryRoot {
+  readonly workspace: string
+  readonly archive: DirectoryBoundary
+  readonly session: DirectoryBoundary
+  readonly index: AtomicJsonStore<ArchiveState>
+  readonly audit: AtomicJsonStore<readonly CompactionAuditRecord[]>
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  const value = (error as Readonly<{ code?: unknown }>).code
+  return typeof value === 'string' ? value : undefined
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const child = relative(root, candidate)
+  return child !== '' && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child)
+}
+
+function samePath(left: string, right: string): boolean {
+  return relative(left, right) === ''
+}
+
+function directoryIdentity(info: Awaited<ReturnType<typeof lstat>>): DirectoryIdentity {
+  return { device: info.dev, inode: info.ino, birthtimeMs: info.birthtimeMs }
+}
+
+function sameDirectoryIdentity(left: DirectoryIdentity, right: DirectoryIdentity): boolean {
+  return (
+    left.device === right.device &&
+    left.inode === right.inode &&
+    left.birthtimeMs === right.birthtimeMs
+  )
+}
+
+async function ownedDirectory(
+  path: string,
+  workspace: string,
+  label: string,
+): Promise<DirectoryBoundary> {
+  try {
+    await mkdir(path, { mode: 0o700 })
+  } catch (error: unknown) {
+    if (errorCode(error) !== 'EEXIST') {
+      throw new LubanError('E_IO', `Unable to create ${label}`, { cause: error })
+    }
+  }
+  const [info, canonical] = await Promise.all([lstat(path), realpath(path)])
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    !samePath(path, canonical) ||
+    (!samePath(workspace, canonical) && !isInside(workspace, canonical))
+  ) {
+    throw new LubanError(
+      'E_INVALID_INPUT',
+      `${label} must be a real directory inside the canonical workspace`,
+    )
+  }
+  return { path, identity: directoryIdentity(info) }
+}
+
+async function ownedDirectoryTree(
+  workspace: string,
+  requested: string,
+  label: string,
+): Promise<DirectoryBoundary> {
+  const relativePath = relative(workspace, requested)
+  if (relativePath === '' || relativePath === '..' || relativePath.startsWith(`..${sep}`)) {
+    throw new LubanError('E_INVALID_INPUT', `${label} must stay inside the workspace`)
+  }
+  let current = workspace
+  let boundary: DirectoryBoundary | undefined
+  for (const component of relativePath.split(/[\\/]+/u)) {
+    if (component === '' || component === '.') continue
+    current = resolve(current, component)
+    boundary = await ownedDirectory(current, workspace, label)
+  }
+  if (boundary === undefined) {
+    throw new LubanError('E_INVALID_INPUT', `${label} must stay inside the workspace`)
+  }
+  return boundary
+}
+
+async function assertDirectory(boundary: DirectoryBoundary, label: string): Promise<void> {
+  const [info, canonical] = await Promise.all([lstat(boundary.path), realpath(boundary.path)])
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    !samePath(boundary.path, canonical) ||
+    !sameDirectoryIdentity(boundary.identity, directoryIdentity(info))
+  ) {
+    throw new Error(`${label} identity changed`)
+  }
 }
 
 function record(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -171,12 +288,11 @@ async function atomicTextWrite(filePath: string, content: string): Promise<void>
 
 /** Workspace-local virtual file repository with a searchable index and audit log. */
 export class ContextArchiveRepository {
-  readonly #workspace: string
+  readonly #requestedWorkspace: string
+  readonly #archiveDir: string
   readonly #sessionId: SessionId
-  readonly #sessionDirectory: string
   readonly #clock: Clock
-  readonly #index: AtomicJsonStore<ArchiveState>
-  readonly #audit: AtomicJsonStore<readonly CompactionAuditRecord[]>
+  #rootPromise: Promise<RepositoryRoot> | undefined
 
   public constructor(options: {
     readonly workspace: string
@@ -184,26 +300,16 @@ export class ContextArchiveRepository {
     readonly sessionId: SessionId
     readonly clock: Clock
   }) {
-    this.#workspace = resolve(options.workspace)
+    this.#requestedWorkspace = resolve(options.workspace)
+    this.#archiveDir = options.archiveDir
     this.#sessionId = options.sessionId
     this.#clock = options.clock
-    const archiveRoot = resolve(this.#workspace, options.archiveDir)
-    relativeInside(this.#workspace, archiveRoot)
-    this.#sessionDirectory = resolve(archiveRoot, safeSessionDirectory(options.sessionId))
-    relativeInside(archiveRoot, this.#sessionDirectory)
-    this.#index = new AtomicJsonStore({
-      filePath: resolve(this.#sessionDirectory, 'index.json'),
-      codec: archiveCodec,
-      initial: (): ArchiveState => ({ schemaVersion: 1, entries: [] }),
-    })
-    this.#audit = new AtomicJsonStore({
-      filePath: resolve(this.#sessionDirectory, 'audit.json'),
-      codec: auditCodec,
-      initial: (): readonly CompactionAuditRecord[] => [],
-    })
+    relativeInside(this.#requestedWorkspace, resolve(this.#requestedWorkspace, options.archiveDir))
   }
 
   public async archive(segment: ContextSegment, rawContent: string): Promise<string> {
+    const root = await this.#root()
+    await this.#assertRoot(root)
     const content = redactSecrets(rawContent)
     const document = [
       `# Context segment ${String(segment.startSeq)}–${String(segment.endSeq)}`,
@@ -217,10 +323,11 @@ export class ContextArchiveRepository {
     ].join('\n')
     const digest = createHash('sha256').update(document).digest('hex')
     const name = `seg-${String(segment.startSeq).padStart(8, '0')}-${String(segment.endSeq).padStart(8, '0')}-${digest.slice(0, 12)}.md`
-    const absolutePath = resolve(this.#sessionDirectory, name)
-    relativeInside(this.#sessionDirectory, absolutePath)
+    const absolutePath = resolve(root.session.path, name)
+    relativeInside(root.session.path, absolutePath)
     await atomicTextWrite(absolutePath, document)
-    const path = relativeInside(this.#workspace, absolutePath)
+    await this.#assertRoot(root)
+    const path = relativeInside(root.workspace, absolutePath)
     const entry: ArchiveIndexEntry = {
       startSeq: segment.startSeq,
       endSeq: segment.endSeq,
@@ -230,17 +337,22 @@ export class ContextArchiveRepository {
       sha256: digest,
       createdAt: this.#clock.now(),
     }
-    await this.#index.update((state): ArchiveState => ({
+    await root.index.update((state): ArchiveState => ({
       ...state,
       entries: state.entries.some((item): boolean => item.path === path)
         ? state.entries.map((item): ArchiveIndexEntry => (item.path === path ? entry : item))
         : [...state.entries, entry],
     }))
+    await this.#assertRoot(root)
     return path
   }
 
   public async entries(): Promise<readonly ArchiveIndexEntry[]> {
-    return (await this.#index.read()).entries
+    const root = await this.#root()
+    await this.#assertRoot(root)
+    const entries = (await root.index.read()).entries
+    await this.#assertRoot(root)
+    return entries
   }
 
   public async replay(startSeq: number, endSeq: number): Promise<string> {
@@ -264,11 +376,28 @@ export class ContextArchiveRepository {
   }
 
   async #readEntry(entry: ArchiveIndexEntry): Promise<string> {
-    const absolutePath = resolve(this.#workspace, entry.path)
-    relativeInside(this.#sessionDirectory, absolutePath)
+    const root = await this.#root()
+    await this.#assertRoot(root)
+    const absolutePath = resolve(root.workspace, entry.path)
+    relativeInside(root.session.path, absolutePath)
+    const [info, canonical] = await Promise.all([
+      lstat(absolutePath),
+      realpath(absolutePath),
+    ]).catch((error: unknown): never => {
+      throw new LubanError('E_IO', `Unable to replay ${entry.path}`, { cause: error })
+    })
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      !samePath(absolutePath, canonical) ||
+      !isInside(root.session.path, canonical)
+    ) {
+      throw new LubanError('E_IO', `Archived path is outside its session directory`)
+    }
     const content = await readFile(absolutePath, 'utf8').catch((error: unknown): never => {
       throw new LubanError('E_IO', `Unable to replay ${entry.path}`, { cause: error })
     })
+    await this.#assertRoot(root)
     const digest = createHash('sha256').update(content).digest('hex')
     if (digest !== entry.sha256)
       throw new LubanError('E_IO', `Archive checksum mismatch for ${entry.path}`)
@@ -279,10 +408,73 @@ export class ContextArchiveRepository {
     if (record.sessionId !== this.#sessionId) {
       throw new LubanError('E_INVALID_INPUT', 'Audit record session does not match the archive')
     }
-    await this.#audit.update((records): readonly CompactionAuditRecord[] => [...records, record])
+    const root = await this.#root()
+    await this.#assertRoot(root)
+    await root.audit.update((records): readonly CompactionAuditRecord[] => [...records, record])
+    await this.#assertRoot(root)
   }
 
   public async audit(): Promise<readonly CompactionAuditRecord[]> {
-    return this.#audit.read()
+    const root = await this.#root()
+    await this.#assertRoot(root)
+    const records = await root.audit.read()
+    await this.#assertRoot(root)
+    return records
+  }
+
+  async #root(): Promise<RepositoryRoot> {
+    this.#rootPromise ??= this.#initializeRoot()
+    return this.#rootPromise
+  }
+
+  async #initializeRoot(): Promise<RepositoryRoot> {
+    const workspaceInfo = await stat(this.#requestedWorkspace).catch((error: unknown): never => {
+      throw new LubanError('E_IO', 'Context workspace is unavailable', { cause: error })
+    })
+    if (!workspaceInfo.isDirectory()) {
+      throw new LubanError('E_INVALID_INPUT', 'Context workspace must be a directory')
+    }
+    const workspace = await realpath(this.#requestedWorkspace).catch((error: unknown): never => {
+      throw new LubanError('E_IO', 'Context workspace is unavailable', { cause: error })
+    })
+    const requestedArchive = resolve(workspace, this.#archiveDir)
+    relativeInside(workspace, requestedArchive)
+    const archive = await ownedDirectoryTree(workspace, requestedArchive, 'archiveDir')
+    const session = await ownedDirectory(
+      resolve(archive.path, safeSessionDirectory(this.#sessionId)),
+      workspace,
+      'context session directory',
+    )
+    const root: RepositoryRoot = {
+      workspace,
+      archive,
+      session,
+      index: new AtomicJsonStore({
+        filePath: resolve(session.path, 'index.json'),
+        codec: archiveCodec,
+        initial: (): ArchiveState => ({ schemaVersion: 1, entries: [] }),
+      }),
+      audit: new AtomicJsonStore({
+        filePath: resolve(session.path, 'audit.json'),
+        codec: auditCodec,
+        initial: (): readonly CompactionAuditRecord[] => [],
+      }),
+    }
+    await this.#assertRoot(root)
+    return root
+  }
+
+  async #assertRoot(root: RepositoryRoot): Promise<void> {
+    try {
+      await Promise.all([
+        assertDirectory(root.archive, 'context archive directory'),
+        assertDirectory(root.session, 'context session directory'),
+      ])
+    } catch (error: unknown) {
+      if (error instanceof LubanError) throw error
+      throw new LubanError('E_IO', 'Context archive directory identity changed or is unavailable', {
+        cause: error,
+      })
+    }
   }
 }

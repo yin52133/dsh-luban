@@ -18,14 +18,39 @@ import { LubanError, asSessionId } from '@luban/core'
 import type { SharedSessionRegistry } from './registry.js'
 import type { SessionInputSink } from './types.js'
 
-const MAX_TURN_OUTPUT_CHARS = 65_536
+const MAX_TURN_OUTPUT_BYTES = 64 * 1024
 const TRUNCATED_OUTPUT_MARKER = '\n[output truncated]\n'
+const TRUNCATED_OUTPUT_MARKER_BYTES = Buffer.byteLength(TRUNCATED_OUTPUT_MARKER, 'utf8')
+const REPLACEMENT_CHARACTER = '\uFFFD'
 
 interface TurnOutputBuffer {
   readonly turn: number
   text: string
+  bytes: number
+  pendingHighSurrogate: string
   truncated: boolean
   at: number
+}
+
+function trailingHighSurrogate(value: string): boolean {
+  if (value.length === 0) return false
+  const code = value.charCodeAt(value.length - 1)
+  return code >= 0xd800 && code <= 0xdbff
+}
+
+function truncateUtf8(
+  value: string,
+  maximumBytes: number,
+): { readonly text: string; readonly bytes: number } {
+  let bytes = 0
+  let text = ''
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, 'utf8')
+    if (bytes + characterBytes > maximumBytes) break
+    text += character
+    bytes += characterBytes
+  }
+  return { text, bytes }
 }
 
 function isShareableRoot(agents: AgentRegistry, agent: Agent): boolean {
@@ -176,22 +201,56 @@ export class DshSessionBridge {
       buffer = undefined
     }
     if (buffer === undefined) {
-      buffer = { turn, text: '', truncated: false, at }
+      buffer = { turn, text: '', bytes: 0, pendingHighSurrogate: '', truncated: false, at }
       this.#turnOutput.set(id, buffer)
     }
     buffer.at = at
     if (buffer.truncated || text === '') return
-    const remaining = MAX_TURN_OUTPUT_CHARS - buffer.text.length
-    if (remaining > 0) buffer.text += text.slice(0, remaining)
-    if (text.length > remaining) buffer.truncated = true
+    let complete = `${buffer.pendingHighSurrogate}${text}`
+    buffer.pendingHighSurrogate = ''
+    if (trailingHighSurrogate(complete)) {
+      buffer.pendingHighSurrogate = complete.slice(-1)
+      complete = complete.slice(0, -1)
+    }
+    const completeBytes = Buffer.byteLength(complete, 'utf8')
+    if (buffer.bytes + completeBytes <= MAX_TURN_OUTPUT_BYTES) {
+      buffer.text += complete
+      buffer.bytes += completeBytes
+      return
+    }
+    const available = Math.max(0, MAX_TURN_OUTPUT_BYTES - buffer.bytes)
+    const retained = truncateUtf8(complete, available)
+    buffer.text += retained.text
+    buffer.bytes += retained.bytes
+    this.#markTurnOutputTruncated(buffer)
   }
 
   #flushTurnOutput(id: SessionId, turn?: number, at?: number): void {
     const buffer = this.#turnOutput.get(id)
     if (buffer === undefined || (turn !== undefined && buffer.turn !== turn)) return
     this.#turnOutput.delete(id)
+    if (!buffer.truncated && buffer.pendingHighSurrogate !== '') {
+      const replacementBytes = Buffer.byteLength(REPLACEMENT_CHARACTER, 'utf8')
+      if (buffer.bytes + replacementBytes <= MAX_TURN_OUTPUT_BYTES) {
+        buffer.text += REPLACEMENT_CHARACTER
+        buffer.bytes += replacementBytes
+      } else {
+        this.#markTurnOutputTruncated(buffer)
+      }
+    }
     const text = buffer.truncated ? `${buffer.text}${TRUNCATED_OUTPUT_MARKER}` : buffer.text
     if (text !== '') this.#registry.publishOutput(id, text, at ?? buffer.at)
+  }
+
+  #markTurnOutputTruncated(buffer: TurnOutputBuffer): void {
+    const retained = truncateUtf8(
+      buffer.text,
+      MAX_TURN_OUTPUT_BYTES - TRUNCATED_OUTPUT_MARKER_BYTES,
+    )
+    buffer.text = retained.text
+    buffer.bytes = retained.bytes
+    buffer.pendingHighSurrogate = ''
+    buffer.truncated = true
   }
 
   #updateTask(id: string, taskId: TaskId | undefined): void {
