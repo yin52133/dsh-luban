@@ -102,6 +102,37 @@ describe('optional sharp processor', () => {
     })
   })
 
+  it('resizes and verifies a real decoded image with the installed sharp peer', async () => {
+    const sharpModule = await import('sharp')
+    const source = await sharpModule
+      .default({
+        create: {
+          width: 400,
+          height: 200,
+          channels: 4,
+          background: { r: 24, g: 48, b: 72, alpha: 1 },
+        },
+      })
+      .png()
+      .toBuffer()
+    const processor = new DynamicSharpProcessor(() => Promise.resolve(sharpModule))
+
+    const result = await processor.process(source, 'image/png', {
+      enabled: true,
+      maxSidePx: 100,
+      quality: 82,
+    })
+
+    expect(result.report).toMatchObject({ status: 'compressed', width: 100, height: 50 })
+    await expect(
+      sharpModule.default(result.bytes, { failOn: 'error' }).metadata(),
+    ).resolves.toMatchObject({
+      format: 'png',
+      width: 100,
+      height: 50,
+    })
+  })
+
   it('rejects resized output whose decoded dimensions still exceed maxSidePx', async () => {
     const resized = Uint8Array.of(...PNG_BYTES, 1)
     const firstPipeline: Record<string, unknown> = {
