@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
-import type { AgentHandle, AgentRegistry } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {
   Actor,
   Clock,
@@ -20,6 +21,139 @@ import type { JsonTaskStore } from './task-store.js'
 export interface NightTaskExecutor {
   execute(task: Task, sessionId: ReturnType<typeof SessionId>): Promise<TaskOutput>
   dispose?(): Promise<void>
+}
+
+interface NightExecutionReport {
+  readonly acceptanceMet: boolean
+  readonly summary: string
+  readonly evidence: string
+  readonly outputKind: TaskOutput['kind']
+  readonly ref: string
+}
+
+interface NightExecutionReportState {
+  calls: number
+  callId?: string
+  report?: NightExecutionReport
+}
+
+const NIGHT_RESULT_TOOL = 'luban_report_night_result'
+
+function completedLastTurn(agent: Agent): number | undefined {
+  let latest: { readonly turn: number; readonly completed: boolean } | undefined
+  for (const event of agent.session.events) {
+    if (event.type === 'turn/start') latest = { turn: event.data.turn, completed: false }
+    if (event.type === 'turn/end') {
+      latest = { turn: event.data.turn, completed: event.data.reason.kind === 'completed' }
+    }
+  }
+  return latest?.completed === true ? latest.turn : undefined
+}
+
+function hasSuccessfulResultEvent(
+  agent: Agent,
+  state: NightExecutionReportState,
+  completedTurn: number,
+): boolean {
+  if (state.callId === undefined) return false
+  let callCount = 0
+  let resultCount = 0
+  let resultSucceeded = false
+  for (const event of agent.session.events) {
+    if (event.type === 'tool/call' && event.data.name === NIGHT_RESULT_TOOL) {
+      callCount += 1
+      if (event.data.callId !== state.callId || event.data.turn !== completedTurn) return false
+    }
+    if (event.type === 'tool/result' && event.data.message.source.callId === state.callId) {
+      resultCount += 1
+      const block = event.data.message.content[0]
+      resultSucceeded = event.data.error === undefined && block.isError !== true
+      if (event.data.turn !== completedTurn) return false
+    }
+  }
+  return callCount === 1 && resultCount === 1 && resultSucceeded
+}
+
+function resultTool(
+  sessionId: ReturnType<typeof SessionId>,
+  state: NightExecutionReportState,
+): ToolDefinition {
+  return defineTool({
+    name: NIGHT_RESULT_TOOL,
+    description:
+      'Report the final, evidence-backed result of one Luban night task exactly once. Calling this tool concludes the turn.',
+    parameters: {
+      acceptanceMet: {
+        type: 'boolean',
+        required: true,
+        description: 'True only when every task acceptance criterion has been verified.',
+      },
+      summary: {
+        type: 'string',
+        required: true,
+        description: 'Concise outcome summary for the task card.',
+      },
+      evidence: {
+        type: 'string',
+        required: true,
+        description: 'Concrete verification evidence, or the failed criterion and reason.',
+      },
+      outputKind: {
+        type: 'string',
+        enum: ['note', 'commit', 'artifact', 'link'] as const,
+        required: true,
+        description: 'Kind of durable output referenced by ref.',
+      },
+      ref: {
+        type: 'string',
+        required: true,
+        description: 'Durable commit, artifact, link, note, or session reference.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          recorded: { type: 'boolean', required: true },
+        },
+        additionalProperties: false,
+      },
+      render: (_args, value) => [
+        {
+          type: 'text',
+          text: value.recorded ? 'Night result recorded.' : 'Night result rejected.',
+        },
+      ],
+    },
+    execute(args, execution): Promise<{ readonly recorded: boolean }> {
+      state.calls += 1
+      if (state.calls !== 1) {
+        throw new LubanError('E_INVALID_INPUT', `${NIGHT_RESULT_TOOL} must be called exactly once`)
+      }
+      if (execution.agent?.id !== sessionId) {
+        throw new LubanError('E_INVALID_INPUT', `${NIGHT_RESULT_TOOL} caller does not own this run`)
+      }
+      const summary = args.summary.trim()
+      const evidence = args.evidence.trim()
+      const ref = args.ref.trim()
+      if (summary === '' || evidence === '' || ref === '') {
+        throw new LubanError(
+          'E_INVALID_INPUT',
+          `${NIGHT_RESULT_TOOL} requires non-empty summary, evidence, and ref`,
+        )
+      }
+      state.report = {
+        acceptanceMet: args.acceptanceMet,
+        summary,
+        evidence,
+        outputKind: args.outputKind,
+        ref,
+      }
+      state.callId = execution.callId
+      execution.concludeTurn()
+      return Promise.resolve({ recorded: true })
+    },
+  })
 }
 
 function localDateKey(epochMs: number): string {
@@ -48,22 +182,41 @@ export function isInWindow(epochMs: number, window: string): boolean {
   return from <= to ? now >= from && now < to : now >= from || now < to
 }
 
-/** Default DSH execution adapter using the rc2 AgentRegistry public factory. */
+/**
+ * In-process rc2 AgentRegistry adapter. It owns each AgentHandle; M03 owns the
+ * containing profile process at the deployment boundary and must not be asked
+ * to recursively launch another copy of that process from here.
+ */
 export class DshAgentNightExecutor implements NightTaskExecutor {
   readonly #agents: AgentRegistry
   readonly #handles = new Set<AgentHandle>()
+  readonly #config: Pick<NightConfig, 'model' | 'toolAllowlist'>
   readonly #clock: Clock
 
-  public constructor(agents: AgentRegistry, clock: Clock = systemClock) {
+  public constructor(
+    agents: AgentRegistry,
+    config: Pick<NightConfig, 'model' | 'toolAllowlist'>,
+    clock: Clock = systemClock,
+  ) {
     this.#agents = agents
+    this.#config = config
     this.#clock = clock
   }
 
   public async execute(task: Task, sessionId: ReturnType<typeof SessionId>): Promise<TaskOutput> {
+    const reportState: NightExecutionReportState = { calls: 0 }
     const handle = await this.#agents.create({
       sessionId,
       meta: {
         ...(task.workspace === undefined ? {} : { cwd: resolve(task.workspace) }),
+      },
+      agentOptions: {
+        provider: this.#config.model.provider,
+        model: this.#config.model.id,
+      },
+      setup: (agentCtx): void => {
+        agentCtx.tools.restrict({ allow: this.#config.toolAllowlist })
+        agentCtx.tools.register(resultTool(sessionId, reportState))
       },
     })
     this.#handles.add(handle)
@@ -73,6 +226,7 @@ export class DshAgentNightExecutor implements NightTaskExecutor {
         task.description,
         `Acceptance criteria:\n${task.acceptance ?? '(missing)'}`,
         'Work only inside the configured workspace. Summarize verifiable outputs when finished.',
+        `As the final action, call ${NIGHT_RESULT_TOOL} exactly once. Set acceptanceMet=true only after verifying every acceptance criterion and provide concrete evidence. If any criterion is unmet or cannot be verified, report acceptanceMet=false. Reaching idle without this report is a failure.`,
       ].join('\n\n')
       handle.agent.followup(
         createUserMessage({
@@ -81,10 +235,35 @@ export class DshAgentNightExecutor implements NightTaskExecutor {
         }),
       )
       await handle.agent.whenIdle()
+      const completedTurn = completedLastTurn(handle.agent)
+      if (completedTurn === undefined) {
+        throw new LubanError('E_UNAVAILABLE', 'Night agent did not finish a completed turn', {
+          retriable: true,
+        })
+      }
+      const report = reportState.report
+      if (
+        reportState.calls !== 1 ||
+        report === undefined ||
+        !hasSuccessfulResultEvent(handle.agent, reportState, completedTurn)
+      ) {
+        throw new LubanError(
+          'E_UNAVAILABLE',
+          'Night agent did not submit one successful final result report',
+          { retriable: true },
+        )
+      }
+      if (!report.acceptanceMet) {
+        throw new LubanError(
+          'E_UNAVAILABLE',
+          `Night task acceptance was not met: ${report.summary} (${report.evidence})`,
+          { retriable: true },
+        )
+      }
       return {
-        kind: 'note',
-        ref: `session:${sessionId}`,
-        summary: 'Autonomous DSH session reached idle; review its durable transcript and outputs.',
+        kind: report.outputKind,
+        ref: report.ref,
+        summary: `${report.summary} Evidence: ${report.evidence}`,
         at: this.#clock.now(),
         by: { kind: 'agent', id: asActorId(sessionId) },
       }

@@ -14,5 +14,9 @@
           dailyQuota: 5
           hostScopeWhitelist: [ubuntu]
           tagWhitelist: [auto-ok]
+          model:
+            provider: ''
+            id: ''
+          toolAllowlist: []
           circuitBreaker:
             maxConsecutiveFailures: 3

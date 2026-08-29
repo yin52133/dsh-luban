@@ -17,7 +17,11 @@ atomically written JSON ledger.
 - Cross-process locked, fsync/rename persistence with one backup per local
   calendar day and seven retained write days by default.
 - Disabled-by-default night execution with host/tag allowlists, daily quota, and
-  a durable next-day circuit-breaker reset.
+  a durable next-day circuit-breaker reset. Night agents use an explicit model
+  and inherited-tool allowlist that do not fall back to the interactive agent.
+- Fail-closed autonomous completion: idle alone is never success. The scoped
+  result tool must record one successful, evidence-backed acceptance report in
+  the durable session log before the task can enter Review as `autoDone`.
 - Idempotent import of common dashi-taskboard and cloader JSON fields.
 
 ## Installation
@@ -49,11 +53,18 @@ section appears under Settings as **Taskboard**.
           dailyQuota: 5
           hostScopeWhitelist: [ubuntu]
           tagWhitelist: [auto-ok]
+          model: { provider: '', id: '' }
+          toolAllowlist: []
           circuitBreaker: { maxConsecutiveFailures: 3 }
 ```
 
 Night mode remains off until explicitly enabled. It only claims `todo` tasks
-that have acceptance criteria and match both allowlists.
+that have acceptance criteria and match both task allowlists. Before enabling
+it, set `model.provider` and `model.id` to an rc2 provider route/model and list
+every inherited tool the night agent may use in `toolAllowlist`; an empty list
+leaves only the scoped result-reporting tool. Missing model configuration,
+unknown tools, a missing/failed/duplicate report, unmet acceptance, or a
+non-completed final turn all fail closed and return the task to `todo`.
 
 `taskctl` talks to the same `/luban-taskboard` HTTP API. Put the complete Cookie
 header in `LUBAN_SESSION_COOKIE` and the CSRF value in `LUBAN_CSRF_TOKEN`; secrets
@@ -78,14 +89,21 @@ the Plan plugin keeps the board available without those links.
 ## Compatibility
 
 Tested with DeepSeek Harness `0.1.1-rc.2`, Cordis 4.0.1, and Node.js 22.19+.
-The host adapter deliberately uses the rc2 `AgentRegistry` API and does not
-require unreleased session-controller APIs.
+The host adapter uses public rc2 `AgentRegistry.create({ agentOptions, setup })`,
+agent-scoped `tools.restrict({ allow })`, `followup()`, `whenIdle()`, and durable
+session events; it does not require unreleased session-controller APIs.
 
 ## Platform Support
 
 The same package runs on Windows and Ubuntu. Each host owns a ledger named
 `<hostname>-ledger.json`; `hostScope` controls which local agent may claim a
 task. Cross-host ledger aggregation is outside this package.
+
+M03 supervises the containing DSH profile process at the deployment boundary.
+The night executor itself is an in-process `AgentRegistry` handle, so it owns and
+drains that handle but intentionally does not call `KeepaliveService.ensureAlive`
+to launch a duplicate copy of its own host. Deploy the profile under M03's
+tmux/service strategy when process-level restart recovery is required.
 
 ## License
 

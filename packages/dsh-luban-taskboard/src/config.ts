@@ -8,6 +8,11 @@ export interface NightConfig {
   readonly dailyQuota: number
   readonly hostScopeWhitelist: readonly Exclude<HostScope, 'any'>[]
   readonly tagWhitelist: readonly string[]
+  readonly model: {
+    readonly provider: string
+    readonly id: string
+  }
+  readonly toolAllowlist: readonly string[]
   readonly circuitBreaker: {
     readonly maxConsecutiveFailures: number
   }
@@ -34,6 +39,8 @@ const DEFAULT_CONFIG: Config = Object.freeze({
     dailyQuota: 5,
     hostScopeWhitelist: ['ubuntu'] as const,
     tagWhitelist: ['auto-ok'],
+    model: { provider: '', id: '' },
+    toolAllowlist: [],
     circuitBreaker: { maxConsecutiveFailures: 3 },
   },
 })
@@ -75,11 +82,16 @@ function stringList(input: unknown, fallback: readonly string[]): readonly strin
     : fallback
 }
 
+function trimmedString(input: unknown): string {
+  return typeof input === 'string' ? input.trim() : ''
+}
+
 export function parseConfig(input: unknown): Config {
   const root = objectValue(input)
   const store = objectValue(root.store)
   const claim = objectValue(root.claim)
   const night = objectValue(root.night)
+  const nightModel = objectValue(night.model)
   const breaker = objectValue(night.circuitBreaker)
   const rawScope = root.hostScope
   const hostScope: Config['hostScope'] =
@@ -98,17 +110,29 @@ export function parseConfig(input: unknown): Config {
     typeof store.dir === 'string' && store.dir.trim() !== ''
       ? store.dir.trim()
       : DEFAULT_CONFIG.store.dir
+  const nightEnabled = booleanValue(night.enabled, false)
+  const model = {
+    provider: trimmedString(nightModel.provider),
+    id: trimmedString(nightModel.id),
+  }
+  if (nightEnabled && (model.provider === '' || model.id === '')) {
+    throw new TypeError(
+      'night.model.provider and night.model.id are required when night mode is enabled',
+    )
+  }
 
   return {
     store: { dir: rawDir },
     hostScope,
     claim: { requireAcceptance: booleanValue(claim.requireAcceptance, true) },
     night: {
-      enabled: booleanValue(night.enabled, false),
+      enabled: nightEnabled,
       window,
       dailyQuota: positiveInteger(night.dailyQuota, DEFAULT_CONFIG.night.dailyQuota),
       hostScopeWhitelist: scopes.length > 0 ? scopes : DEFAULT_CONFIG.night.hostScopeWhitelist,
       tagWhitelist: stringList(night.tagWhitelist, DEFAULT_CONFIG.night.tagWhitelist),
+      model,
+      toolAllowlist: stringList(night.toolAllowlist, DEFAULT_CONFIG.night.toolAllowlist),
       circuitBreaker: {
         maxConsecutiveFailures: positiveInteger(
           breaker.maxConsecutiveFailures,

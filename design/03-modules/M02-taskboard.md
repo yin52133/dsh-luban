@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 AgentRegistry 适配、认证 API、实现与测试证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐 SSE 进程重启后的超前游标 baseline 恢复验证 |
 | v0.4 | 2026-08-30 | Codex | 将账本备份从最近 7 次写入修正为按本地日历日保留 |
+| v0.5 | 2026-08-30 | Codex | 夜间 agent 独立模型/工具作用域与显式验收结果改为 fail-closed |
 
 ## 1. 概述与目标
 
@@ -62,9 +63,9 @@ flowchart TD
     C -- 正常 --> D["按白名单+hostScope 选单<br/>（原子认领 M02-F004）"]
     D --> E{认领成功?}
     E -- 否 --> Z
-    E -- 是 --> F["创建/复用 dsh 会话<br/>注入任务卡+验收标准"]
-    F --> G["执行（经 M08 压缩维持长上下文<br/>经 M03 保活防中断）"]
-    G --> H{达成验收标准?}
+    E -- 是 --> F["创建 dsh 会话<br/>注入任务卡+独立 model/tool scope"]
+    F --> G["进程内 Agent 执行<br/>宿主 profile 由 M03 在部署层保活"]
+    G --> H{"唯一结果工具成功落盘<br/>且最终 turn completed?"}
     H -- 是 --> I["回写产出 → review(auto-done 标记)"]
     H -- 否 --> J["回写失败分析 → todo（失败计数+1）"]
     J --> K{"连续失败 ≥3?"}
@@ -125,19 +126,31 @@ export interface NightScheduler {
           dailyQuota: 5
           hostScopeWhitelist: ["ubuntu"]   # 夜间只跑编译服务器侧任务
           tagWhitelist: ["auto-ok"]        # 仅白名单标签任务可夜间领
+          model: { provider: "", id: "" }  # enabled=true 前必须显式配置
+          toolAllowlist: []                 # 仅保留列出的继承工具；结果工具始终为会话私有
           circuitBreaker: { maxConsecutiveFailures: 3 }
 ```
 
 ## 7. 依赖与边界
 
-- 下层：M01 认证（写操作需登录）、HAL 文件适配器；协作：M03（夜间执行的保活）、M08（长任务压缩）、M11（浏览器类任务自动执行）。
+- 下层：M01 认证（写操作需登录）、HAL 文件适配器；协作：M03（部署层宿主 profile
+  进程保活）、M08（长任务压缩）、M11（浏览器类任务自动执行）。M02 的执行器是宿主内
+  `AgentRegistry` handle，没有可交给 `KeepaliveService.ensureAlive(SessionSpec)` 的独立命令；
+  因而不会从自身进程内递归启动第二个 DSH。可验证边界是：M02 负责创建、等待并释放
+  agent handle，M03 在 profile 的 tmux/service 部署层负责宿主进程重启恢复。
 - 复用档位：**C 档**——dashi-taskboard（Apache-2.0，只参考功能：任务版本化乐观锁、SSE 广播、CLI 与 UI 同源）、cloader/dsh-taskboard（认领-验收流，license 待核实）、maochiy/dsh-taskboard-plugin（六列交互，license 待核实）。全部只读其公开文档，实现原创。
 - 平台属性：双端公用。
 
 ## 8. 非功能与安全
 
 - 存储原子写（tmp + rename）；账本文件每日滚动备份保留 7 份。
-- 夜间模式默认**关闭**；白名单 + 限额 + 熔断三重防失控；夜间会话使用的模型与工具范围单独配置。
+- 夜间模式默认**关闭**；白名单 + 限额 + 熔断三重防失控；`enabled=true` 时独立
+  provider/model 必填，`AgentRegistry.create({ agentOptions, setup })` 将模型与
+  `tools.restrict({ allow })` 工具范围绑定到该 agent 作用域，未知工具在创建阶段失败。
+- `whenIdle()` 只表示无活动，不构成成功。agent 必须恰好一次调用会话私有
+  `luban_report_night_result`；只有对应 `tool/call`/无错误 `tool/result` 已进入 durable
+  session log、最终 `turn/end` 为 `completed` 且 `acceptanceMet=true` 时才写入
+  `review(autoDone)`，其余路径全部回到 `todo` 并累计失败/熔断。
 - 所有写操作经 M01 认证；审计日志记录 actor（人 / agent 会话 id）。
 
 ## 9. checklist 映射
@@ -146,8 +159,9 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
 
 ## 10. 实现与验证记录
 
-- Host 使用 DSH `0.1.1-rc.2` 已发布的 `AgentRegistry.create()`、`followup()` 与
-  `whenIdle()`；每轮结束释放活动 handle，会话 id 与产出引用保留在任务账本。
+- Host 使用 DSH `0.1.1-rc.2` 已发布的 `AgentRegistry.create({ agentOptions, setup })`、
+  agent-scoped `tools.restrict()`、`followup()`、`whenIdle()` 与 session events；每轮结束
+  释放活动 handle，会话 id 与产出引用保留在任务账本。
 - Host API 统一挂载在 `/luban-taskboard`，所有入口复用 M01 身份，写请求由外层
   sidecar 校验 Origin/`x-luban-csrf`。Web 与 CLI 不自行复制认证逻辑。
 - SSE 将事件序号视为单进程游标；`Last-Event-ID` 落后于有界重放窗口或领先于当前
@@ -156,8 +170,9 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
 - `AtomicJsonStore` 仍使用跨进程锁、同目录临时文件、fsync 与原子 rename；备份槽位只在
   本地日历日变化时轮转，同一天的高频写入不会挤掉历史日快照，默认保留最近 7 个写入日。
 - `tests/task-store.test.ts` 覆盖状态机、版本冲突、并发原子认领、回写复核、失败与
-  幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复与 rc2
-  agent 适配；`tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE 与断档基线；
+  幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复、独立
+  model/tool scope、结果工具成功日志以及缺报告/验收失败/异常 turn 的 fail-closed；
+  `tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE 与断档基线；
   `tests/client-cli.test.ts` 覆盖客户端槽位、拖拽写 API 与 CLI 同源调用。
 - 发布包生成 Host ESM、`taskctl` 与 rc2 lazy-CJS `client.js`/`client.d.ts`；夜间模式
   继续默认关闭，真实无人值守执行需在目标 profile 进行部署验收后才启用。

@@ -2,13 +2,16 @@ import { mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent, AgentHandle, AgentRegistry, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Clock, Task, TaskOutput } from '@luban/core'
 import { LubanError } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import type { NightConfig } from '../src/config.js'
+import { parseConfig } from '../src/config.js'
 import { createLedgerStore } from '../src/ledger.js'
 import {
   DefaultNightScheduler,
@@ -33,7 +36,118 @@ const CONFIG: NightConfig = {
   dailyQuota: 1,
   hostScopeWhitelist: ['ubuntu'],
   tagWhitelist: ['auto-ok'],
+  model: { provider: 'night-provider', id: 'night-model' },
+  toolAllowlist: ['read_file', 'search'],
   circuitBreaker: { maxConsecutiveFailures: 2 },
+}
+
+interface ReportArgs {
+  readonly acceptanceMet: boolean
+  readonly summary: string
+  readonly evidence: string
+  readonly outputKind: 'note' | 'commit' | 'artifact' | 'link'
+  readonly ref: string
+}
+
+function fakeAgentRegistry(options: {
+  readonly report?: ReportArgs
+  readonly resultError?: boolean
+  readonly turnReason?: 'completed' | 'error'
+}): {
+  readonly registry: AgentRegistry
+  readonly create: ReturnType<typeof vi.fn<(input: CreateAgentOptions) => Promise<AgentHandle>>>
+  readonly restrict: ReturnType<typeof vi.fn>
+  readonly register: ReturnType<typeof vi.fn>
+  readonly followup: ReturnType<typeof vi.fn>
+  readonly whenIdle: ReturnType<typeof vi.fn>
+  readonly dispose: ReturnType<typeof vi.fn>
+  readonly concludeTurn: ReturnType<typeof vi.fn>
+} {
+  let result: ToolDefinition | undefined
+  let execution = Promise.resolve<unknown>(undefined)
+  let agent: Agent
+  const callId = 'night-result-call'
+  const events: { readonly type: string; readonly data: unknown }[] = []
+  const restrict = vi.fn()
+  const register = vi.fn((definition: ToolDefinition): (() => void) => {
+    result = definition
+    return (): void => undefined
+  })
+  const concludeTurn = vi.fn()
+  const followup = vi.fn((): void => {
+    if (options.report === undefined || result === undefined) return
+    events.push({
+      type: 'tool/call',
+      data: { turn: 0, step: 0, callId, name: 'luban_report_night_result', arguments: '{}' },
+    })
+    execution = result
+      .execute(options.report, {
+        agent,
+        callId,
+        concludeTurn,
+        signal: new AbortController().signal,
+      } as unknown as ToolRunContext)
+      .then((value): unknown => {
+        events.push({
+          type: 'tool/result',
+          data: {
+            turn: 0,
+            step: 0,
+            message: {
+              source: { kind: 'tool', callId },
+              content: [
+                {
+                  type: 'tool-result',
+                  toolCallId: callId,
+                  content: [{ type: 'text', text: 'Night result recorded.' }],
+                  ...(options.resultError === true ? { isError: true } : {}),
+                },
+              ],
+            },
+            ...(options.resultError === true
+              ? { error: { name: 'PolicyError', code: 'RESULT_REJECTED' } }
+              : {}),
+          },
+        })
+        return value
+      })
+  })
+  const whenIdle = vi.fn(async (): Promise<void> => {
+    await execution
+    events.push({
+      type: 'turn/end',
+      data: {
+        turn: 0,
+        reason:
+          options.turnReason === 'error'
+            ? { kind: 'error', error: { code: 'TEST', message: 'failed' } }
+            : { kind: 'completed' },
+      },
+    })
+  })
+  const dispose = vi.fn((): Promise<void> => Promise.resolve())
+  const create = vi.fn(async (input: CreateAgentOptions): Promise<AgentHandle> => {
+    await input.setup?.({ tools: { restrict, register } } as unknown as Context)
+    agent = {
+      id: input.sessionId,
+      followup,
+      whenIdle,
+      session: {
+        events,
+      },
+    } as unknown as Agent
+    return { agent, dispose }
+  })
+  return {
+    registry: { create } as unknown as AgentRegistry,
+    create,
+    restrict,
+    register,
+    followup,
+    whenIdle,
+    dispose,
+    concludeTurn,
+  }
 }
 
 async function state(clock: Clock): Promise<{
@@ -57,7 +171,7 @@ afterEach(async (): Promise<void> => {
 })
 
 describe('night scheduler', (): void => {
-  it('executes through the rc2 agent registry and releases the active handle', async (): Promise<void> => {
+  it('applies a dedicated rc2 model/tool scope and accepts one verified result report', async (): Promise<void> => {
     const clock = new MutableClock()
     const { store } = await state(clock)
     const task = await store.create({
@@ -65,28 +179,176 @@ describe('night scheduler', (): void => {
       hostScope: 'ubuntu',
       priority: 'P2',
     })
-    const followup = vi.fn()
-    const whenIdle = vi.fn((): Promise<void> => Promise.resolve())
-    const dispose = vi.fn((): Promise<void> => Promise.resolve())
-    const create = vi.fn((): Promise<unknown> =>
-      Promise.resolve({
-        agent: { followup, whenIdle },
-        dispose,
-      }),
-    )
-    const executor = new DshAgentNightExecutor({ create } as unknown as AgentRegistry, clock)
+    const harness = fakeAgentRegistry({
+      report: {
+        acceptanceMet: true,
+        summary: 'Checks passed',
+        evidence: 'lint and unit tests passed',
+        outputKind: 'commit',
+        ref: 'commit:abc123',
+      },
+    })
+    const executor = new DshAgentNightExecutor(harness.registry, CONFIG, clock)
     const sessionId = SessionId('luban-night-test')
 
     await expect(executor.execute(task, sessionId)).resolves.toMatchObject({
-      kind: 'note',
-      ref: 'session:luban-night-test',
+      kind: 'commit',
+      ref: 'commit:abc123',
+      summary: 'Checks passed Evidence: lint and unit tests passed',
     })
-    expect(create).toHaveBeenCalledWith({ sessionId, meta: {} })
-    expect(followup).toHaveBeenCalledOnce()
-    expect(whenIdle).toHaveBeenCalledOnce()
-    expect(dispose).toHaveBeenCalledOnce()
+    expect(harness.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId,
+        meta: {},
+        agentOptions: { provider: 'night-provider', model: 'night-model' },
+      }),
+    )
+    expect(harness.create.mock.calls[0]?.[0].setup).toEqual(expect.any(Function))
+    expect(harness.restrict).toHaveBeenCalledWith({ allow: ['read_file', 'search'] })
+    expect(harness.register).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'luban_report_night_result' }),
+    )
+    expect(harness.followup).toHaveBeenCalledOnce()
+    expect(harness.whenIdle).toHaveBeenCalledOnce()
+    expect(harness.concludeTurn).toHaveBeenCalledOnce()
+    expect(harness.dispose).toHaveBeenCalledOnce()
     await executor.dispose()
-    expect(dispose).toHaveBeenCalledOnce()
+    expect(harness.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed when idle has no report, acceptance fails, or the turn did not complete', async (): Promise<void> => {
+    const clock = new MutableClock()
+    const { store } = await state(clock)
+    const task = await store.create({
+      title: 'Fail closed',
+      hostScope: 'ubuntu',
+      priority: 'P2',
+    })
+    const sessionId = SessionId('luban-night-fail-closed')
+
+    const missing = fakeAgentRegistry({})
+    await expect(
+      new DshAgentNightExecutor(missing.registry, CONFIG, clock).execute(task, sessionId),
+    ).rejects.toMatchObject({
+      code: 'E_UNAVAILABLE',
+      message: 'Night agent did not submit one successful final result report',
+    })
+
+    const unmet = fakeAgentRegistry({
+      report: {
+        acceptanceMet: false,
+        summary: 'Build failed',
+        evidence: 'exit code 1',
+        outputKind: 'note',
+        ref: `session:${sessionId}`,
+      },
+    })
+    await expect(
+      new DshAgentNightExecutor(unmet.registry, CONFIG, clock).execute(task, sessionId),
+    ).rejects.toMatchObject({
+      code: 'E_UNAVAILABLE',
+      message: 'Night task acceptance was not met: Build failed (exit code 1)',
+    })
+
+    const rejectedResult = fakeAgentRegistry({
+      resultError: true,
+      report: {
+        acceptanceMet: true,
+        summary: 'Uncommitted report',
+        evidence: 'tool pipeline rejected the result',
+        outputKind: 'note',
+        ref: `session:${sessionId}`,
+      },
+    })
+    await expect(
+      new DshAgentNightExecutor(rejectedResult.registry, CONFIG, clock).execute(task, sessionId),
+    ).rejects.toMatchObject({
+      code: 'E_UNAVAILABLE',
+      message: 'Night agent did not submit one successful final result report',
+    })
+
+    const incomplete = fakeAgentRegistry({
+      turnReason: 'error',
+      report: {
+        acceptanceMet: true,
+        summary: 'Untrusted success',
+        evidence: 'incomplete turn',
+        outputKind: 'note',
+        ref: `session:${sessionId}`,
+      },
+    })
+    await expect(
+      new DshAgentNightExecutor(incomplete.registry, CONFIG, clock).execute(task, sessionId),
+    ).rejects.toMatchObject({
+      code: 'E_UNAVAILABLE',
+      message: 'Night agent did not finish a completed turn',
+    })
+  })
+
+  it('requires an explicit dedicated model before night mode can be enabled', (): void => {
+    expect((): unknown => parseConfig({ night: { enabled: true } })).toThrow(
+      'night.model.provider and night.model.id are required when night mode is enabled',
+    )
+    expect(
+      parseConfig({
+        night: {
+          enabled: true,
+          model: { provider: ' dedicated ', id: ' model ' },
+          toolAllowlist: ['read_file', 'read_file', ''],
+        },
+      }).night,
+    ).toMatchObject({
+      model: { provider: 'dedicated', id: 'model' },
+      toolAllowlist: ['read_file'],
+    })
+  })
+
+  it('returns an unverified DSH result to todo instead of marking it autoDone', async (): Promise<void> => {
+    const clock = new MutableClock()
+    const { store, claims } = await state(clock)
+    await store.create({
+      title: 'Needs real evidence',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'All checks pass',
+      tags: ['auto-ok'],
+    })
+    const harness = fakeAgentRegistry({
+      report: {
+        acceptanceMet: false,
+        summary: 'Checks failed',
+        evidence: 'test suite exit code 1',
+        outputKind: 'note',
+        ref: 'session:failed-night-run',
+      },
+    })
+    const scheduler = new DefaultNightScheduler({
+      store,
+      claims,
+      executor: new DshAgentNightExecutor(harness.registry, CONFIG, clock),
+      config: CONFIG,
+      hostScope: 'ubuntu',
+      clock,
+    })
+
+    await scheduler.triggerOnce()
+
+    expect(await store.query({ statuses: ['review'] })).toEqual([])
+    const [retried] = await store.query({ statuses: ['todo'] })
+    expect(retried).toMatchObject({
+      failureCount: 1,
+      claim: null,
+      outputs: [
+        expect.objectContaining({
+          kind: 'note',
+          summary: 'Night task acceptance was not met: Checks failed (test suite exit code 1)',
+        }),
+      ],
+    })
+    expect(retried?.autoDone).toBeUndefined()
+    expect(scheduler.status()).toMatchObject({ quotaUsed: 0, circuit: 'ok' })
+    await scheduler.dispose()
   })
 
   it('handles overnight windows', (): void => {

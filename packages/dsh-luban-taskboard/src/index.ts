@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-tools'
 import type { AgentClaimService, AuthService, NightScheduler, TaskStore } from '@luban/core'
 import { modulePrefix, systemClock } from '@luban/core'
 import { DefaultAgentClaimService } from './claim-service.js'
@@ -27,7 +28,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export const name = 'luban-taskboard'
-export const inject = ['webServer', 'agents', 'lubanAuth']
+export const inject = ['webServer', 'agents', 'tools', 'lubanAuth']
 export const Config = ConfigSchema
 export type Config = TaskboardConfig
 export { DefaultAgentClaimService } from './claim-service.js'
@@ -63,7 +64,7 @@ export function apply(ctx: Context, input: Partial<TaskboardConfig> = {}): void 
   const ledgerPath = join(resolveStoreDirectory(config.store.dir), `${safeHostname()}-ledger.json`)
   const store = new JsonTaskStore(createLedgerStore(ledgerPath, systemClock), systemClock)
   const claims = new DefaultAgentClaimService(store, hostScope, config.claim.requireAcceptance)
-  const executor = new DshAgentNightExecutor(ctx.agents, systemClock)
+  const executor = new DshAgentNightExecutor(ctx.agents, config.night, systemClock)
   const scheduler = new DefaultNightScheduler({
     store,
     claims,
