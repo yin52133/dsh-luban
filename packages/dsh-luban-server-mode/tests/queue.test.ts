@@ -26,7 +26,12 @@ const TEMPLATE: BuildTemplateConfig = {
 
 class FakeProbe implements ResourceProbe {
   public value: ResourceSample = { diskFreeGb: 100, load1: 1 }
+  public behavior: 'ok' | 'reject' | 'stall' = 'ok'
   public sample(): Promise<ResourceSample> {
+    if (this.behavior === 'reject') return Promise.reject(new Error('resource probe unavailable'))
+    if (this.behavior === 'stall') {
+      return new Promise<ResourceSample>(() => undefined)
+    }
     return Promise.resolve(this.value)
   }
 }
@@ -102,6 +107,7 @@ interface QueueFixture {
   readonly probe: FakeProbe
   readonly executor: FakeExecutor
   readonly alerts: CapturingAlerts
+  readonly errors: unknown[]
   readonly store: BuildLedgerStore
   readonly queue: BuildQueue
 }
@@ -112,6 +118,7 @@ async function fixture(
     readonly retainRuns?: number
     readonly failArtifactDiscovery?: boolean
     readonly concurrencyBarrier?: number
+    readonly probeTimeoutMs?: number
   } = {},
 ): Promise<QueueFixture> {
   const directory = join(tmpdir(), `luban-queue-${randomUUID()}`)
@@ -124,6 +131,7 @@ async function fixture(
   const probe = new FakeProbe()
   const executor = new FakeExecutor(options.concurrencyBarrier)
   const alerts = new CapturingAlerts()
+  const errors: unknown[] = []
   const store = new BuildLedgerStore(join(directory, 'ledger.json'))
   let timestamp = 1_788_048_000_000
   const queue = new BuildQueue({
@@ -138,11 +146,15 @@ async function fixture(
     diskMinGb: 10,
     loadMax: 8,
     checkIntervalMs: 60_000,
+    ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
     retainRuns: options.retainRuns ?? 10,
     alerts,
     now: (): number => ++timestamp,
+    onError: (error: unknown): void => {
+      errors.push(error)
+    },
   })
-  return { directory, workspace, artifacts, probe, executor, alerts, store, queue }
+  return { directory, workspace, artifacts, probe, executor, alerts, errors, store, queue }
 }
 
 afterEach(async (): Promise<void> => {
@@ -203,6 +215,58 @@ describe('BuildQueue', (): void => {
     probe.value = { diskFreeGb: 100, load1: 1 }
     await queue.waitForIdle()
     expect((await queue.get(queued.id)).status).toBe('done')
+    await queue.dispose()
+  })
+
+  it('fails closed when the resource probe rejects', async (): Promise<void> => {
+    const { alerts, errors, executor, probe, queue, workspace } = await fixture()
+    probe.behavior = 'reject'
+    await queue.start()
+    const queued = await queue.enqueue({
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'ok' },
+    })
+
+    await queue.waitForIdle()
+    await new Promise<void>((resolve): void => {
+      setImmediate(resolve)
+    })
+
+    expect((await queue.get(queued.id)).status).toBe('queued')
+    expect((await queue.resourceReport()).paused).toBe(true)
+    expect(executor.maximum).toBe(0)
+    expect(alerts.guards).toHaveLength(1)
+    expect(errors.some((error): boolean => error instanceof Error)).toBe(true)
+    await queue.dispose()
+  })
+
+  it('fails closed within a bound when the resource probe stalls', async (): Promise<void> => {
+    const { alerts, errors, executor, probe, queue, workspace } = await fixture({
+      probeTimeoutMs: 25,
+    })
+    probe.behavior = 'stall'
+    await queue.start()
+    const queued = await queue.enqueue({
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'ok' },
+    })
+    const startedAt = Date.now()
+
+    await queue.waitForIdle()
+    await new Promise<void>((resolve): void => {
+      setImmediate(resolve)
+    })
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect((await queue.get(queued.id)).status).toBe('queued')
+    expect(executor.maximum).toBe(0)
+    expect(alerts.guards).toHaveLength(1)
+    expect(
+      errors.some(
+        (error): boolean =>
+          typeof error === 'object' && error !== null && Reflect.get(error, 'code') === 'E_TIMEOUT',
+      ),
+    ).toBe(true)
     await queue.dispose()
   })
 

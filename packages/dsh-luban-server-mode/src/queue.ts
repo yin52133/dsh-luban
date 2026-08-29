@@ -9,6 +9,8 @@ import type { BuildLedger, BuildLedgerStore, BuildRecord } from './ledger.js'
 import type { ResourceProbe } from './resources.js'
 import { compileTemplate } from './templates.js'
 
+const DEFAULT_RESOURCE_PROBE_TIMEOUT_MS = 5_000
+
 export type BuildQueueEvent =
   | {
       readonly type: 'job'
@@ -30,6 +32,7 @@ export interface BuildQueueOptions {
   readonly diskMinGb: number
   readonly loadMax: number
   readonly checkIntervalMs: number
+  readonly probeTimeoutMs?: number
   readonly retainRuns: number
   readonly alerts?: BuildAlertSink
   readonly now?: () => number
@@ -40,6 +43,31 @@ export interface BuildQueueOptions {
 function excerpt(stdout: string, stderr: string): string {
   const lines = `${stderr}\n${stdout}`.trim().split(/\r?\n/u)
   return lines.slice(-120).join('\n').slice(-16_384)
+}
+
+async function sampleWithTimeout(
+  probe: ResourceProbe,
+  timeoutMs: number,
+): Promise<Awaited<ReturnType<ResourceProbe['sample']>>> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      probe.sample(),
+      new Promise<never>((_resolve, reject): void => {
+        timer = setTimeout((): void => {
+          reject(
+            new LubanError('E_TIMEOUT', 'resource probe timed out', {
+              retriable: true,
+              details: { timeoutMs },
+            }),
+          )
+        }, timeoutMs)
+        timer.unref()
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 function copyRecord(
@@ -71,6 +99,7 @@ export class BuildQueue {
   readonly #diskMinGb: number
   readonly #loadMax: number
   readonly #checkIntervalMs: number
+  readonly #probeTimeoutMs: number
   readonly #retainRuns: number
   readonly #alerts: BuildAlertSink | undefined
   readonly #now: () => number
@@ -99,6 +128,10 @@ export class BuildQueue {
     this.#diskMinGb = options.diskMinGb
     this.#loadMax = options.loadMax
     this.#checkIntervalMs = options.checkIntervalMs
+    this.#probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_RESOURCE_PROBE_TIMEOUT_MS
+    if (!Number.isSafeInteger(this.#probeTimeoutMs) || this.#probeTimeoutMs <= 0) {
+      throw new LubanError('E_INVALID_INPUT', 'resource probe timeout must be positive')
+    }
     this.#retainRuns = options.retainRuns
     this.#alerts = options.alerts
     this.#now = options.now ?? Date.now
@@ -200,7 +233,7 @@ export class BuildQueue {
   public async resourceReport(): Promise<ResourceReport> {
     const depth = (await this.queue()).filter((job): boolean => job.status === 'queued').length
     try {
-      const sample = await this.#probe.sample()
+      const sample = await sampleWithTimeout(this.#probe, this.#probeTimeoutMs)
       const paused =
         (this.#diskMinGb > 0 && sample.diskFreeGb < this.#diskMinGb) ||
         (this.#loadMax > 0 && sample.load1 > this.#loadMax)

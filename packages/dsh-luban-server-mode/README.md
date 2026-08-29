@@ -28,7 +28,8 @@ On Windows and macOS the plugin logs that it is disabled and registers no servic
 
 - User-level `dsh-luban.service` install/uninstall with linger and boot recovery.
 - Durable FIFO build queue with a configurable concurrency ceiling.
-- Disk, load, and per-build timeout guards with optional Taskboard alerts.
+- Disk, load, and per-build timeout guards with fail-closed probe deadlines and optional
+  Taskboard alerts.
 - Bounded failure excerpts sent directly to the currently open DSH session.
 - SSE reconnect sends a fresh baseline when a browser cursor predates or is ahead
   of the current process sequence, including after service restart.
@@ -73,12 +74,16 @@ artifacts: { dir: ~/builds, retainRuns: 10, linkTtlSec: 300 }
 
 M03 launches an internal worker in a `luban-server-build-*` managed session. The worker enforces
 the timeout, captures a bounded log tail, skips symlinks while collecting artifacts, and writes a
-durable result. A DSH restart reconnects to that worker/result instead of blindly starting a
-duplicate build.
+durable result. On timeout or cancellation, the process runner sends TERM, waits for process close
+and pipe drain, escalates to KILL after one second, and applies a final one-second close bound while
+removing its timers and listeners. A DSH restart reconnects to that worker/result instead of
+blindly starting a duplicate build.
 
-When disk or load crosses its threshold, new starts pause and an optional M02 alert card is
-created. Failed builds retain a bounded excerpt. The Settings page can send that excerpt directly
-to the currently open DSH session for diagnosis.
+Resource probes have a five-second scheduler-side deadline. A rejected or timed-out probe fails
+closed: new starts remain queued, the resource report is marked paused, and an optional M02 alert
+card is created. The same pause applies when disk or load crosses its threshold. Failed builds
+retain a bounded excerpt. The Settings page can send that excerpt directly to the currently open
+DSH session for diagnosis.
 
 ## Demo
 
