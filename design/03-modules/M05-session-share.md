@@ -7,6 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：注册表/控制权交接/状态同步/权限 |
+| v0.2 | 2026-08-30 | Codex | 回填 rc2 注册表、认证联邦、SSE 与安全验证证据 |
 
 ## 1. 概述与目标
 
@@ -36,12 +37,13 @@ sequenceDiagram
     R-->>W: 会话列表 + 当前持锁者
     W->>R: POST /sessions/:id/takeover 请求接管
     R->>U: 通知（Web/SSE）
-    alt U 批准（或超时策略自动放行）
+    alt U 批准
         R->>R: CAS 抢互斥锁（owner→W）
         R-->>W: granted：可注入输入
         R-->>U: 降级为 observer
-    else U 拒绝
-        R-->>W: denied + 理由
+    else U 拒绝或请求超时
+        R-->>W: denied / expired + 理由
+        R-->>U: owner 继续持锁
     end
 ```
 
@@ -68,11 +70,16 @@ export interface SessionRegistry {
     - id: luban-session-share
       name: dsh-luban-session-share
       config:
+        host: auto
+        ownerUser: owner
+        takeoverTimeoutSec: 120
+        peerRefreshSec: 10
+        requestTimeoutSec: 10
+        replayLimit: 256
         peers:                    # 局域网对端（互指）
           - name: win-debug
-            baseUrl: "http://<win-lan-host>:<port>"   # 具体地址写在本地配置，不入库
-        takeoverTimeoutSec: 120   # 无响应时的自动策略基点
-        defaultRoleForAuthenticated: observer
+            baseUrl: "http://<win-lan-host>:42600"
+            credentialEnv: LUBAN_SESSION_SHARE_WIN_COOKIE
 ```
 
 ## 7. 依赖与边界
@@ -85,11 +92,31 @@ export interface SessionRegistry {
 
 - 控制权交接是高危操作：默认需对端 owner 批准；全自动放行必须显式配置且仅限白名单账户。
 - 跨机通信强制走 M01 认证 token；会话输出转发过滤敏感串（token/密码正则打码）。
+- 对端 Cookie/CSRF 仅从环境变量读取；每次跨机 mutation 先用同一 Cookie 查询
+  `/luban-auth/session`，其用户名必须与本地发起者完全一致，否则 403。
+- 只共享 `AgentRegistry.roots()` 返回的 live 顶层 Agent；durable lineage 不作为 runtime ownership，
+  同时保留 `header.origin !== subagent` 的 durable fence；任何非 root 或 durable subagent Agent
+  都不进入注册表，也不能由输入桥直接驱动。
+- assistant 输出按 turn 做 64 KiB 有界缓冲后统一脱敏，解决 secret 跨 chunk 绕过；慢订阅者
+  达队列上限即安全断流，并通过 `Last-Event-ID` 或 baseline 恢复。
 
 ## 9. checklist 映射
 
 M05-F001 ~ M05-F004 共 4 项，与 `checklist.json` 一一对应。
 
-## 10. 开放问题
+## 10. 实现与验证记录
 
-- dsh 会话输出的可订阅接口形态（决定转发实现：插件内事件 vs 复用 dsh web 通道），MS4 前实测。
+- `DshSessionBridge` 基于 rc2 `AgentRegistry`、`agent/status`、`session/event` 与
+  `Agent.followup` 投影顶层会话；M03 健康、M02 task claim 均合并到同一注册表。
+- 本机会话接管在 per-session mutex 内执行 owner 审批、过期检查与 version CAS；peer mutation
+  使用真实 HTTP transport，并在 Cookie 身份预检后传递 CSRF。
+- registry 与 per-session SSE 都有有界 replay/baseline；peer 建连有超时，单帧上限 1 MiB，
+  peer refresh single-flight，dispose/remove 会终止流并释放历史。
+- Session ID 在配置的主机间必须全局唯一；跨 registry origin 的碰撞会 fail closed，保留既有条目
+  并报告 `session-id-collision`，避免将 stream 或 mutation 路由到错误主机。
+- 本地 Prettier、严格类型、ESLint、构建、35 项 M05 测试、release metadata 与 pack dry-run
+  通过；真实 Windows/Ubuntu 双主机断线、接管和 TLS/LAN profile 仍保留为目标环境验收。
+
+## 11. 开放问题
+
+- 是否在后续版本增加显式、可审计的白名单自动接管策略；当前超时严格 fail closed，不自动放行。

@@ -110,7 +110,7 @@ describe('redactSecrets', (): void => {
     const input = [
       'password: hunter2',
       'api_key=super-secret',
-      'Authorization: Bearer abc.def-123',
+      'Authorization: Bearer abc.def-123==',
       'ghp_1234567890abcdef',
       '[REDACTED TEST KEY HEADER]',
       'private material',
@@ -124,6 +124,16 @@ describe('redactSecrets', (): void => {
     expect(output).not.toContain('1234567890abcdef')
     expect(output).not.toContain('private material')
     expect(output.match(/\[REDACTED\]/gu)?.length).toBe(5)
+
+    const partialKey = redactSecrets(
+      '[REDACTED TEST KEY HEADER]\npartial private material without a footer',
+    )
+    expect(partialKey).toBe('[REDACTED]')
+
+    const paddedKey = redactSecrets(
+      '[REDACTED TEST KEY HEADER]\nc2VjcmV0LW1hdGVyaWFsPT0=\n[REDACTED TEST KEY FOOTER]',
+    )
+    expect(paddedKey).toBe('[REDACTED]')
   })
 })
 

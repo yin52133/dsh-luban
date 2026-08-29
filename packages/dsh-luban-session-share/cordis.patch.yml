@@ -1,0 +1,12 @@
+# Peer cookies are read from the named environment variables, never from this file.
+- insert:
+    - id: luban-session-share
+      name: dsh-luban-session-share
+      config:
+        host: auto
+        ownerUser: owner
+        takeoverTimeoutSec: 120
+        peerRefreshSec: 10
+        requestTimeoutSec: 10
+        replayLimit: 256
+        peers: []
