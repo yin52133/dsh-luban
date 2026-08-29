@@ -38,6 +38,12 @@ export { TaskboardKeepaliveAlertSink } from './alerts.js'
 export type { KeepaliveAlertSink } from './alerts.js'
 export { assertSuccess, NodeCommandRunner } from './command-runner.js'
 export type { CommandOptions, CommandResult, CommandRunner } from './command-runner.js'
+export { runCheckpointedTask } from './checkpoint-runner.js'
+export type {
+  CheckpointedTaskOptions,
+  CheckpointStep,
+  CheckpointStepContext,
+} from './checkpoint-runner.js'
 export { parseConfig, resolveUserPath } from './config.js'
 export type { KeepaliveStrategy } from './config.js'
 export { emptyLedger, keepaliveLedgerCodec, KeepaliveLedgerStore } from './ledger.js'

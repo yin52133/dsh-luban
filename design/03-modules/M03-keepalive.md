@@ -9,6 +9,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：tmux 托管/win 保活/重启恢复/巡检/断点 |
 | v0.2 | 2026-08-30 | Codex | 回填双平台 HAL、持久恢复与检查点实现验证 |
 | v0.3 | 2026-08-30 | Codex | 接通异常健康事件到 M07 HUD 的脱敏实时投影 |
+| v0.4 | 2026-08-30 | Codex | 增加可恢复里程碑执行器与跳过已完成步骤验证 |
 
 ## 1. 概述与目标
 
@@ -69,6 +70,15 @@ export interface KeepaliveService {
   saveCheckpoint(id: string, cp: Checkpoint): Promise<void>;
   loadCheckpoint(id: string): Promise<Checkpoint | null>;
 }
+
+/** 进程内长任务执行器：currentStep 表示下一个待执行步骤。 */
+runCheckpointedTask({
+  keepalive,
+  sessionId,
+  taskId,
+  steps,
+  signal,
+}): Promise<Checkpoint>;
 ```
 
 ## 5. 数据模型
@@ -109,8 +119,9 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
 
 ## 10. 开放问题
 
-- 检查点由长任务执行器在里程碑边界显式保存，终端内容不进入保活账本；需在目标 Ubuntu 主机完成
-  SSH 断开、重启和真实 tmux attach 验收。
+- 内置里程碑执行器会校验恢复点的 task/有序 step plan，从 `currentStep` 指向的首个未完成步骤继续；
+  每步成功后才原子保存下一位置和去重产物。步骤仍须幂等，以覆盖副作用完成但检查点尚未落盘时断电的窗口。
+- 终端内容不进入保活账本；需在目标 Ubuntu 主机完成 SSH 断开、重启和真实 tmux attach 验收。
 - Windows 采用内置 `schtasks.exe`，不引入 NSSM；需在目标账户策略下完成注销、开机恢复与权限验收。
 
 ## 11. 实现与验证记录
@@ -121,10 +132,12 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   `--patch` 参数；命令行按 `CommandLineToArgvW` 规则编码，不经过 Node shell。
 - 原子账本记录 session spec、归属和里程碑检查点；启动时只恢复账本拥有的缺失会话，
   账本损坏时仅报告孤儿而不删除或重建。
+- `runCheckpointedTask()` 在恢复时跳过持久化完成步骤，任务或 step plan 不匹配时 fail closed；
+  测试覆盖中段恢复、完成后重入、步骤失败不推进和启动前取消。
 - 巡检发布 `luban.keepalive.health`，可选 `lubanTaskStore` 告警去重；M07 通过 Cordis
   事件松耦合消费，健康变化立即进入认证 snapshot/SSE，并在 Web 状态栏与 CLI 首行显示。
   有限任务可通过 `release()` 销毁会话并清除账本，供 M09 worker 完成后收口。
 - 真实 Cordis mount 测试覆盖 HUD 先加载、异常/恢复事件、认证 REST 投影、客户端提示与卸载；
   detail 中的凭据型文本不会进入响应。
-- 本地 Prettier、ESLint、严格类型检查、构建、12 项测试、发布元数据与 npm pack 白名单审计通过；
+- 本地 Prettier、ESLint、严格类型检查、构建、16 项测试、发布元数据与 npm pack 白名单审计通过；
   外部 tmux/schtasks 边界均使用 fake runner，未创建真实系统会话或计划任务。

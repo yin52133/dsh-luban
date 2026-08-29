@@ -10,7 +10,8 @@ checkpoints—never terminal content or credentials.
 - Native Windows boot tasks with the original DSH command/`--patch` arguments preserved.
 - Boot recovery from an atomic, locked, rolling-backup ledger.
 - Periodic health events (`luban.keepalive.health`) for Taskboard/HUD consumers.
-- Milestone checkpoints that restore the current step without repeating completed work.
+- A checkpointed milestone runner that restores the first incomplete step and never
+  reruns milestones whose completion was durably recorded.
 - Corrupt-ledger safety: managed-looking sessions are reported as orphans and are not deleted.
 
 ## Installation
@@ -74,6 +75,12 @@ await ctx.lubanKeepalive.saveCheckpoint(session.id, {
 
 On the next DSH boot the plugin recreates a missing ledger-owned session and emits a `restored`
 event with that checkpoint.
+
+For an in-process long-task executor, use `runCheckpointedTask()`. It validates that a restored
+checkpoint still belongs to the exact task and ordered step plan, resumes at `currentStep`, and
+saves `currentStep + 1` only after the milestone succeeds. Milestone side effects should remain
+idempotent because a process can still stop after the side effect completes but before the atomic
+checkpoint write finishes.
 
 ## Compatibility
 
