@@ -1,8 +1,16 @@
 import { readFile } from 'node:fs/promises'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import { describe, expect, it } from 'vitest'
-import { apply as applyClient, inject as clientInject } from '../src/client/index.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  apply as applyClient,
+  inject as clientInject,
+  sendErrorToCurrentSession,
+} from '../src/client/index.js'
 import { decodeWorkerResult, decodeWorkerSpec } from '../src/worker-protocol.js'
+
+afterEach((): void => {
+  vi.unstubAllGlobals()
+})
 
 describe('server-mode client and package contract', (): void => {
   it('registers one Settings section with sessions injected for log handoff', (): void => {
@@ -62,6 +70,55 @@ describe('server-mode client and package contract', (): void => {
     ])
       expect(readme).toContain(`## ${heading}`)
     expect(readme).toContain('0.1.1-rc.2')
+  })
+
+  it('queues the authenticated failure excerpt in the active DSH session', async (): Promise<void> => {
+    type Prompt = (
+      content: readonly { readonly type: 'text'; readonly text: string }[],
+      mode: 'queue',
+    ) => Promise<{ readonly ok: true }>
+    const prompt = vi.fn<Prompt>().mockResolvedValue({ ok: true })
+    const current = { id: 'session-1' }
+    let cleanup: (() => void) | undefined
+    const context = {
+      effect(execute: () => () => void): () => void {
+        cleanup = execute()
+        return cleanup
+      },
+      slots: {
+        inject(_name: string, callback: () => unknown): unknown {
+          return callback()
+        },
+        register(): () => void {
+          return (): void => undefined
+        },
+      },
+      sessions: {
+        list: { getSnapshot: (): { readonly current: typeof current } => ({ current }) },
+        scope: (value: unknown): unknown => value,
+        sessionOf: (): { readonly prompt: typeof prompt } => ({ prompt }),
+      },
+    }
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ excerpt: 'fatal: compiler rejected firmware.c:42' }))
+    vi.stubGlobal('fetch', fetcher)
+    applyClient(context as unknown as ClientContext)
+
+    await sendErrorToCurrentSession({
+      id: 'job/unsafe',
+      templateId: 'cmake-build',
+      status: 'failed',
+      version: 3,
+    })
+
+    expect(fetcher).toHaveBeenCalledWith('/luban-server-mode/jobs/job%2Funsafe/error-log', {
+      headers: { accept: 'application/json' },
+    })
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(prompt.mock.calls[0]?.[0][0]?.text).toContain('fatal: compiler rejected firmware.c:42')
+    expect(prompt.mock.calls[0]?.[1]).toBe('queue')
+    cleanup?.()
   })
 })
 

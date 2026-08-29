@@ -1,1 +1,1 @@
-export { apply, inject, ServerModeSection } from './client/index.js'
+export { apply, inject, sendErrorToCurrentSession, ServerModeSection } from './client/index.js'

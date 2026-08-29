@@ -157,7 +157,7 @@ class BuildEventStream {
     )
     const oldest = this.#events[0]?.id ?? this.#sequence
     const pending =
-      !Number.isSafeInteger(requested) || requested < oldest - 1
+      !Number.isSafeInteger(requested) || requested < oldest - 1 || requested > this.#sequence
         ? [
             {
               id: this.#sequence,

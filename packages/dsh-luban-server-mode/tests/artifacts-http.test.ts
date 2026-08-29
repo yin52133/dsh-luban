@@ -214,6 +214,15 @@ describe('ServerModeHttpApi', (): void => {
     expect(stream.headers.get('content-type')).toContain('text/event-stream')
     await stream.body?.cancel()
 
+    const restartedStream = await fetch(`${base}/events`, {
+      headers: { ...cookie, 'last-event-id': '999' },
+    })
+    if (restartedStream.body === null) throw new Error('Restarted SSE response has no body')
+    const restartedReader = restartedStream.body.getReader()
+    const restartedChunk = await restartedReader.read()
+    expect(new TextDecoder().decode(restartedChunk.value)).toContain('event: baseline')
+    await restartedReader.cancel()
+
     api.dispose()
     await service.dispose()
     await new Promise<void>((resolve, reject): void => {

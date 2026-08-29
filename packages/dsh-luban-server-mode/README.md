@@ -30,6 +30,8 @@ On Windows and macOS the plugin logs that it is disabled and registers no servic
 - Durable FIFO build queue with a configurable concurrency ceiling.
 - Disk, load, and per-build timeout guards with optional Taskboard alerts.
 - Bounded failure excerpts sent directly to the currently open DSH session.
+- SSE reconnect sends a fresh baseline when a browser cursor predates or is ahead
+  of the current process sequence, including after service restart.
 - Retained, symlink-safe artifacts behind M01 authentication and expiring HMAC links.
 
 ## Installation

@@ -124,7 +124,8 @@ async function enqueue(templateId: string, workspace: string): Promise<void> {
     throw new Error((await response.text()) || `Enqueue failed (${String(response.status)})`)
 }
 
-async function sendErrorToCurrentSession(job: UiJob): Promise<void> {
+/** Fetch a bounded server-side excerpt and queue it in the active DSH session. */
+export async function sendErrorToCurrentSession(job: UiJob): Promise<void> {
   const ctx = runtimeContext
   if (ctx === undefined) throw new Error('DSH client runtime is unavailable')
   const current = ctx.sessions.list.getSnapshot().current
