@@ -87,6 +87,24 @@ describe('TmuxKeepaliveAdapter', (): void => {
     })
     await expect(missing.list()).resolves.toEqual([])
   })
+
+  it('attaches and destroys only an exact managed tmux session', async (): Promise<void> => {
+    const runner = new FakeRunner([{ exitCode: 0 }, { exitCode: 0 }])
+    const adapter = new TmuxKeepaliveAdapter({ runner, timeoutMs: 1_000 })
+
+    await adapter.attach('luban-build')
+    await adapter.destroy('luban-build')
+
+    expect(runner.calls[0]).toMatchObject({
+      command: 'tmux',
+      args: ['attach-session', '-t', '=luban-build'],
+      options: { stdio: 'inherit' },
+    })
+    expect(runner.calls[1]).toMatchObject({
+      command: 'tmux',
+      args: ['kill-session', '-t', '=luban-build'],
+    })
+  })
 })
 
 describe('WindowsTaskKeepaliveAdapter', (): void => {
@@ -123,5 +141,28 @@ describe('WindowsTaskKeepaliveAdapter', (): void => {
     await expect(adapter.attach('luban-main')).rejects.toMatchObject({
       code: 'E_PLATFORM_UNSUPPORTED',
     })
+  })
+
+  it('lists, stops, and deletes only scheduled tasks in the managed folder', async (): Promise<void> => {
+    const runner = new FakeRunner([
+      {
+        stdout:
+          '"\\dsh-luban\\luban-main","N/A","Ready"\r\n"\\Microsoft\\foreign","N/A","Ready"\r\n',
+      },
+      { exitCode: 1 },
+      { exitCode: 0 },
+    ])
+    const adapter = new WindowsTaskKeepaliveAdapter({ runner, timeoutMs: 1_000, host: 'win01' })
+
+    await expect(adapter.list()).resolves.toEqual([
+      expect.objectContaining({ id: 'luban-main', kind: 'service' }),
+    ])
+    await adapter.destroy('luban-main')
+
+    expect(runner.calls.map(({ args }) => args)).toEqual([
+      ['/Query', '/FO', 'CSV', '/NH'],
+      ['/End', '/TN', '\\dsh-luban\\luban-main'],
+      ['/Delete', '/TN', '\\dsh-luban\\luban-main', '/F'],
+    ])
   })
 })

@@ -34,8 +34,11 @@ export class ManagedKeepaliveService implements KeepaliveService {
   readonly #onError: (error: unknown) => void
   readonly #publish: ((event: KeepaliveEvent) => void) | undefined
   readonly #listeners = new Set<(event: KeepaliveEvent) => void>()
+  readonly #activePatrols = new Set<Promise<HealthReport>>()
+  readonly #activeAlerts = new Set<Promise<void>>()
   #timer: ReturnType<typeof setInterval> | undefined
   #patrolling = false
+  #disposing = false
   #mutation: Promise<void> = Promise.resolve()
 
   public constructor(options: ManagedKeepaliveOptions) {
@@ -100,7 +103,26 @@ export class ManagedKeepaliveService implements KeepaliveService {
     })
   }
 
-  public async patrol(): Promise<HealthReport> {
+  public patrol(): Promise<HealthReport> {
+    if (this.#disposing) {
+      return Promise.reject(
+        new LubanError('E_UNAVAILABLE', 'Keepalive service is disposing', { retriable: true }),
+      )
+    }
+    const operation = this.#performPatrol()
+    this.#activePatrols.add(operation)
+    void operation.then(
+      (): void => {
+        this.#activePatrols.delete(operation)
+      },
+      (): void => {
+        this.#activePatrols.delete(operation)
+      },
+    )
+    return operation
+  }
+
+  async #performPatrol(): Promise<HealthReport> {
     let ledger
     try {
       ledger = await this.#ledger.read()
@@ -171,7 +193,7 @@ export class ManagedKeepaliveService implements KeepaliveService {
   }
 
   public start(): void {
-    if (this.#timer !== undefined) return
+    if (this.#timer !== undefined || this.#disposing) return
     this.#timer = setInterval((): void => {
       if (this.#patrolling) return
       this.#patrolling = true
@@ -191,8 +213,11 @@ export class ManagedKeepaliveService implements KeepaliveService {
   }
 
   public async dispose(): Promise<void> {
+    this.#disposing = true
     this.stop()
     await this.#mutation.catch((): undefined => undefined)
+    await Promise.allSettled([...this.#activePatrols])
+    await Promise.allSettled([...this.#activeAlerts])
     this.#listeners.clear()
   }
 
@@ -217,7 +242,23 @@ export class ManagedKeepaliveService implements KeepaliveService {
       sessions,
     }
     this.#emit({ type: 'health', report })
-    if (this.#alerts !== undefined) void this.#alerts.report(report).catch(this.#onError)
+    if (this.#alerts !== undefined) {
+      try {
+        const alert = this.#alerts.report(report)
+        this.#activeAlerts.add(alert)
+        void alert.then(
+          (): void => {
+            this.#activeAlerts.delete(alert)
+          },
+          (error: unknown): void => {
+            this.#activeAlerts.delete(alert)
+            this.#onError(error)
+          },
+        )
+      } catch (error: unknown) {
+        this.#onError(error)
+      }
+    }
     return report
   }
 
