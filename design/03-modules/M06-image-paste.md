@@ -7,6 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：捕获/落盘/注入/预览清理 四功能 |
+| v0.2 | 2026-08-30 | Codex | 回填 rc2 注入、附件安全边界与验证证据 |
 
 ## 1. 概述与目标
 
@@ -43,10 +44,14 @@ flowchart TD
 
 ```typescript
 export interface ImageIngestService {
-  fromBlob(blob: Blob, meta?: { nameHint?: string }): Promise<IngestedImage>;
-  fromClipboard(): Promise<IngestedImage>;              // CLI 场景（经 HAL 剪贴板适配器）
-  inject(sessionId: SessionId, img: IngestedImage, style: 'markdown' | 'path'): Promise<void>;
-  recent(filter?: { sessionId?: SessionId }): Promise<IngestedImage[]>;
+  fromBlob(blob: Blob, meta?: { readonly nameHint?: string }): Promise<IngestedImage>;
+  fromClipboard(): Promise<IngestedImage>; // CLI，经固定命令 HAL
+  inject(
+    sessionId: SessionId,
+    image: IngestedImage,
+    style: 'markdown' | 'path',
+  ): Promise<void>;
+  recent(filter?: { readonly sessionId?: SessionId }): Promise<readonly IngestedImage[]>;
   cleanup(dryRun?: boolean): Promise<CleanupReport>;
 }
 ```
@@ -62,27 +67,55 @@ export interface ImageIngestService {
     - id: luban-image-paste
       name: dsh-luban-image-paste
       config:
-        attachDir: ".luban/attachments"   # 相对 workspace，进 git 可选
-        maxSidePx: 2000                    # 超出自动缩放
+        workspaceRoot: .
+        attachDir: .luban/attachments
+        maxBytes: 10485760
+        maxSidePx: 2000
+        compression: true
+        compressionQuality: 82
         retainDays: 14
+        recentLimit: 50
+        cleanupIntervalMinutes: 60
         injectStyle: markdown
+        clipboardTimeoutMs: 10000
 ```
 
 ## 7. 依赖与边界
 
-- 下层：HAL（文件、剪贴板、图像缩放——优先用系统工具/轻量库，避免重依赖）；上层：dsh web 会话通道。
-- 复用档位：无直接参考项目（dsh 官方客户端若有原生粘贴能力则以实测为准，本模块退化为「CLI 取剪贴板 + 注入」补位）。
+- 下层：Node 文件系统、固定参数剪贴板命令和可选 `sharp` peer；上层：M01 认证 WebServer
+  与 rc2 `AgentRegistry`/`Agent.followup`。
+- Windows 使用固定 `powershell.exe -Sta` 脚本；Ubuntu 只尝试 `wl-paste`、`xclip`，均以参数数组、
+  `shell: false`、超时和输出上限执行，其他平台显式拒绝。
 - 平台属性：双端公用；剪贴板适配器分 win/ubuntu 两实现（HAL）。
 
 ## 8. 非功能与安全
 
 - 上传大小限制（默认 ≤ 10MB/张）与类型白名单（png/jpeg/webp）。
 - 附件目录可配 `.gitignore`（用户决定是否入库）；清理只动自己目录，绝不碰 workspace 其他文件。
+- `attachDir` 必须是 canonical workspace 子目录；运行期校验目录设备/inode/birthtime 身份，目录被替换、
+  symlink 逃逸或文件哈希不符时 fail closed。临时文件用 hard-link 原子发布，启动仅回收满足严格命名与宽限期的孤儿。
+- `attachDir` 是插件专用目录，不应混放手工命名文件；孤儿恢复按插件日期命名规则识别陈旧 crash artifact。
+- 开启压缩时 `sharp` 必须完成整图解码并验证最终尺寸；仅 metadata 可读的截断图、缺少 peer、解码或缩放失败均不落盘。
+- 注入只允许同一 canonical workspace 的 live rc2 root，并额外拒绝 durable `origin=subagent` 与
+  `delegationDepth > 0`；不在插件内重建 cold session。
 
 ## 9. checklist 映射
 
 M06-F001 ~ M06-F004 共 4 项，与 `checklist.json` 一一对应。
 
-## 10. 开放问题
+## 10. 实现与验证记录
 
-- dsh 会话注入 API 的确切形态（M12-F001 实测后回填 M06-F003 实现细节）。
+- `/luban-image-paste` 提供认证上传、最近列表、原图预览、注入、删除与 TTL cleanup；M01 统一处理
+  Cookie/CSRF，内部 DSH WebServer 必须保持 loopback。
+- Web Settings 客户端覆盖 paste/drop、预览、注入、删除和 cleanup；`luban-img` 从环境读取 Cookie/CSRF，
+  可只上传或立即注入 Markdown/绝对路径引用。
+- 附件索引记录 SHA-256、压缩报告与 `referencedBy`。注入在 per-image/session mutex 内先登记引用，
+  `followup` 失败则回滚；被引用附件无论年龄都不会被自动或手动删除。
+- 本地 Prettier、严格类型、ESLint、构建、55 项 M06 测试、真实 Sharp 截断 JPEG 探针、Cordis
+  route/timer 卸载测试、release metadata 与 pack dry-run 通过。
+
+## 11. 目标环境验收
+
+- 仍需在真实 Windows/Ubuntu profile 验证系统剪贴板、浏览器 paste/drop、live DSH 图片读取和长期 TTL 清理。
+- 最近列表返回数量受 `recentLimit` 限制，但当前 UI 读取原图而非缩略图；大图工作区应调低该值，缩略图列入后续优化。
+- Web 与 CLI API 请求均有 10 秒完整 deadline；该期限覆盖 headers 与 JSON body，JSON 响应另有显式字节上限。

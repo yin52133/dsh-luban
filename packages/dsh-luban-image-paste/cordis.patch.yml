@@ -1,0 +1,15 @@
+- insert:
+    - id: luban-image-paste
+      name: dsh-luban-image-paste
+      config:
+        workspaceRoot: .
+        attachDir: .luban/attachments
+        maxBytes: 10485760
+        maxSidePx: 2000
+        compression: true
+        compressionQuality: 82
+        retainDays: 14
+        recentLimit: 50
+        cleanupIntervalMinutes: 60
+        injectStyle: markdown
+        clipboardTimeoutMs: 10000
