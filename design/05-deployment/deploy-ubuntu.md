@@ -6,6 +6,7 @@
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：systemd 常驻、tmux 保活、网页访问链路 |
 | v0.2 | 2026-08-30 | Codex | 增加 M11 browser-use 的 uv 隔离环境要求 |
+| v0.3 | 2026-08-30 | Codex | 落地默认预览且拒绝覆盖的 ubuntu-server 生成脚本 |
 
 ## 1. 目标形态
 
@@ -23,7 +24,9 @@ flowchart LR
 ## 2. 安装步骤（设计口径）
 
 1. **前置**：Node ≥ 22、pnpm ≥ 10、uv ≥ 0.11、tmux、git；建议专用用户（如 `dsh`）。
-2. **profile**：`scripts/deploy/setup-ubuntu.sh` 生成 `~/.dsh/profiles/ubuntu-server/`。
+2. **profile**：先运行 `scripts/deploy/setup-ubuntu.sh` 预览目标与文件清单；确认后增加
+   `--apply`，生成 `~/.dsh/profiles/ubuntu-server/`。可用 `--dsh-home <path>` 指向隔离目录。
+   脚本不改官方 preset，且目标已存在时拒绝覆盖。
 3. **安装套件**：`dsh plugin --profile ubuntu-server add dsh-luban-auth ... dsh-luban-server-mode`。
 4. **A 档直装**：`scripts/install-3rd-party.sh --profile ubuntu-server`。
 5. **服务注册**：M09-F001 安装 user 级 unit：
@@ -46,6 +49,16 @@ WantedBy=default.target
 
 6. **linger**：`sudo loginctl enable-linger <user>`——不登录桌面也让 user 级服务开机自启（R02 关键）。
 7. **认证初始化**：首启引导建管理员；`config.port` 自定义（默认 42600）。
+
+```sh
+# Preview only (default)
+scripts/deploy/setup-ubuntu.sh --dsh-home /tmp/dsh-acceptance
+
+# Create after reviewing the JSON plan
+scripts/deploy/setup-ubuntu.sh --dsh-home /tmp/dsh-acceptance --apply
+
+DSH_HOME=/tmp/dsh-acceptance dsh --profile ubuntu-server --dump-config
+```
 
 ## 3. 重启恢复链路（与 M03/M09 协作）
 

@@ -6,6 +6,7 @@
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：profile 组成、安装步骤、保活、A 档直装 |
 | v0.2 | 2026-08-30 | Codex | 增加 M11 browser-use 的 uv 隔离环境要求 |
+| v0.3 | 2026-08-30 | Codex | 落地默认预览且拒绝覆盖的 win-debug 生成脚本 |
 
 ## 1. 目标形态
 
@@ -23,14 +24,27 @@ flowchart LR
     K["保活：计划任务/服务（M03-F002）"] --> P
 ```
 
-## 2. 安装步骤（设计口径，脚本随 M12-F004 落地）
+## 2. 安装步骤
 
 1. **前置**：Node ≥ 22、pnpm ≥ 10、uv ≥ 0.11；`npm i -g @deepseek-ai/dsh`；确认 `dsh --version` 与 `uv --version`。
-2. **创建 profile**：`scripts/deploy/setup-windows.ps1` 生成 `%DSH_HOME%\profiles\win-debug\`（package.json + `dsh.profile.bundles` + `cordis.patch.yml` 模板），不改官方 preset。
+2. **创建 profile**：先运行 `scripts/deploy/setup-windows.ps1` 预览目标与文件清单；确认后增加
+   `-Apply`，生成 `%DSH_HOME%\profiles\win-debug\`（`package.json`、`cordis.patch.yml`、
+   `README.md`）。可用 `-DshHome <path>` 指向隔离目录。脚本不改官方 preset，且目标已存在时拒绝覆盖。
 3. **安装本套件**：`dsh plugin --profile win-debug add dsh-luban-auth dsh-luban-taskboard ...`（monorepo 发布后逐包，或本地 `file:` 联调）。
 4. **A 档直装**：`scripts/install-3rd-party.ps1 -Profile win-debug`（装 dshmarket、dsh-better-sidebar、dsh-memory 原版，可选版本 pin）。
 5. **保活注册**：M03-F002 注册计划任务（登录时启动/开机按用户选择）；账本与配置目录 `%DSH_HOME%\luban\`。
 6. **认证初始化**：首次访问 web 引导创建管理员（M01-F001）；端口默认 42600 可配。
+
+```powershell
+# Preview only (default)
+.\scripts\deploy\setup-windows.ps1 -DshHome C:\dsh-acceptance
+
+# Create after reviewing the JSON plan
+.\scripts\deploy\setup-windows.ps1 -DshHome C:\dsh-acceptance -Apply
+
+$env:DSH_HOME = 'C:\dsh-acceptance'
+dsh --profile win-debug --dump-config
+```
 
 ## 3. 配置分层
 
