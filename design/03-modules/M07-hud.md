@@ -7,11 +7,12 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：遥测聚合/用量/环境/速率/展示/阈值 |
+| v0.2 | 2026-08-30 | Codex | 回填 rc2 遥测口径、SSE、降级与验证证据 |
 
 ## 1. 概述与目标
 
 - **解决**：R08——随时知道「还剩多少上下文、跑得多快、在哪个 workspace、用哪个模型」。
-- **不解决**：上下文治理本身（M08 负责）；历史报表分析（数据先落盘，报表后置）。
+- **不解决**：上下文治理本身（M08 负责）；跨重启持久化与历史报表分析（本版仅保留有界内存历史）。
 - **需求映射**：R08。
 - **平台属性**：双端公用；web 状态栏（client-ui 槽位）+ CLI 头部两种呈现。
 
@@ -55,7 +56,7 @@ export interface TelemetryProvider {
 }
 
 export interface TelemetryAggregator {
-  register(p: TelemetryProvider): void;
+  register(p: TelemetryProvider): Unsubscribe;
   snapshot(): Promise<TelemetrySnapshot>;     // 字段级合并，缺失字段标 unknown
   subscribe(listener: (s: TelemetrySnapshot) => void): Unsubscribe;
 }
@@ -71,7 +72,8 @@ export interface TelemetrySnapshot {
 
 ## 5. 数据模型
 
-见 `04-interfaces/data-models.md#telemetry`。要点：快照不可变、带时间戳；历史快照环形缓冲（默认保留 1h）供 HUD 迷你趋势图。
+见 `04-interfaces/data-models.md#telemetry`。要点：快照不可变、带时间戳；历史快照采用按时间裁剪的
+内存环形序列（默认保留 1h），经认证 `/history` 提供诊断。本版 Web HUD 展示当前值，不承诺跨重启持久化或趋势报表。
 
 ## 6. 配置设计
 
@@ -96,11 +98,26 @@ export interface TelemetrySnapshot {
 
 - 遥测只含元数据（数字、名称），不含会话内容；快照不落敏感字段。
 - 采样器避免高频计时器泄漏（页面隐藏时暂停 web 端订阅）。
+- `refreshSec` 下限 1 秒；Provider 并发采样有 timeout，历史保留上限 1440 分钟，SSE replay 固定 256 条。
+- Provider 任意异常仅以固定公共文案进入 API，内部日志先脱敏；非法/溢出 token usage 保持 `unknown/partial`，不伪装为 0。
+- REST/SSE 全部经 M01 认证；对外 SSE 只使用已登记的 `luban.telemetry.snapshot` 事件名和共享递增 ID。
 
 ## 9. checklist 映射
 
 M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 
-## 10. 开放问题
+## 10. 实现与验证记录
 
-- `thinkingDepth` 的数据来源是否在 dsh 会话元数据中暴露（实测；否则显示 unknown 并在 UI 标注「数据源缺失」——不允许编造）。
+- rc2 Session Provider 优先读取 `assistant/message.usage`、`request/context.contextWindow`、request header
+  model/reasoning；缺少官方 used 时，内容估算 Provider 只补 used，不编造 max。
+- context pressure 口径为 input + cache read + cache write；TPM 使用 input + output + cache read + cache write，
+  reasoning token 已包含在 output 中不重复计数。1m/5m 均使用 monotonic 滑动窗口，历史事件按 wall-clock age 映射。
+- `DefaultTelemetryAggregator` 并发采样、按 Provider 注册顺序做字段级 first-wins 合并；generation 防止注册/卸载竞态提交陈旧结果。
+- Web 使用官方 `shell.overlay` slot，并在页面隐藏时关闭 SSE；CLI 从环境读取 Cookie，输出单行去控制字符，HTTP 10 秒超时。
+- SSE 支持共享 ID、`Last-Event-ID`、256 条 replay 与断档 baseline；API/stream 在插件卸载竞态中 fail closed。
+- 本地 Prettier、严格类型、ESLint、构建、18 项 M07 测试、architecture、release metadata 与 pack dry-run 通过。
+
+## 11. 目标环境验收
+
+- 仍需在真实 Windows/Ubuntu DSH profile 核对 workspace/model/reasoning 切换、Web 常驻 HUD、CLI 首行与页面隐藏重连。
+- 仍需用真实 Provider/账单流水验证 TPM/RPM 口径，并联调 M08 在 critical 阈值下读取 snapshot 后给出压缩建议。
