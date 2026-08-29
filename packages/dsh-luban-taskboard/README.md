@@ -14,6 +14,8 @@ atomically written JSON ledger.
 - Atomic agent claiming, acceptance criteria, session binding, progress and
   output records, and human review of `autoDone` work.
 - Bounded SSE replay with a full baseline after an event gap.
+- Cross-process locked, fsync/rename persistence with one backup per local
+  calendar day and seven retained write days by default.
 - Disabled-by-default night execution with host/tag allowlists, daily quota, and
   a durable next-day circuit-breaker reset.
 - Idempotent import of common dashi-taskboard and cloader JSON fields.

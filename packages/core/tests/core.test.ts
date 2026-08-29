@@ -151,7 +151,7 @@ describe('AtomicJsonStore', (): void => {
     },
   }
 
-  it('initializes, serializes concurrent updates, and rotates backups', async (): Promise<void> => {
+  it('serializes concurrent updates and retains one snapshot per local calendar day', async (): Promise<void> => {
     const directory = await temporaryDirectory()
     const filePath = join(directory, 'ledger.json')
     const store = new AtomicJsonStore({
@@ -168,11 +168,42 @@ describe('AtomicJsonStore', (): void => {
       }),
     )
     expect(await store.read()).toBe(8)
+    expect(JSON.parse(await readFile(`${filePath}.bak.1`, 'utf8'))).toBe(1)
 
     await store.write(9)
     await store.write(10)
-    expect(JSON.parse(await readFile(`${filePath}.bak.1`, 'utf8'))).toBe(9)
-    expect(JSON.parse(await readFile(`${filePath}.bak.2`, 'utf8'))).toBe(8)
+    expect(JSON.parse(await readFile(`${filePath}.bak.1`, 'utf8'))).toBe(1)
+    await expect(readFile(`${filePath}.bak.2`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const previousDay = new Date(2000, 0, 1)
+    await utimes(`${filePath}.bak.1`, previousDay, previousDay)
+    await store.write(11)
+    expect(JSON.parse(await readFile(`${filePath}.bak.1`, 'utf8'))).toBe(10)
+    expect(JSON.parse(await readFile(`${filePath}.bak.2`, 'utf8'))).toBe(1)
+
+    await store.write(12)
+    expect(JSON.parse(await readFile(`${filePath}.bak.1`, 'utf8'))).toBe(10)
+  })
+
+  it('bounds the default daily history to seven write days', async (): Promise<void> => {
+    const directory = await temporaryDirectory()
+    const filePath = join(directory, 'seven-day-ledger.json')
+    const store = new AtomicJsonStore({
+      filePath,
+      codec: numberCodec,
+      initial: (): number => 0,
+    })
+    await store.write(0)
+    const previousDay = new Date(2000, 0, 1)
+    for (let value = 1; value <= 8; value += 1) {
+      await store.write(value)
+      await utimes(`${filePath}.bak.1`, previousDay, previousDay)
+    }
+
+    for (let index = 1; index <= 7; index += 1) {
+      expect(JSON.parse(await readFile(`${filePath}.bak.${String(index)}`, 'utf8'))).toBe(8 - index)
+    }
+    await expect(readFile(`${filePath}.bak.8`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('reports invalid JSON as a stable IO error', async (): Promise<void> => {

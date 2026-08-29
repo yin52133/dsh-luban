@@ -40,7 +40,17 @@ function delay(milliseconds: number): Promise<void> {
   })
 }
 
-/** Atomic JSON persistence with a cross-process lock and bounded rolling backups. */
+function sameLocalCalendarDay(left: number, right: number): boolean {
+  const leftDate = new Date(left)
+  const rightDate = new Date(right)
+  return (
+    leftDate.getFullYear() === rightDate.getFullYear() &&
+    leftDate.getMonth() === rightDate.getMonth() &&
+    leftDate.getDate() === rightDate.getDate()
+  )
+}
+
+/** Atomic JSON persistence with a cross-process lock and bounded daily backups. */
 export class AtomicJsonStore<Value> {
   readonly #filePath: string
   readonly #codec: JsonCodec<Value>
@@ -129,6 +139,13 @@ export class AtomicJsonStore<Value> {
       if (errorCode(error) === 'ENOENT') return
       throw error
     }
+    const newestBackup = `${this.#filePath}.bak.1`
+    try {
+      const backup = await stat(newestBackup)
+      if (sameLocalCalendarDay(backup.mtimeMs, Date.now())) return
+    } catch (error: unknown) {
+      if (errorCode(error) !== 'ENOENT') throw error
+    }
     for (let index = this.#backupCount - 1; index >= 1; index -= 1) {
       const source = `${this.#filePath}.bak.${String(index)}`
       const target = `${this.#filePath}.bak.${String(index + 1)}`
@@ -138,7 +155,7 @@ export class AtomicJsonStore<Value> {
         if (errorCode(error) !== 'ENOENT') throw error
       }
     }
-    await copyFile(this.#filePath, `${this.#filePath}.bak.1`)
+    await copyFile(this.#filePath, newestBackup)
   }
 
   async #acquireLock(): Promise<() => Promise<void>> {

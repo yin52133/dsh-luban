@@ -9,6 +9,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：看板/范围标签/领单/夜间调度/回写复核/CLI/导入 全量设计 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 AgentRegistry 适配、认证 API、实现与测试证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐 SSE 进程重启后的超前游标 baseline 恢复验证 |
+| v0.4 | 2026-08-30 | Codex | 将账本备份从最近 7 次写入修正为按本地日历日保留 |
 
 ## 1. 概述与目标
 
@@ -152,6 +153,8 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
 - SSE 将事件序号视为单进程游标；`Last-Event-ID` 落后于有界重放窗口或领先于当前
   进程序号（例如服务重启后）时，立即返回持久化任务全集 baseline，窗口内旧序号
   继续按原顺序增量重放。
+- `AtomicJsonStore` 仍使用跨进程锁、同目录临时文件、fsync 与原子 rename；备份槽位只在
+  本地日历日变化时轮转，同一天的高频写入不会挤掉历史日快照，默认保留最近 7 个写入日。
 - `tests/task-store.test.ts` 覆盖状态机、版本冲突、并发原子认领、回写复核、失败与
   幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复与 rc2
   agent 适配；`tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE 与断档基线；
