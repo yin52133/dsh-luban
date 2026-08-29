@@ -23,8 +23,78 @@ const PLUGIN_README_SECTIONS = [
   ['license', /^## (?:License|许可|License 与致谢)(?:\s|$)/im],
 ]
 
+const SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+
 function hasString(value) {
   return typeof value === 'string' && value.trim() !== ''
+}
+
+function parseSemver(value) {
+  if (typeof value !== 'string') return undefined
+  const match = SEMVER.exec(value)
+  if (match === null) return undefined
+  const prerelease = match[4]?.split('.') ?? []
+  if (prerelease.some((identifier) => /^\d+$/.test(identifier) && /^0\d/.test(identifier))) {
+    return undefined
+  }
+  return {
+    core: [BigInt(match[1]), BigInt(match[2]), BigInt(match[3])],
+    prerelease,
+  }
+}
+
+function compareSemver(left, right) {
+  for (let index = 0; index < left.core.length; index += 1) {
+    if (left.core[index] !== right.core[index]) return left.core[index] < right.core[index] ? -1 : 1
+  }
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    if (left.prerelease.length === right.prerelease.length) return 0
+    return left.prerelease.length === 0 ? 1 : -1
+  }
+  const length = Math.max(left.prerelease.length, right.prerelease.length)
+  for (let index = 0; index < length; index += 1) {
+    const leftIdentifier = left.prerelease[index]
+    const rightIdentifier = right.prerelease[index]
+    if (leftIdentifier === undefined) return -1
+    if (rightIdentifier === undefined) return 1
+    if (leftIdentifier === rightIdentifier) continue
+    const leftIsNumeric = /^\d+$/.test(leftIdentifier)
+    const rightIsNumeric = /^\d+$/.test(rightIdentifier)
+    if (leftIsNumeric && rightIsNumeric) {
+      return BigInt(leftIdentifier) < BigInt(rightIdentifier) ? -1 : 1
+    }
+    if (leftIsNumeric !== rightIsNumeric) return leftIsNumeric ? -1 : 1
+    return leftIdentifier < rightIdentifier ? -1 : 1
+  }
+  return 0
+}
+
+function parseMinimumRange(value) {
+  if (typeof value !== 'string' || !value.startsWith('>=')) return undefined
+  return parseSemver(value.slice(2))
+}
+
+export function validateDshEngineRange(value, policy) {
+  const repositoryFloor = parseMinimumRange(policy.dshEngine)
+  const testedVersion = parseSemver(policy.testedDshVersion)
+  if (
+    repositoryFloor === undefined ||
+    testedVersion === undefined ||
+    compareSemver(repositoryFloor, testedVersion) > 0
+  ) {
+    throw new Error('Release policy has an invalid DSH floor or tested version')
+  }
+
+  const packageFloor = parseMinimumRange(value)
+  if (packageFloor === undefined) return 'must use the canonical >=<semver> form'
+  if (compareSemver(packageFloor, repositoryFloor) < 0) {
+    return `must not be lower than repository floor ${policy.dshEngine}`
+  }
+  if (compareSemver(packageFloor, testedVersion) > 0) {
+    return `must include tested DSH ${policy.testedDshVersion}`
+  }
+  return undefined
 }
 
 function validateFiles(manifest, policy, label, issues) {
@@ -53,8 +123,8 @@ function validateManifest(manifest, rootVersion, policy, label, issues) {
     issues.push(`${label}: repository is required`)
   if (manifest.engines?.node !== policy.nodeEngine)
     issues.push(`${label}: engines.node must be ${policy.nodeEngine}`)
-  if (manifest.engines?.dsh !== policy.dshEngine)
-    issues.push(`${label}: engines.dsh must be ${policy.dshEngine}`)
+  const dshEngineIssue = validateDshEngineRange(manifest.engines?.dsh, policy)
+  if (dshEngineIssue !== undefined) issues.push(`${label}: engines.dsh ${dshEngineIssue}`)
   if (!hasString(manifest.exports?.['./package.json']))
     issues.push(`${label}: exports["./package.json"] is required`)
   validateFiles(manifest, policy, label, issues)

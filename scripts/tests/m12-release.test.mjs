@@ -17,7 +17,7 @@ import { extractChangelogSection, loadPolicy, sha256 } from '../release/lib.mjs'
 import { releasePlan } from '../release/pack-artifacts.mjs'
 import { prepareMarketEntry } from '../release/prepare-market-entry.mjs'
 import { verifyArtifactManifest } from '../release/publish.mjs'
-import { validateRepository } from '../release/validate-release.mjs'
+import { validateDshEngineRange, validateRepository } from '../release/validate-release.mjs'
 import { secretGatePlan } from '../release/verify-secret-gate.mjs'
 
 const TEST_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -152,6 +152,15 @@ describe('M12 install and safety plans', () => {
 })
 
 describe('M12 release policy', () => {
+  it('allows a package-specific DSH floor within the tested compatibility window', async () => {
+    const policy = await loadPolicy()
+    expect(validateDshEngineRange('>=0.1.1-rc.1', policy)).toBeUndefined()
+    expect(validateDshEngineRange('>=0.1.1-rc.2', policy)).toBeUndefined()
+    expect(validateDshEngineRange('>=0.1.1-rc.0', policy)).toMatch(/repository floor/)
+    expect(validateDshEngineRange('>=0.1.1-rc.3', policy)).toMatch(/tested DSH/)
+    expect(validateDshEngineRange('^0.1.1-rc.2', policy)).toMatch(/canonical/)
+  })
+
   it('fails closed unless the tag comes from mainline and every CI-equivalent gate passes', async () => {
     const workflow = await readFile(join(REPOSITORY_ROOT, '.github/workflows/release.yml'), 'utf8')
     const validateJob = workflow.slice(0, workflow.indexOf('\n  publish:'))
