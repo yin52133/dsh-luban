@@ -8,7 +8,11 @@ atomically written JSON ledger.
 
 - `backlog → todo → doing → review → done` with a separate `dropped` terminal
   state, explicit transition rules, and optimistic versions.
-- Responsive six-column drag-and-drop board with host, workspace, and tag filters.
+- Responsive six-column board with drag-and-drop plus native select/button status
+  controls for touch and keyboard input, with host, workspace, and tag filters.
+- Status changes validate the current card state and optimistic version, reject
+  stale/forged drag data, and use a synchronous board-wide lock to prevent rapid
+  duplicate submissions before the disabled state renders.
 - Direct links from each task card to authenticated Plan documents associated by
   the shared `taskId` contract when `dsh-luban-plan` is installed.
 - Atomic agent claiming, acceptance criteria, session binding, progress and
@@ -79,7 +83,8 @@ taskctl claim --session agent-123 --tag auto-ok
 
 ## Demo
 
-Create a card with acceptance criteria, drag it from Todo to Doing, and open a
+Create a card with acceptance criteria, drag it from Todo to Doing (or select
+**Move to Doing** and press **Move** on a touch/keyboard-only device), and open a
 second browser. Both views refresh from the SSE task event. Autonomous results
 return to Review with an `Auto-completed · review required` marker; only the
 human `review → done` transition clears that marker. A card linked to one or

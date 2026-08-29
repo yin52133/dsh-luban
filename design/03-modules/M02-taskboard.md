@@ -11,6 +11,7 @@
 | v0.3 | 2026-08-30 | Codex | 补齐 SSE 进程重启后的超前游标 baseline 恢复验证 |
 | v0.4 | 2026-08-30 | Codex | 将账本备份从最近 7 次写入修正为按本地日历日保留 |
 | v0.5 | 2026-08-30 | Codex | 夜间 agent 独立模型/工具作用域与显式验收结果改为 fail-closed |
+| v0.6 | 2026-08-30 | Codex | 增加触屏/键盘迁移控件及拖放校验与同步防重入锁 |
 
 ## 1. 概述与目标
 
@@ -24,7 +25,7 @@
 | 编号 | 功能 | 优先级 | 里程碑 | 验收口径 |
 | --- | --- | --- | --- | --- |
 | M02-F001 | 任务 CRUD 与状态机：六列 `backlog/todo/doing/review/done/dropped`，迁移规则引擎校验 | P0 | MS1 | 非法迁移被拒绝并提示 |
-| M02-F002 | 看板 Web UI：列视图、拖拽、按 host/workspace/标签过滤，移动端可用 | P0 | MS1 | 拖拽改状态即时落盘 |
+| M02-F002 | 看板 Web UI：列视图、拖拽、按 host/workspace/标签过滤，移动端可用 | P0 | MS1 | 拖拽或触屏/键盘控件改状态即时落盘 |
 | M02-F003 | 任务范围标签：`hostScope`（win/ubuntu/any）、`workspace`、`priority`、`acceptance`（验收标准，agent 领单前置条件） | P0 | MS1 | 无验收标准的任务不可被 agent 认领 |
 | M02-F004 | agent 领单 API：按过滤条件原子认领（乐观锁版本号 + CAS），绑定 dsh 会话，防双端抢占 | P1 | MS2 | 并发认领只有一方成功 |
 | M02-F005 | 夜间自主调度器：时间窗、每日限额、任务白名单、失败熔断，窗口内自动选单→建会话→执行 | P2 | MS3 | 窗口外不执行；熔断后次日恢复 |
@@ -164,6 +165,12 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
   释放活动 handle，会话 id 与产出引用保留在任务账本。
 - Host API 统一挂载在 `/luban-taskboard`，所有入口复用 M01 身份，写请求由外层
   sidecar 校验 Origin/`x-luban-csrf`。Web 与 CLI 不自行复制认证逻辑。
+- 每张非终态任务卡同时提供拖拽和原生 `select` + `button` 迁移入口；控件只列出状态机
+  允许的目标，适配触屏与纯键盘操作。两种入口共用 `moveTask(id, to, expectedVersion)`、
+  错误提示与成功后的刷新流程。统一 mutation boundary 用当前任务的 `status` 校验目标，
+  并在首个异步调用前同步占用看板级锁，避免 React busy 状态渲染前的快速双触发。
+- 拖放 payload 只用于定位任务；发请求前必须在当前看板快照中重新查找 id/status/version，
+  payload 版本与当前版本不符、任务不存在、同列或非法迁移均不发写请求并显示错误。
 - SSE 将事件序号视为单进程游标；`Last-Event-ID` 落后于有界重放窗口或领先于当前
   进程序号（例如服务重启后）时，立即返回持久化任务全集 baseline，窗口内旧序号
   继续按原顺序增量重放。
@@ -173,7 +180,9 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
   幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复、独立
   model/tool scope、结果工具成功日志以及缺报告/验收失败/异常 turn 的 fail-closed；
   `tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE 与断档基线；
-  `tests/client-cli.test.ts` 覆盖客户端槽位、拖拽写 API 与 CLI 同源调用。
+  `tests/client-cli.test.ts` 覆盖客户端槽位、拖拽写 API、触屏/键盘迁移控件的合法目标、
+  `expectedVersion`、伪造/陈旧 payload 拒绝、快速双提交/拖放互斥、busy/error/lock 清理
+  语义与 CLI 同源调用。
 - 发布包生成 Host ESM、`taskctl` 与 rc2 lazy-CJS `client.js`/`client.d.ts`；夜间模式
   继续默认关闭，真实无人值守执行需在目标 profile 进行部署验收后才启用。
 

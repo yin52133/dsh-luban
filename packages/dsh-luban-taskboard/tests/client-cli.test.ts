@@ -6,9 +6,26 @@ import {
   apply as applyClient,
   loadTaskPlanLinks,
   moveTask,
+  performTaskDrop,
+  performTaskTransition,
   TaskboardSection,
   TaskPlanLinks,
+  TaskTransitionControl,
+  type TaskStatus,
+  type UiTask,
 } from '../src/client/index.js'
+
+const doingTask: UiTask = Object.freeze({
+  id: 'T-1',
+  title: 'Verify firmware',
+  description: '',
+  status: 'doing',
+  hostScope: 'win',
+  priority: 'P1',
+  acceptance: 'Test log is attached',
+  tags: ['hardware'],
+  version: 11,
+})
 
 afterEach((): void => {
   vi.unstubAllGlobals()
@@ -93,6 +110,298 @@ describe('Taskboard client entry', (): void => {
     expect(requests[1]?.init?.method).toBe('POST')
     expect(new Headers(requests[1]?.init?.headers).get('x-luban-csrf')).toBe('csrf-token')
     expect(requests[1]?.init?.body).toBe(JSON.stringify({ to: 'review', expectedVersion: 7 }))
+  })
+
+  it('renders touch and keyboard status controls with only valid targets', (): void => {
+    const onTargetChange = vi.fn<(status: TaskStatus) => void>()
+    const onMove = vi.fn<(status: TaskStatus) => void>()
+    const rendered = TaskTransitionControl({
+      task: doingTask,
+      target: 'review',
+      busy: false,
+      onTargetChange,
+      onMove,
+    })
+    expect(isValidElement(rendered)).toBe(true)
+    const form = rendered as ReactElement<Readonly<Record<string, unknown>>>
+    expect(form.props['aria-label']).toBe('Change status for Verify firmware')
+    const controls = Children.toArray(form.props.children as ReactNode).filter(isValidElement)
+    const select = controls[0] as ReactElement<Readonly<Record<string, unknown>>>
+    const button = controls[1] as ReactElement<Readonly<Record<string, unknown>>>
+    expect(select.props['aria-label']).toBe('Target status for Verify firmware')
+    expect(select.props.value).toBe('review')
+    expect(
+      Children.toArray(select.props.children as ReactNode).map(
+        (option) =>
+          (option as ReactElement<Readonly<Record<string, unknown>>>).props.value as TaskStatus,
+      ),
+    ).toEqual(['review', 'todo'])
+
+    const change = select.props.onChange as (event: {
+      readonly currentTarget: { readonly value: string }
+    }) => void
+    change({ currentTarget: { value: 'todo' } })
+    expect(onTargetChange).toHaveBeenCalledWith('todo')
+
+    const preventDefault = vi.fn()
+    const submit = form.props.onSubmit as (event: { readonly preventDefault: () => void }) => void
+    submit({ preventDefault })
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect(onMove).toHaveBeenCalledWith('review')
+    expect(button.props.disabled).toBe(false)
+
+    const busy = TaskTransitionControl({
+      task: doingTask,
+      target: 'review',
+      busy: true,
+      onTargetChange,
+      onMove,
+    }) as ReactElement<Readonly<Record<string, unknown>>>
+    const busyControls = Children.toArray(busy.props.children as ReactNode).filter(isValidElement)
+    expect(
+      (busyControls[0] as ReactElement<Readonly<Record<string, unknown>>>).props.disabled,
+    ).toBe(true)
+    expect(
+      (busyControls[1] as ReactElement<Readonly<Record<string, unknown>>>).props.children,
+    ).toBe('Moving…')
+  })
+
+  it('uses the selected target and current version while managing busy state', async (): Promise<void> => {
+    const move = vi
+      .fn<(id: string, status: TaskStatus, expectedVersion: number) => Promise<void>>()
+      .mockResolvedValue(undefined)
+    const refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const setBusyTaskId = vi.fn<(taskId: string | undefined) => void>()
+    const reportError = vi.fn<(message: string) => void>()
+    const lock = { current: false }
+
+    await expect(
+      performTaskTransition(doingTask, 'review', {
+        move,
+        refresh,
+        setBusyTaskId,
+        reportError,
+        lock,
+      }),
+    ).resolves.toBe(true)
+
+    expect(move).toHaveBeenCalledWith('T-1', 'review', 11)
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(setBusyTaskId.mock.calls).toEqual([['T-1'], [undefined]])
+    expect(reportError).toHaveBeenCalledOnce()
+    expect(reportError).toHaveBeenCalledWith('')
+    expect(lock.current).toBe(false)
+  })
+
+  it('rejects direct same-column and illegal transitions at the mutation boundary', async (): Promise<void> => {
+    const move = vi
+      .fn<(id: string, status: TaskStatus, expectedVersion: number) => Promise<void>>()
+      .mockResolvedValue(undefined)
+    const refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const setBusyTaskId = vi.fn<(taskId: string | undefined) => void>()
+    const reportError = vi.fn<(message: string) => void>()
+    const lock = { current: false }
+    const dependencies = { move, refresh, setBusyTaskId, reportError, lock }
+
+    await expect(performTaskTransition(doingTask, 'doing', dependencies)).resolves.toBe(false)
+    await expect(performTaskTransition(doingTask, 'done', dependencies)).resolves.toBe(false)
+
+    expect(move).not.toHaveBeenCalled()
+    expect(refresh).not.toHaveBeenCalled()
+    expect(setBusyTaskId).not.toHaveBeenCalled()
+    expect(reportError.mock.calls).toEqual([
+      ['Task T-1 is already in doing'],
+      ['Cannot move task from doing to done'],
+    ])
+    expect(lock.current).toBe(false)
+  })
+
+  it('rejects same-column, forged, and stale drops before mutation', async (): Promise<void> => {
+    const move = vi
+      .fn<(id: string, status: TaskStatus, expectedVersion: number) => Promise<void>>()
+      .mockResolvedValue(undefined)
+    const refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const setBusyTaskId = vi.fn<(taskId: string | undefined) => void>()
+    const reportError = vi.fn<(message: string) => void>()
+    const lock = { current: false }
+    const dependencies = { move, refresh, setBusyTaskId, reportError, lock }
+
+    await expect(
+      performTaskDrop(
+        [doingTask],
+        JSON.stringify({ id: 'T-1', version: 11 }),
+        'doing',
+        dependencies,
+      ),
+    ).resolves.toBe(false)
+    await expect(
+      performTaskDrop(
+        [{ ...doingTask, status: 'done' }],
+        JSON.stringify({ id: 'T-1', version: 11, status: 'todo' }),
+        'doing',
+        dependencies,
+      ),
+    ).resolves.toBe(false)
+    await expect(
+      performTaskDrop(
+        [doingTask],
+        JSON.stringify({ id: 'T-1', version: 10 }),
+        'review',
+        dependencies,
+      ),
+    ).resolves.toBe(false)
+    await expect(
+      performTaskDrop(
+        [doingTask],
+        JSON.stringify({ id: 'forged', version: 11, status: 'doing' }),
+        'review',
+        dependencies,
+      ),
+    ).resolves.toBe(false)
+
+    expect(move).not.toHaveBeenCalled()
+    expect(refresh).not.toHaveBeenCalled()
+    expect(setBusyTaskId).not.toHaveBeenCalled()
+    expect(reportError.mock.calls).toEqual([
+      ['Task T-1 is already in doing'],
+      ['Cannot move task from done to doing'],
+      ['Task T-1 changed since dragging; retry with the refreshed card'],
+      ['Task forged is no longer on this board'],
+    ])
+    expect(lock.current).toBe(false)
+  })
+
+  it('ignores a forged payload status and uses current board state for a legal drop', async (): Promise<void> => {
+    const move = vi
+      .fn<(id: string, status: TaskStatus, expectedVersion: number) => Promise<void>>()
+      .mockResolvedValue(undefined)
+    const refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+
+    await expect(
+      performTaskDrop(
+        [doingTask],
+        JSON.stringify({ id: 'T-1', version: 11, status: 'backlog' }),
+        'review',
+        {
+          move,
+          refresh,
+          setBusyTaskId: vi.fn(),
+          reportError: vi.fn(),
+          lock: { current: false },
+        },
+      ),
+    ).resolves.toBe(true)
+
+    expect(move).toHaveBeenCalledWith('T-1', 'review', 11)
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
+  it('synchronously locks rapid control submissions before React can rerender', async (): Promise<void> => {
+    let resolveMove: (() => void) | undefined
+    const move = vi.fn<(id: string, status: TaskStatus, expectedVersion: number) => Promise<void>>(
+      (): Promise<void> =>
+        new Promise<void>((resolve): void => {
+          resolveMove = resolve
+        }),
+    )
+    const refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const setBusyTaskId = vi.fn<(taskId: string | undefined) => void>()
+    const reportError = vi.fn<(message: string) => void>()
+    const lock = { current: false }
+    const dependencies = { move, refresh, setBusyTaskId, reportError, lock }
+
+    const first = performTaskTransition(doingTask, 'review', dependencies)
+    const second = performTaskTransition(doingTask, 'review', dependencies)
+
+    expect(move).toHaveBeenCalledOnce()
+    expect(lock.current).toBe(true)
+    await expect(second).resolves.toBe(false)
+    expect(resolveMove).toBeTypeOf('function')
+    resolveMove?.()
+    await expect(first).resolves.toBe(true)
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(setBusyTaskId.mock.calls).toEqual([['T-1'], [undefined]])
+    expect(lock.current).toBe(false)
+  })
+
+  it('synchronously locks rapid drops before issuing a second request', async (): Promise<void> => {
+    let resolveMove: (() => void) | undefined
+    const move = vi.fn<(id: string, status: TaskStatus, expectedVersion: number) => Promise<void>>(
+      (): Promise<void> =>
+        new Promise<void>((resolve): void => {
+          resolveMove = resolve
+        }),
+    )
+    const refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const setBusyTaskId = vi.fn<(taskId: string | undefined) => void>()
+    const reportError = vi.fn<(message: string) => void>()
+    const lock = { current: false }
+    const dependencies = { move, refresh, setBusyTaskId, reportError, lock }
+    const payload = JSON.stringify({ id: 'T-1', version: 11 })
+
+    const first = performTaskDrop([doingTask], payload, 'review', dependencies)
+    const second = performTaskDrop([doingTask], payload, 'review', dependencies)
+
+    expect(move).toHaveBeenCalledOnce()
+    await expect(second).resolves.toBe(false)
+    expect(resolveMove).toBeTypeOf('function')
+    resolveMove?.()
+    await expect(first).resolves.toBe(true)
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(setBusyTaskId.mock.calls).toEqual([['T-1'], [undefined]])
+    expect(lock.current).toBe(false)
+  })
+
+  it('surfaces a versioned move failure and always clears busy state', async (): Promise<void> => {
+    const move = vi
+      .fn<(id: string, status: TaskStatus, expectedVersion: number) => Promise<void>>()
+      .mockRejectedValue(new Error('Task changed since version 11'))
+    const refresh = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const setBusyTaskId = vi.fn<(taskId: string | undefined) => void>()
+    const reportError = vi.fn<(message: string) => void>()
+    const lock = { current: false }
+
+    await expect(
+      performTaskTransition(doingTask, 'review', {
+        move,
+        refresh,
+        setBusyTaskId,
+        reportError,
+        lock,
+      }),
+    ).resolves.toBe(false)
+
+    expect(refresh).not.toHaveBeenCalled()
+    expect(reportError.mock.calls).toEqual([[''], ['Task changed since version 11']])
+    expect(setBusyTaskId.mock.calls).toEqual([['T-1'], [undefined]])
+    expect(lock.current).toBe(false)
+  })
+
+  it('clears the transition lock when refresh fails after mutation', async (): Promise<void> => {
+    const move = vi
+      .fn<(id: string, status: TaskStatus, expectedVersion: number) => Promise<void>>()
+      .mockResolvedValue(undefined)
+    const refresh = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValue(new Error('Unable to refresh tasks'))
+    const setBusyTaskId = vi.fn<(taskId: string | undefined) => void>()
+    const reportError = vi.fn<(message: string) => void>()
+    const lock = { current: false }
+
+    await expect(
+      performTaskTransition(doingTask, 'review', {
+        move,
+        refresh,
+        setBusyTaskId,
+        reportError,
+        lock,
+      }),
+    ).resolves.toBe(false)
+
+    expect(move).toHaveBeenCalledOnce()
+    expect(reportError).toHaveBeenLastCalledWith('Unable to refresh tasks')
+    expect(setBusyTaskId.mock.calls).toEqual([['T-1'], [undefined]])
+    expect(lock.current).toBe(false)
   })
 
   it('links a task card to documents returned by the existing taskId plan contract', async (): Promise<void> => {

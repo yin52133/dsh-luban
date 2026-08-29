@@ -3,9 +3,9 @@ import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { DragEvent, FormEvent, ReactNode } from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-type TaskStatus = 'backlog' | 'todo' | 'doing' | 'review' | 'done' | 'dropped'
+export type TaskStatus = 'backlog' | 'todo' | 'doing' | 'review' | 'done' | 'dropped'
 
 export interface UiTask {
   readonly id: string
@@ -37,6 +37,19 @@ const COLUMNS: readonly { readonly status: TaskStatus; readonly title: string }[
   { status: 'dropped', title: 'Dropped' },
 ]
 
+const TRANSITION_TARGETS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = Object.freeze({
+  backlog: ['todo', 'dropped'],
+  todo: ['doing', 'dropped'],
+  doing: ['review', 'todo'],
+  review: ['done', 'doing'],
+  done: [],
+  dropped: [],
+})
+
+function isTaskStatus(value: string): value is TaskStatus {
+  return COLUMNS.some((column): boolean => column.status === value)
+}
+
 const STYLE = `
 .luban-board{display:grid;gap:12px;color:var(--color-text,#e5e7eb);min-width:0}
 .luban-board__toolbar,.luban-board__form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -47,6 +60,7 @@ const STYLE = `
 .luban-board__column h3{font-size:13px;margin:2px 4px 8px;color:#cbd5e1;display:flex;justify-content:space-between}
 .luban-board__card{background:#1e293b;border:1px solid #475569;border-radius:7px;padding:9px;margin-bottom:8px;cursor:grab}
 .luban-board__card strong{display:block;font-size:13px}.luban-board__meta{font-size:11px;color:#94a3b8;margin-top:6px;overflow-wrap:anywhere}.luban-board__plans{display:flex;gap:6px;flex-wrap:wrap}.luban-board__plans a{color:#93c5fd}
+.luban-board__transition{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;margin-top:8px}.luban-board__transition select,.luban-board__transition button{min-width:0;padding:5px 7px;font-size:12px}
 .luban-board__tag{display:inline-block;background:#334155;border-radius:999px;padding:1px 6px;margin:4px 4px 0 0;font-size:10px}
 .luban-board__auto{color:#fde68a}.luban-board__error{color:#fca5a5;white-space:pre-wrap}.luban-board__empty{color:#64748b;font-size:12px;padding:8px}
 @media(max-width:760px){.luban-board__columns{grid-template-columns:repeat(6,minmax(82vw,1fr))}.luban-board__toolbar>*{flex:1 1 140px}}
@@ -60,6 +74,7 @@ function isTask(value: unknown): value is UiTask {
     typeof row.title === 'string' &&
     typeof row.description === 'string' &&
     typeof row.status === 'string' &&
+    isTaskStatus(row.status) &&
     typeof row.version === 'number' &&
     Array.isArray(row.tags)
   )
@@ -141,7 +156,7 @@ async function writeApi(path: string, method: string, body: unknown): Promise<vo
   }
 }
 
-/** Persist the status change used by drag-and-drop with optimistic locking. */
+/** Persist the status change shared by drag, touch, and keyboard input. */
 export async function moveTask(
   id: string,
   status: TaskStatus,
@@ -151,6 +166,140 @@ export async function moveTask(
     to: status,
     expectedVersion,
   })
+}
+
+export interface TaskTransitionDependencies {
+  readonly move: (id: string, status: TaskStatus, expectedVersion: number) => Promise<void>
+  readonly refresh: () => Promise<void>
+  readonly setBusyTaskId: (taskId: string | undefined) => void
+  readonly reportError: (message: string) => void
+  readonly lock: TaskTransitionLock
+}
+
+export interface TaskTransitionLock {
+  current: boolean
+}
+
+/** Run one UI transition while keeping drag, touch, and keyboard behavior consistent. */
+export async function performTaskTransition(
+  task: Pick<UiTask, 'id' | 'status' | 'version'>,
+  status: TaskStatus,
+  dependencies: TaskTransitionDependencies,
+): Promise<boolean> {
+  if (dependencies.lock.current) return false
+  if (!TRANSITION_TARGETS[task.status].includes(status)) {
+    dependencies.reportError(
+      task.status === status
+        ? `Task ${task.id} is already in ${status}`
+        : `Cannot move task from ${task.status} to ${status}`,
+    )
+    return false
+  }
+  dependencies.lock.current = true
+  try {
+    dependencies.setBusyTaskId(task.id)
+    dependencies.reportError('')
+    await dependencies.move(task.id, status, task.version)
+    await dependencies.refresh()
+    return true
+  } catch (reason: unknown) {
+    dependencies.reportError(reason instanceof Error ? reason.message : 'Unable to move task')
+    return false
+  } finally {
+    dependencies.lock.current = false
+    dependencies.setBusyTaskId(undefined)
+  }
+}
+
+/** Resolve a drag gesture against the latest rendered task snapshot, not untrusted payload data. */
+export function taskForDrop(tasks: readonly UiTask[], payload: string): UiTask {
+  let value: unknown
+  try {
+    value = JSON.parse(payload) as unknown
+  } catch {
+    throw new Error('Invalid dragged task')
+  }
+  if (typeof value !== 'object' || value === null) throw new Error('Invalid dragged task')
+  const row = value as Readonly<Record<string, unknown>>
+  if (typeof row.id !== 'string' || typeof row.version !== 'number')
+    throw new Error('Invalid dragged task')
+
+  const task = tasks.find((candidate): boolean => candidate.id === row.id)
+  if (task === undefined) throw new Error(`Task ${row.id} is no longer on this board`)
+  if (row.version !== task.version)
+    throw new Error(`Task ${task.id} changed since dragging; retry with the refreshed card`)
+  return task
+}
+
+/** Validate a drop before entering the shared, synchronously locked mutation boundary. */
+export async function performTaskDrop(
+  tasks: readonly UiTask[],
+  payload: string,
+  target: TaskStatus,
+  dependencies: TaskTransitionDependencies,
+): Promise<boolean> {
+  if (dependencies.lock.current) return false
+  try {
+    return await performTaskTransition(taskForDrop(tasks, payload), target, dependencies)
+  } catch (reason: unknown) {
+    dependencies.reportError(reason instanceof Error ? reason.message : 'Unable to move task')
+    return false
+  }
+}
+
+function transitionTargetFor(
+  status: TaskStatus,
+  preferred: TaskStatus | undefined,
+): TaskStatus | undefined {
+  const targets = TRANSITION_TARGETS[status]
+  return preferred !== undefined && targets.includes(preferred) ? preferred : targets[0]
+}
+
+/** Native select/button controls remain operable without pointer drag gestures. */
+export function TaskTransitionControl({
+  task,
+  target,
+  busy,
+  onTargetChange,
+  onMove,
+}: {
+  readonly task: UiTask
+  readonly target: TaskStatus | undefined
+  readonly busy: boolean
+  readonly onTargetChange: (status: TaskStatus) => void
+  readonly onMove: (status: TaskStatus) => void
+}): ReactNode {
+  const targets = TRANSITION_TARGETS[task.status]
+  if (target === undefined || targets.length === 0) return null
+  return (
+    <form
+      className="luban-board__transition"
+      aria-label={`Change status for ${task.title}`}
+      onSubmit={(event): void => {
+        event.preventDefault()
+        onMove(target)
+      }}
+    >
+      <select
+        aria-label={`Target status for ${task.title}`}
+        value={target}
+        disabled={busy}
+        onChange={(event): void => {
+          const status = event.currentTarget.value
+          if (isTaskStatus(status) && targets.includes(status)) onTargetChange(status)
+        }}
+      >
+        {targets.map((status) => (
+          <option value={status} key={status}>
+            Move to {COLUMNS.find((column) => column.status === status)?.title ?? status}
+          </option>
+        ))}
+      </select>
+      <button type="submit" disabled={busy}>
+        {busy ? 'Moving…' : 'Move'}
+      </button>
+    </form>
+  )
 }
 
 export function TaskPlanLinks({
@@ -181,9 +330,17 @@ export function TaskPlanLinks({
 export function TaskCard({
   task,
   plans,
+  transitionTarget,
+  transitionBusy,
+  onTransitionTargetChange,
+  onTransition,
 }: {
   readonly task: UiTask
   readonly plans: readonly UiTaskPlanLink[]
+  readonly transitionTarget: TaskStatus | undefined
+  readonly transitionBusy: boolean
+  readonly onTransitionTargetChange: (status: TaskStatus) => void
+  readonly onTransition: (status: TaskStatus) => void
 }): ReactNode {
   const onDragStart = (event: DragEvent<HTMLElement>): void => {
     event.dataTransfer.effectAllowed = 'move'
@@ -195,7 +352,7 @@ export function TaskCard({
   return (
     <article
       className="luban-board__card"
-      draggable
+      draggable={!transitionBusy}
       onDragStart={onDragStart}
       data-task-id={task.id}
     >
@@ -219,6 +376,13 @@ export function TaskCard({
           </span>
         ))}
       </div>
+      <TaskTransitionControl
+        task={task}
+        target={transitionTarget}
+        busy={transitionBusy}
+        onTargetChange={onTransitionTargetChange}
+        onMove={onTransition}
+      />
     </article>
   )
 }
@@ -233,7 +397,12 @@ export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
   const [tagFilter, setTagFilter] = useState('')
   const [title, setTitle] = useState('')
   const [acceptance, setAcceptance] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [busyTaskId, setBusyTaskId] = useState<string | undefined>()
+  const transitionLock = useRef(false)
+  const [transitionTargets, setTransitionTargets] = useState<Readonly<Record<string, TaskStatus>>>(
+    {},
+  )
   const [error, setError] = useState('')
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -283,7 +452,7 @@ export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
 
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
-    setBusy(true)
+    setCreating(true)
     setError('')
     try {
       await writeApi('/tasks', 'POST', {
@@ -301,26 +470,32 @@ export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Unable to create task')
     } finally {
-      setBusy(false)
+      setCreating(false)
     }
+  }
+
+  const transition = async (
+    task: Pick<UiTask, 'id' | 'status' | 'version'>,
+    status: TaskStatus,
+  ): Promise<void> => {
+    await performTaskTransition(task, status, {
+      move: moveTask,
+      refresh,
+      setBusyTaskId,
+      reportError: setError,
+      lock: transitionLock,
+    })
   }
 
   const drop = async (event: DragEvent<HTMLElement>, status: TaskStatus): Promise<void> => {
     event.preventDefault()
-    setError('')
-    try {
-      const value = JSON.parse(event.dataTransfer.getData('application/x-luban-task')) as unknown
-      if (typeof value !== 'object' || value === null) throw new Error('Invalid dragged task')
-      const row = value as Readonly<Record<string, unknown>>
-      const id = row.id
-      const version = row.version
-      if (typeof id !== 'string' || typeof version !== 'number')
-        throw new Error('Invalid dragged task')
-      await moveTask(id, status, version)
-      await refresh()
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : 'Unable to move task')
-    }
+    await performTaskDrop(tasks, event.dataTransfer.getData('application/x-luban-task'), status, {
+      move: moveTask,
+      refresh,
+      setBusyTaskId,
+      reportError: setError,
+      lock: transitionLock,
+    })
   }
 
   return (
@@ -376,8 +551,8 @@ export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
           value={acceptance}
           onChange={(event): void => setAcceptance(event.currentTarget.value)}
         />
-        <button type="submit" disabled={busy}>
-          {busy ? 'Adding…' : 'Add'}
+        <button type="submit" disabled={creating}>
+          {creating ? 'Adding…' : 'Add'}
         </button>
       </form>
       {error === '' ? null : (
@@ -405,7 +580,19 @@ export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
                 <div className="luban-board__empty">Drop tasks here</div>
               ) : (
                 columnTasks.map((task) => (
-                  <TaskCard task={task} plans={planLinks.get(task.id) ?? []} key={task.id} />
+                  <TaskCard
+                    task={task}
+                    plans={planLinks.get(task.id) ?? []}
+                    transitionTarget={transitionTargetFor(task.status, transitionTargets[task.id])}
+                    transitionBusy={busyTaskId !== undefined}
+                    onTransitionTargetChange={(status): void =>
+                      setTransitionTargets((current) => ({ ...current, [task.id]: status }))
+                    }
+                    onTransition={(status): void => {
+                      void transition(task, status)
+                    }}
+                    key={task.id}
+                  />
                 ))
               )}
             </section>
