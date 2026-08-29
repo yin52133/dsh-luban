@@ -7,6 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                                        |
 | ---- | ---------- | ----- | ----------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：README 规范/版本与 tag/npm 注册/敏感红线/应急 |
+| v0.2 | 2026-08-30 | Codex | 要求 tag 发布 job 在制品生成前独立复验密钥门禁 |
 
 ## 1. README 规范
 
@@ -73,7 +74,7 @@
 | --- | --- |
 | 提交前 | pre-commit 跑 gitleaks（`scripts/release/install-hooks.mjs` 一键安装） |
 | 服务端 | CI 每次跑 gitleaks 全历史扫描；命中即红 |
-| 发布 | `files` 白名单 + `npm publish --dry-run` 清单审计 |
+| 发布 | tag job 独立复跑全历史 gitleaks + 合成泄漏证明；随后执行 `files` 白名单与 `npm publish --dry-run` 清单审计 |
 | 本地 | `.gitignore` 基线：`.env`/`.env.*`（保留 `!.env.example`）、`.dsh/`、`*.credentials.*`、`~密钥类文件` |
 | 文档 | 设计文档中一律占位符；示例配置值必须为假数据 |
 

@@ -152,6 +152,26 @@ describe('M12 install and safety plans', () => {
 })
 
 describe('M12 release policy', () => {
+  it('blocks tag artifacts behind the pinned history scan and synthetic leak proof', async () => {
+    const workflow = await readFile(join(REPOSITORY_ROOT, '.github/workflows/release.yml'), 'utf8')
+    const pack = workflow.indexOf('pack-artifacts.mjs --prepare')
+    const historyScan = workflow.indexOf(
+      'gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e',
+    )
+    const syntheticGate = workflow.indexOf(
+      'scripts/release/verify-secret-gate.mjs --verify --binary',
+    )
+
+    expect(historyScan).toBeGreaterThan(-1)
+    expect(syntheticGate).toBeGreaterThan(historyScan)
+    expect(pack).toBeGreaterThan(syntheticGate)
+    expect(workflow).toContain('GITLEAKS_VERSION: 8.30.1')
+    expect(workflow).toContain(
+      'gitleaks" git "$GITHUB_WORKSPACE" --config "$GITHUB_WORKSPACE/.gitleaks.toml"',
+    )
+    expect(workflow).toContain('551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb')
+  })
+
   it('rejects files outside the npm payload allowlist', async () => {
     const policy = await loadPolicy()
     const manifest = {

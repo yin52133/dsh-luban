@@ -9,6 +9,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：脚手架/市场/流水线/安装脚本/门禁/规范 |
 | v0.2 | 2026-08-30 | Codex | 对齐 DSH 0.1.1 bundle/client 与 lazy-CJS 契约 |
 | v0.3 | 2026-08-30 | Codex | 回填可复现发布、安全门禁与人工市场边界验证 |
+| v0.4 | 2026-08-30 | Codex | 补齐 tag 发布工作流的独立全历史扫描与合成泄漏证明 |
 
 ## 1. 概述与目标
 
@@ -132,7 +133,8 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
   release environment 先创建可恢复 draft Release，再发布同一 tarball 到 npm，成功后才公开 Release。
 - Windows/Ubuntu 包装脚本共享固定的三项 A 档版本锁，默认 dry-run，只有 `--apply` 才以参数数组调用
   `dsh plugin --profile ... add`；本轮两个平台计划均已验证，未安装外部插件。
-- gitleaks pre-commit 与固定版本 CI 门禁、合成密钥拒绝证明、npm `files` 白名单、pack dry-run、
+- gitleaks pre-commit、mainline CI 与 tag 发布工作流均固定扫描器版本；tag job 在生成任何 tarball
+  前独立执行全历史扫描与带校验和的合成密钥拒绝证明。npm `files` 白名单、pack dry-run、
   tag/版本/CHANGELOG/README/DSH 基线验证均已落地；发布入口在本地和未批准 CI 中 fail closed。
 - M12 的 10 项脚手架、安装、安全、市场与不可变发布测试通过；真实双端 profile、CI tag、npm、
   GitHub Release、市场 PR 与 topic 仍需在获得明确授权后验收。
