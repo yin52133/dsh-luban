@@ -153,12 +153,14 @@ function fakeAgentRegistry(options: {
 async function state(clock: Clock): Promise<{
   readonly store: JsonTaskStore
   readonly claims: DefaultAgentClaimService
+  readonly ledgerPath: string
 }> {
   const directory = join(tmpdir(), `dsh-luban-scheduler-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   directories.add(directory)
-  const store = new JsonTaskStore(createLedgerStore(join(directory, 'ledger.json'), clock), clock)
-  return { store, claims: new DefaultAgentClaimService(store, 'ubuntu', true) }
+  const ledgerPath = join(directory, 'ledger.json')
+  const store = new JsonTaskStore(createLedgerStore(ledgerPath, clock), clock)
+  return { store, claims: new DefaultAgentClaimService(store, 'ubuntu', true), ledgerPath }
 }
 
 afterEach(async (): Promise<void> => {
@@ -359,7 +361,7 @@ describe('night scheduler', (): void => {
 
   it('runs a whitelisted task once and enforces the durable quota', async (): Promise<void> => {
     const clock = new MutableClock()
-    const { store, claims } = await state(clock)
+    const { store, claims, ledgerPath } = await state(clock)
     for (const title of ['First', 'Second']) {
       await store.create({
         title,
@@ -391,11 +393,68 @@ describe('night scheduler', (): void => {
       clock,
     })
     await scheduler.triggerOnce()
-    await scheduler.triggerOnce()
-    expect(await store.query({ statuses: ['review'] })).toHaveLength(1)
-    expect(await store.query({ statuses: ['todo'] })).toHaveLength(1)
-    expect(scheduler.status()).toMatchObject({ quotaUsed: 1, circuit: 'ok' })
     await scheduler.dispose()
+
+    const reloadedStore = new JsonTaskStore(createLedgerStore(ledgerPath, clock), clock)
+    const restarted = new DefaultNightScheduler({
+      store: reloadedStore,
+      claims: new DefaultAgentClaimService(reloadedStore, 'ubuntu', true),
+      executor,
+      config: CONFIG,
+      hostScope: 'ubuntu',
+      clock,
+    })
+    await restarted.triggerOnce()
+    expect(await reloadedStore.query({ statuses: ['review'] })).toHaveLength(1)
+    expect(await reloadedStore.query({ statuses: ['todo'] })).toHaveLength(1)
+    expect(restarted.status()).toMatchObject({ quotaUsed: 1, circuit: 'ok' })
+    await restarted.dispose()
+  })
+
+  it('does not claim tasks outside either the tag or host whitelist', async (): Promise<void> => {
+    const clock = new MutableClock()
+    const { store, claims } = await state(clock)
+    await store.create({
+      title: 'Manual only',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'A human runs it',
+      tags: ['manual'],
+    })
+    await store.create({
+      title: 'Wrong host',
+      status: 'todo',
+      hostScope: 'win',
+      priority: 'P1',
+      acceptance: 'Runs on Windows',
+      tags: ['auto-ok'],
+    })
+    const execute = vi.fn<NightTaskExecutor['execute']>()
+    const tagRestricted = new DefaultNightScheduler({
+      store,
+      claims,
+      executor: { execute },
+      config: CONFIG,
+      hostScope: 'ubuntu',
+      clock,
+    })
+    await tagRestricted.triggerOnce()
+    expect(execute).not.toHaveBeenCalled()
+    await tagRestricted.dispose()
+
+    const hostRestricted = new DefaultNightScheduler({
+      store,
+      claims: new DefaultAgentClaimService(store, 'win', true),
+      executor: { execute },
+      config: CONFIG,
+      hostScope: 'win',
+      clock,
+    })
+    await hostRestricted.triggerOnce()
+    expect(execute).not.toHaveBeenCalled()
+    expect(await store.query({ statuses: ['todo'] })).toHaveLength(2)
+    await hostRestricted.dispose()
   })
 
   it('opens the circuit after consecutive failures and resets it next day', async (): Promise<void> => {

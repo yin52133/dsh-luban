@@ -159,16 +159,63 @@ describe('TaskboardHttpApi', (): void => {
     const imported = await fetch(`${base}/import`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ tasks: [{ name: 'Legacy task', project: '/workspace' }] }),
+      body: JSON.stringify({
+        tasks: [
+          {
+            name: 'Dashi task',
+            detail: 'Imported dashi detail',
+            project: '/workspace/dashi',
+            acceptanceCriteria: 'Dashi result exists',
+            host: 'ubuntu',
+            priority: 'P1',
+            tags: ['legacy'],
+          },
+          {
+            summary: 'Cloader task',
+            description: 'Imported cloader description',
+            workspace: '/workspace/cloader',
+            acceptance: 'Cloader result exists',
+            hostScope: 'any',
+          },
+        ],
+      }),
     })
-    expect(await imported.json()).toMatchObject({ report: { imported: 1, failed: 0 } })
+    expect(await imported.json()).toMatchObject({ report: { imported: 2, skipped: 0, failed: 0 } })
+    const importedTasks = (await (
+      await fetch(`${base}/tasks?status=backlog`, { headers: { cookie: 'session=ok' } })
+    ).json()) as { readonly tasks: readonly Record<string, unknown>[] }
+    expect(importedTasks.tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: 'Dashi task',
+          description: 'Imported dashi detail',
+          workspace: '/workspace/dashi',
+          acceptance: 'Dashi result exists',
+          hostScope: 'ubuntu',
+          priority: 'P1',
+          tags: ['legacy'],
+        }),
+        expect.objectContaining({
+          title: 'Cloader task',
+          description: 'Imported cloader description',
+          workspace: '/workspace/cloader',
+          acceptance: 'Cloader result exists',
+          hostScope: 'any',
+        }),
+      ]),
+    )
 
     const stream = await fetch(`${base}/events`, { headers: { cookie: 'session=ok' } })
+    const secondStream = await fetch(`${base}/events`, { headers: { cookie: 'session=ok' } })
     expect(stream.headers.get('content-type')).toContain('text/event-stream')
-    if (stream.body === null) throw new Error('SSE response has no body')
+    if (stream.body === null || secondStream.body === null)
+      throw new Error('SSE response has no body')
     const reader = stream.body.getReader()
+    const secondReader = secondStream.body.getReader()
     const first = await reader.read()
+    const secondBaseline = await secondReader.read()
     expect(new TextDecoder().decode(first.value)).toContain('event: baseline')
+    expect(new TextDecoder().decode(secondBaseline.value)).toContain('event: baseline')
 
     const liveCreate = await fetch(`${base}/tasks`, {
       method: 'POST',
@@ -180,9 +227,10 @@ describe('TaskboardHttpApi', (): void => {
       }),
     })
     expect(liveCreate.status).toBe(201)
-    const live = await reader.read()
+    const [live, secondLive] = await Promise.all([reader.read(), secondReader.read()])
     expect(new TextDecoder().decode(live.value)).toContain('event: task')
-    await reader.cancel()
+    expect(new TextDecoder().decode(secondLive.value)).toContain('event: task')
+    await Promise.all([reader.cancel(), secondReader.cancel()])
 
     const recovered = await fetch(`${base}/events`, {
       headers: { cookie: 'session=ok', 'last-event-id': '-100' },

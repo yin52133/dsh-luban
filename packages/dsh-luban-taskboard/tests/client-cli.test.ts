@@ -60,6 +60,98 @@ describe('taskctl', (): void => {
     vi.stubEnv('LUBAN_SESSION_COOKIE', '')
     await expect(run(['list'])).rejects.toThrow('LUBAN_SESSION_COOKIE')
   })
+
+  it('uses the authenticated versioned API for every mutation command', async (): Promise<void> => {
+    const calls: { readonly url: string; readonly init: RequestInit | undefined }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>((input, init): Promise<Response> => {
+        const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input
+        calls.push({ url, init })
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+      }),
+    )
+    vi.stubEnv('LUBAN_SESSION_COOKIE', 'session=secret')
+    vi.stubEnv('LUBAN_CSRF_TOKEN', 'csrf-secret')
+    vi.stubEnv('LUBAN_URL', 'http://127.0.0.1:42600/')
+
+    await run([
+      'add',
+      '--title',
+      'Compile firmware',
+      '--hostScope',
+      'ubuntu',
+      '--priority',
+      'P1',
+      '--workspace',
+      'D:/work',
+      '--acceptance',
+      'Artifact exists',
+      '--tag',
+      'auto-ok',
+    ])
+    await run(['claim', '--session', 'agent/one', '--workspace', 'D:/work', '--tag', 'auto-ok'])
+    await run([
+      'update',
+      '--id',
+      'T/unsafe',
+      '--version',
+      '3',
+      '--title',
+      'Compile safely',
+      '--acceptance',
+      'Tests pass',
+    ])
+    await run([
+      'transition',
+      '--id',
+      'T/unsafe',
+      '--version',
+      '4',
+      '--to',
+      'review',
+      '--note',
+      'Ready',
+    ])
+    await run(['done', '--id', 'T/unsafe', '--version', '5', '--note', 'Accepted'])
+
+    expect(calls.map(({ url }) => url)).toEqual([
+      'http://127.0.0.1:42600/luban-taskboard/tasks',
+      'http://127.0.0.1:42600/luban-taskboard/claim',
+      'http://127.0.0.1:42600/luban-taskboard/tasks/T%2Funsafe',
+      'http://127.0.0.1:42600/luban-taskboard/tasks/T%2Funsafe/transition',
+      'http://127.0.0.1:42600/luban-taskboard/tasks/T%2Funsafe/transition',
+    ])
+    expect(calls.map(({ init }) => init?.method)).toEqual(['POST', 'POST', 'PATCH', 'POST', 'POST'])
+    expect(calls.map(({ init }) => new Headers(init?.headers).get('x-luban-csrf'))).toEqual(
+      Array.from({ length: 5 }, (): string => 'csrf-secret'),
+    )
+    expect(
+      calls.map(({ init }): unknown => {
+        if (typeof init?.body !== 'string') throw new Error('expected a JSON request body')
+        return JSON.parse(init.body) as unknown
+      }),
+    ).toEqual([
+      {
+        title: 'Compile firmware',
+        hostScope: 'ubuntu',
+        priority: 'P1',
+        workspace: 'D:/work',
+        acceptance: 'Artifact exists',
+        tags: ['auto-ok'],
+      },
+      { sessionId: 'agent/one', workspace: 'D:/work', tags: ['auto-ok'] },
+      { expectedVersion: 3, title: 'Compile safely', acceptance: 'Tests pass' },
+      { expectedVersion: 4, to: 'review', note: 'Ready' },
+      { expectedVersion: 5, to: 'done', note: 'Accepted' },
+    ])
+    expect(calls.map(({ url }) => url).join('\n')).not.toContain('session=secret')
+  })
 })
 
 describe('Taskboard client entry', (): void => {
