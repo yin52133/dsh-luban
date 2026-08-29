@@ -5,17 +5,19 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
-interface UiPlan {
+export interface UiPlanSections {
+  readonly background: string
+  readonly impact: string
+  readonly changes: string
+  readonly verification: string
+}
+
+export interface UiPlan {
   readonly id: string
   readonly taskId?: string
   readonly sessionId?: string
   readonly status: string
-  readonly sections: {
-    readonly background: string
-    readonly impact: string
-    readonly changes: string
-    readonly verification: string
-  }
+  readonly sections: UiPlanSections
   readonly filePath: string
   readonly decisions: readonly {
     readonly decision: 'approve' | 'reject'
@@ -31,7 +33,7 @@ const STYLE = `
 .luban-plan input,.luban-plan textarea,.luban-plan button{font:inherit;border:1px solid #475569;border-radius:6px;padding:8px;background:#111827;color:inherit}
 .luban-plan textarea{min-height:76px;resize:vertical}.luban-plan button{cursor:pointer;background:#1d4ed8;border-color:#2563eb}.luban-plan button:disabled{opacity:.55}
 .luban-plan__list{display:grid;gap:10px}.luban-plan__card{border:1px solid #334155;background:#0f172a;border-radius:8px;padding:12px;display:grid;gap:8px}
-.luban-plan__card h3{margin:0;font-size:14px}.luban-plan__meta{font-size:12px;color:#94a3b8;overflow-wrap:anywhere}.luban-plan__actions{display:flex;gap:8px;flex-wrap:wrap}.luban-plan__reject{background:#991b1b!important}.luban-plan__error{color:#fca5a5;white-space:pre-wrap}
+.luban-plan__card h3{margin:0;font-size:14px}.luban-plan__meta{font-size:12px;color:#94a3b8;overflow-wrap:anywhere}.luban-plan__actions{display:flex;gap:8px;flex-wrap:wrap}.luban-plan__revision{border-top:1px solid #334155;padding-top:8px}.luban-plan__reject{background:#991b1b!important}.luban-plan__error{color:#fca5a5;white-space:pre-wrap}
 @media(max-width:760px){.luban-plan__toolbar{grid-template-columns:1fr}.luban-plan__actions>*{flex:1 1 130px}}
 `
 
@@ -99,6 +101,72 @@ export async function decidePlan(
   })
 }
 
+export function isPlanRevisableStatus(status: string): boolean {
+  return status === 'rejected' || status === 'revising'
+}
+
+/** Resubmit all required plan sections through the versioned revise endpoint. */
+export async function revisePlan(
+  id: string,
+  sections: UiPlanSections,
+  expectedVersion: number,
+): Promise<void> {
+  await writeApi(`/plans/${encodeURIComponent(id)}/revise`, { sections, expectedVersion })
+}
+
+export function RevisionEditor({
+  planId,
+  sections,
+  busy,
+  onChange,
+  onSubmit,
+}: {
+  readonly planId: string
+  readonly sections: UiPlanSections
+  readonly busy: boolean
+  readonly onChange: (name: keyof UiPlanSections, value: string) => void
+  readonly onSubmit: () => void
+}): ReactNode {
+  return (
+    <form
+      className="luban-plan__revision"
+      aria-label={`Revise ${planId}`}
+      onSubmit={(event): void => {
+        event.preventDefault()
+        onSubmit()
+      }}
+    >
+      <textarea
+        required
+        aria-label={`Revised background for ${planId}`}
+        value={sections.background}
+        onChange={(event): void => onChange('background', event.currentTarget.value)}
+      />
+      <textarea
+        required
+        aria-label={`Revised impact scope for ${planId}`}
+        value={sections.impact}
+        onChange={(event): void => onChange('impact', event.currentTarget.value)}
+      />
+      <textarea
+        required
+        aria-label={`Revised change locations for ${planId}`}
+        value={sections.changes}
+        onChange={(event): void => onChange('changes', event.currentTarget.value)}
+      />
+      <textarea
+        required
+        aria-label={`Revised verification for ${planId}`}
+        value={sections.verification}
+        onChange={(event): void => onChange('verification', event.currentTarget.value)}
+      />
+      <button type="submit" disabled={busy}>
+        {busy ? 'Revising…' : 'Submit revision'}
+      </button>
+    </form>
+  )
+}
+
 function ReviewCard({
   plan,
   refresh,
@@ -109,15 +177,32 @@ function ReviewCard({
   readonly reportError: (message: string) => void
 }): ReactNode {
   const [comment, setComment] = useState('')
+  const [revision, setRevision] = useState<UiPlanSections>(plan.sections)
   const [busy, setBusy] = useState(false)
+  useEffect((): void => {
+    setRevision(plan.sections)
+  }, [plan.id, plan.version])
   const decide = async (decision: 'approve' | 'reject'): Promise<void> => {
     setBusy(true)
+    reportError('')
     try {
       await decidePlan(plan.id, decision, plan.version, decision === 'reject' ? comment : undefined)
       setComment('')
       await refresh()
     } catch (error: unknown) {
       reportError(error instanceof Error ? error.message : 'Unable to review plan')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const revise = async (): Promise<void> => {
+    setBusy(true)
+    reportError('')
+    try {
+      await revisePlan(plan.id, revision, plan.version)
+      await refresh()
+    } catch (error: unknown) {
+      reportError(error instanceof Error ? error.message : 'Unable to revise plan')
     } finally {
       setBusy(false)
     }
@@ -173,6 +258,19 @@ function ReviewCard({
       {plan.decisions.at(-1)?.comment === undefined ? null : (
         <div className="luban-plan__meta">Latest feedback: {plan.decisions.at(-1)?.comment}</div>
       )}
+      {isPlanRevisableStatus(plan.status) ? (
+        <RevisionEditor
+          planId={plan.id}
+          sections={revision}
+          busy={busy}
+          onChange={(name, value): void =>
+            setRevision((current): UiPlanSections => ({ ...current, [name]: value }))
+          }
+          onSubmit={(): void => {
+            void revise()
+          }}
+        />
+      ) : null}
     </article>
   )
 }

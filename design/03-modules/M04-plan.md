@@ -4,10 +4,11 @@
 
 ## 版本记录
 
-| 版本 | 日期       | 作者  | 变更说明                              |
-| ---- | ---------- | ----- | ------------------------------------- |
-| v0.1 | 2026-08-29 | Maintainers | 初稿：状态机/落盘/审批交互/模板与检查单 |
-| v0.2 | 2026-08-30 | Codex | 回填 rc2 工具门禁、认证审批链路与实现验证 |
+| 版本 | 日期       | 作者  | 变更说明                                    |
+| ---- | ---------- | ----- | ------------------------------------------- |
+| v0.1 | 2026-08-29 | Maintainers | 初稿：状态机/落盘/审批交互/模板与检查单     |
+| v0.2 | 2026-08-30 | Codex | 回填 rc2 工具门禁、认证审批链路与实现验证   |
+| v0.3 | 2026-08-30 | Codex | 补齐任务卡文档直达与 Web 四要素修订交互验证 |
 
 ## 1. 概述与目标
 
@@ -107,7 +108,10 @@ M04-F001 ~ M04-F004 共 4 项，与 `checklist.json` 一一对应。
   路径逃逸、同日同 slug 覆盖和乐观版本冲突均被拒绝。
 - `FilePlanService` 实现完整状态机、四要素校验、审批历史、会话当前 plan 以及可选
   `lubanTaskStore` 联动；批准 `todo` 关联任务时推进为 `doing`。
-- `/luban-plan` 提供认证 REST/SSE API，Settings lazy-CJS 客户端提供提交、批准、驳回和文档入口；
-  写请求复用 `/luban-auth/session` 的 CSRF token。
-- 本地 Prettier、ESLint、严格类型检查、构建、10 项测试、发布元数据与 npm pack 白名单审计通过；
-  测试覆盖真实 rc2 guard/AgentRegistry 接口，未调用外部服务。
+- `/luban-plan` 提供认证 REST/SSE API，Settings lazy-CJS 客户端提供提交、批准、驳回、
+  `rejected/revising` 四要素修订和文档入口；修订携带当前 `expectedVersion`，冲突错误进入页面告警。
+- M02 看板通过现有 `GET /luban-plan/plans` 与共享 `taskId` 归组关联项，任务卡直接打开对应的认证
+  Markdown 文档端点；未安装 M04 时的 404 作为无关联项降级，不引入包级耦合。
+- 本地 Prettier、ESLint、严格类型检查、构建和相关测试通过；测试覆盖真实 HTTP
+  `reject → revise → in-review` 状态/版本/冲突、React 修订控件、rc2 guard/AgentRegistry 接口，
+  未调用外部服务。

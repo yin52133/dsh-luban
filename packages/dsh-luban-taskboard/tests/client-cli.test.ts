@@ -1,7 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { run } from '../src/cli.js'
-import { apply as applyClient, moveTask, TaskboardSection } from '../src/client/index.js'
+import {
+  apply as applyClient,
+  loadTaskPlanLinks,
+  moveTask,
+  TaskboardSection,
+  TaskPlanLinks,
+} from '../src/client/index.js'
 
 afterEach((): void => {
   vi.unstubAllGlobals()
@@ -86,5 +93,62 @@ describe('Taskboard client entry', (): void => {
     expect(requests[1]?.init?.method).toBe('POST')
     expect(new Headers(requests[1]?.init?.headers).get('x-luban-csrf')).toBe('csrf-token')
     expect(requests[1]?.init?.body).toBe(JSON.stringify({ to: 'review', expectedVersion: 7 }))
+  })
+
+  it('links a task card to documents returned by the existing taskId plan contract', async (): Promise<void> => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          plans: [
+            {
+              id: 'P/linked',
+              taskId: 'T-1',
+              status: 'rejected',
+              filePath: 'docs/plans/linked.md',
+            },
+            {
+              id: 'P-unlinked',
+              status: 'in-review',
+              filePath: 'docs/plans/unlinked.md',
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const grouped = await loadTaskPlanLinks()
+    expect(fetchMock).toHaveBeenCalledWith('/luban-plan/plans', {
+      headers: { accept: 'application/json' },
+    })
+    const plans = grouped.get('T-1') ?? []
+    expect(plans).toEqual([
+      {
+        id: 'P/linked',
+        taskId: 'T-1',
+        status: 'rejected',
+        filePath: 'docs/plans/linked.md',
+      },
+    ])
+
+    const rendered = TaskPlanLinks({ taskId: 'T-1', plans })
+    expect(isValidElement(rendered)).toBe(true)
+    const container = rendered as ReactElement<Readonly<Record<string, unknown>>>
+    expect(container.props['aria-label']).toBe('Plans for T-1')
+    const anchors = Children.toArray(container.props.children as ReactNode)
+    expect(anchors).toHaveLength(1)
+    expect(isValidElement(anchors[0])).toBe(true)
+    const anchor = anchors[0] as ReactElement<Readonly<Record<string, unknown>>>
+    expect(anchor.props.href).toBe('/luban-plan/plans/P%2Flinked/document')
+    expect(anchor.props.title).toBe('docs/plans/linked.md')
+  })
+
+  it('keeps the board usable when the optional Plan route is absent', async (): Promise<void> => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 404 })),
+    )
+    await expect(loadTaskPlanLinks()).resolves.toEqual(new Map())
   })
 })

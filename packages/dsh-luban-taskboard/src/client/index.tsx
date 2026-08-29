@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 type TaskStatus = 'backlog' | 'todo' | 'doing' | 'review' | 'done' | 'dropped'
 
-interface UiTask {
+export interface UiTask {
   readonly id: string
   readonly title: string
   readonly description: string
@@ -19,6 +19,13 @@ interface UiTask {
   readonly tags: readonly string[]
   readonly version: number
   readonly autoDone?: boolean
+}
+
+export interface UiTaskPlanLink {
+  readonly id: string
+  readonly taskId: string
+  readonly status: string
+  readonly filePath: string
 }
 
 const COLUMNS: readonly { readonly status: TaskStatus; readonly title: string }[] = [
@@ -39,7 +46,7 @@ const STYLE = `
 .luban-board__column{background:#0f172a;border:1px solid #334155;border-radius:8px;min-height:220px;padding:8px}
 .luban-board__column h3{font-size:13px;margin:2px 4px 8px;color:#cbd5e1;display:flex;justify-content:space-between}
 .luban-board__card{background:#1e293b;border:1px solid #475569;border-radius:7px;padding:9px;margin-bottom:8px;cursor:grab}
-.luban-board__card strong{display:block;font-size:13px}.luban-board__meta{font-size:11px;color:#94a3b8;margin-top:6px;overflow-wrap:anywhere}
+.luban-board__card strong{display:block;font-size:13px}.luban-board__meta{font-size:11px;color:#94a3b8;margin-top:6px;overflow-wrap:anywhere}.luban-board__plans{display:flex;gap:6px;flex-wrap:wrap}.luban-board__plans a{color:#93c5fd}
 .luban-board__tag{display:inline-block;background:#334155;border-radius:999px;padding:1px 6px;margin:4px 4px 0 0;font-size:10px}
 .luban-board__auto{color:#fde68a}.luban-board__error{color:#fca5a5;white-space:pre-wrap}.luban-board__empty{color:#64748b;font-size:12px;padding:8px}
 @media(max-width:760px){.luban-board__columns{grid-template-columns:repeat(6,minmax(82vw,1fr))}.luban-board__toolbar>*{flex:1 1 140px}}
@@ -65,6 +72,44 @@ function tasksFrom(value: unknown): UiTask[] {
   if (!Array.isArray(tasks) || !tasks.every(isTask))
     throw new Error('Taskboard returned invalid tasks')
   return tasks
+}
+
+/** Decode the existing Plan list contract into links grouped by the shared task id. */
+export function taskPlanLinksFrom(value: unknown): ReadonlyMap<string, readonly UiTaskPlanLink[]> {
+  if (typeof value !== 'object' || value === null) throw new Error('Plan API returned invalid JSON')
+  const plans = (value as Readonly<Record<string, unknown>>).plans
+  if (!Array.isArray(plans)) throw new Error('Plan API returned invalid plans')
+  const grouped = new Map<string, UiTaskPlanLink[]>()
+  for (const value of plans) {
+    if (typeof value !== 'object' || value === null)
+      throw new Error('Plan API returned an invalid plan')
+    const row = value as Readonly<Record<string, unknown>>
+    if (
+      typeof row.id !== 'string' ||
+      typeof row.taskId !== 'string' ||
+      typeof row.status !== 'string' ||
+      typeof row.filePath !== 'string'
+    ) {
+      if (row.taskId === undefined) continue
+      throw new Error('Plan API returned an invalid task-linked plan')
+    }
+    const link: UiTaskPlanLink = {
+      id: row.id,
+      taskId: row.taskId,
+      status: row.status,
+      filePath: row.filePath,
+    }
+    grouped.set(row.taskId, [...(grouped.get(row.taskId) ?? []), link])
+  }
+  return grouped
+}
+
+/** Load optional Plan metadata without coupling the Taskboard package to Plan internals. */
+export async function loadTaskPlanLinks(): Promise<ReadonlyMap<string, readonly UiTaskPlanLink[]>> {
+  const response = await fetch('/luban-plan/plans', { headers: { accept: 'application/json' } })
+  if (response.status === 404) return new Map()
+  if (!response.ok) throw new Error(`Unable to load linked plans (${String(response.status)})`)
+  return taskPlanLinksFrom(await response.json())
 }
 
 async function csrfHeaders(): Promise<Record<string, string>> {
@@ -108,7 +153,38 @@ export async function moveTask(
   })
 }
 
-function TaskCard({ task }: { readonly task: UiTask }): ReactNode {
+export function TaskPlanLinks({
+  taskId,
+  plans,
+}: {
+  readonly taskId: string
+  readonly plans: readonly UiTaskPlanLink[]
+}): ReactNode {
+  if (plans.length === 0) return null
+  return (
+    <div className="luban-board__meta luban-board__plans" aria-label={`Plans for ${taskId}`}>
+      {plans.map((plan) => (
+        <a
+          href={`/luban-plan/plans/${encodeURIComponent(plan.id)}/document`}
+          key={plan.id}
+          target="_blank"
+          rel="noreferrer"
+          title={plan.filePath}
+        >
+          Plan {plan.id} · {plan.status}
+        </a>
+      ))}
+    </div>
+  )
+}
+
+export function TaskCard({
+  task,
+  plans,
+}: {
+  readonly task: UiTask
+  readonly plans: readonly UiTaskPlanLink[]
+}): ReactNode {
   const onDragStart = (event: DragEvent<HTMLElement>): void => {
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData(
@@ -135,6 +211,7 @@ function TaskCard({ task }: { readonly task: UiTask }): ReactNode {
       {task.autoDone === true ? (
         <div className="luban-board__auto">Auto-completed · review required</div>
       ) : null}
+      <TaskPlanLinks taskId={task.id} plans={plans} />
       <div>
         {task.tags.map((tag) => (
           <span className="luban-board__tag" key={tag}>
@@ -148,6 +225,9 @@ function TaskCard({ task }: { readonly task: UiTask }): ReactNode {
 
 export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
   const [tasks, setTasks] = useState<UiTask[]>([])
+  const [planLinks, setPlanLinks] = useState<ReadonlyMap<string, readonly UiTaskPlanLink[]>>(
+    new Map(),
+  )
   const [hostFilter, setHostFilter] = useState('')
   const [workspaceFilter, setWorkspaceFilter] = useState('')
   const [tagFilter, setTagFilter] = useState('')
@@ -162,6 +242,7 @@ export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
     })
     if (!response.ok) throw new Error(`Unable to load tasks (${String(response.status)})`)
     setTasks(tasksFrom(await response.json()))
+    setPlanLinks(await loadTaskPlanLinks())
   }, [])
 
   useEffect(() => {
@@ -323,7 +404,9 @@ export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
               {columnTasks.length === 0 ? (
                 <div className="luban-board__empty">Drop tasks here</div>
               ) : (
-                columnTasks.map((task) => <TaskCard task={task} key={task.id} />)
+                columnTasks.map((task) => (
+                  <TaskCard task={task} plans={planLinks.get(task.id) ?? []} key={task.id} />
+                ))
               )}
             </section>
           )

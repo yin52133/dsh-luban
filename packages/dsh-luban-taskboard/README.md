@@ -9,6 +9,8 @@ atomically written JSON ledger.
 - `backlog → todo → doing → review → done` with a separate `dropped` terminal
   state, explicit transition rules, and optimistic versions.
 - Responsive six-column drag-and-drop board with host, workspace, and tag filters.
+- Direct links from each task card to authenticated Plan documents associated by
+  the shared `taskId` contract when `dsh-luban-plan` is installed.
 - Atomic agent claiming, acceptance criteria, session binding, progress and
   output records, and human review of `autoDone` work.
 - Bounded SSE replay with a full baseline after an event gap.
@@ -67,7 +69,9 @@ taskctl claim --session agent-123 --tag auto-ok
 Create a card with acceptance criteria, drag it from Todo to Doing, and open a
 second browser. Both views refresh from the SSE task event. Autonomous results
 return to Review with an `Auto-completed · review required` marker; only the
-human `review → done` transition clears that marker.
+human `review → done` transition clears that marker. A card linked to one or
+more plans opens each generated Markdown document directly; a profile without
+the Plan plugin keeps the board available without those links.
 
 ## Compatibility
 

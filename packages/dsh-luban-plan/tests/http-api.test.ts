@@ -35,7 +35,7 @@ describe('PlanHttpApi', () => {
     )
   })
 
-  it('serves authenticated submit, list, decision, and Markdown document routes', async () => {
+  it('serves versioned submit, decision, revise, list, and Markdown document routes', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'luban-plan-api-'))
     directories.push(directory)
     const clock: Clock = { now: (): number => 1_788_067_200_000 }
@@ -75,16 +75,66 @@ describe('PlanHttpApi', () => {
       const decisionResponse = await fetch(`${root}/luban-plan/plans/${created.plan.id}/decision`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ decision: 'approve', expectedVersion: created.plan.version }),
+        body: JSON.stringify({
+          decision: 'reject',
+          comment: 'Add rollback verification',
+          expectedVersion: created.plan.version,
+        }),
       })
       expect(decisionResponse.status).toBe(200)
+      const rejected = (await decisionResponse.json()) as {
+        readonly plan: { readonly status: string; readonly version: number }
+      }
+      expect(rejected.plan).toMatchObject({ status: 'rejected', version: 2 })
+
+      const revisedSections = {
+        background: 'why',
+        impact: 'scope',
+        changes: 'file',
+        verification: 'tests and rollback drill',
+      }
+      const reviseResponse = await fetch(`${root}/luban-plan/plans/${created.plan.id}/revise`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sections: revisedSections,
+          expectedVersion: rejected.plan.version,
+        }),
+      })
+      expect(reviseResponse.status).toBe(200)
+      const revised = (await reviseResponse.json()) as {
+        readonly plan: { readonly status: string; readonly version: number }
+      }
+      expect(revised.plan).toMatchObject({ status: 'in-review', version: 3 })
+
+      const staleRevision = await fetch(`${root}/luban-plan/plans/${created.plan.id}/revise`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sections: revisedSections,
+          expectedVersion: rejected.plan.version,
+        }),
+      })
+      expect(staleRevision.status).toBe(409)
+      await expect(staleRevision.json()).resolves.toMatchObject({
+        error: { code: 'E_VERSION_CONFLICT' },
+      })
+
+      const approvalResponse = await fetch(`${root}/luban-plan/plans/${created.plan.id}/decision`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ decision: 'approve', expectedVersion: revised.plan.version }),
+      })
+      expect(approvalResponse.status).toBe(200)
       const listed = (await (await fetch(`${root}/luban-plan/plans`)).json()) as {
         readonly plans: readonly unknown[]
       }
       expect(listed.plans).toHaveLength(1)
       const document = await fetch(`${root}/luban-plan/plans/${created.plan.id}/document`)
       expect(document.headers.get('content-type')).toContain('text/markdown')
-      expect(await document.text()).toContain('Status: `approved`')
+      const markdown = await document.text()
+      expect(markdown).toContain('Status: `approved`')
+      expect(markdown).toContain('tests and rollback drill')
     } finally {
       api.dispose()
       await new Promise<void>((resolve, reject) =>
