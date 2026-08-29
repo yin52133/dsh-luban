@@ -3,6 +3,7 @@ import { Children, isValidElement, type ReactElement, type ReactNode } from 'rea
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply as applyClient,
+  decidePlan,
   isPlanRevisableStatus,
   PlanReviewSection,
   revisePlan,
@@ -108,6 +109,42 @@ describe('Plan client entry', (): void => {
     expect(requests[1]?.init?.method).toBe('POST')
     expect(new Headers(requests[1]?.init?.headers).get('x-luban-csrf')).toBe('csrf-token')
     expect(requests[1]?.init?.body).toBe(JSON.stringify({ sections, expectedVersion: 7 }))
+  })
+
+  it('posts approve and reject decisions with CSRF and structured feedback', async (): Promise<void> => {
+    const requests: { readonly url: string; readonly init: RequestInit | undefined }[] = []
+    const fetchMock: typeof fetch = (input, init): Promise<Response> => {
+      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input
+      requests.push({ url, init })
+      return Promise.resolve(
+        url === '/luban-auth/session'
+          ? new Response(JSON.stringify({ csrfToken: 'csrf-token' }), { status: 200 })
+          : new Response(JSON.stringify({ plan: {} }), { status: 200 }),
+      )
+    }
+    vi.stubGlobal('fetch', fetchMock)
+
+    await decidePlan('P/approve', 'approve', 2)
+    await decidePlan('P/reject', 'reject', 3, 'Add a rollback check')
+
+    const mutations = requests.filter(({ url }) => url.includes('/decision'))
+    expect(mutations.map(({ url }) => url)).toEqual([
+      '/luban-plan/plans/P%2Fapprove/decision',
+      '/luban-plan/plans/P%2Freject/decision',
+    ])
+    expect(mutations.map(({ init }) => new Headers(init?.headers).get('x-luban-csrf'))).toEqual([
+      'csrf-token',
+      'csrf-token',
+    ])
+    expect(
+      mutations.map(({ init }): unknown => {
+        if (typeof init?.body !== 'string') throw new Error('expected a JSON request body')
+        return JSON.parse(init.body) as unknown
+      }),
+    ).toEqual([
+      { decision: 'approve', expectedVersion: 2 },
+      { decision: 'reject', expectedVersion: 3, comment: 'Add a rollback check' },
+    ])
   })
 
   it('surfaces revise endpoint failures for page error reporting', async (): Promise<void> => {

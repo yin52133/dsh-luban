@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,6 +15,10 @@ const sections = {
   changes: 'src/index.ts',
   verification: 'lint, typecheck, build, tests',
 } as const
+
+async function createDirectoryLink(target: string, path: string): Promise<void> {
+  await symlink(target, path, process.platform === 'win32' ? 'junction' : 'dir')
+}
 
 function todoTask(): Task {
   return {
@@ -173,15 +177,17 @@ describe('FilePlanService', () => {
       decision: 'reject',
       comment: 'Add rollback verification',
     })
+    const revising = await service.transition(rejected.id, 'revising', rejected.version)
+    expect(revising.status).toBe('revising')
     const revised = await service.revise(
-      rejected.id,
+      revising.id,
       {
         ...sections,
         verification: 'lint, tests, and rollback drill',
       },
-      rejected.version,
+      revising.version,
     )
-    expect(revised).toMatchObject({ status: 'in-review', version: 3 })
+    expect(revised).toMatchObject({ status: 'in-review', version: 4 })
     expect(await service.getDocument(revised.id)).toContain('rollback drill')
   })
 
@@ -216,5 +222,44 @@ describe('FilePlanService', () => {
     ).rejects.toMatchObject({
       code: 'E_VERSION_CONFLICT',
     })
+  })
+
+  it('rejects a plans directory link that escapes the canonical workspace', async () => {
+    const workspace = join(directory, 'workspace')
+    const outside = join(directory, 'outside')
+    await Promise.all([mkdir(workspace), mkdir(outside)])
+    await createDirectoryLink(outside, join(workspace, 'docs'))
+    const service = new FilePlanService({
+      repository: new PlanRepository(join(directory, 'state.json'), 'docs/plans', clock),
+      protectedTools: [],
+      exemptTools: [],
+    })
+    await service.initialize()
+
+    await expect(service.submit({ workspace, slug: 'escape', sections })).rejects.toMatchObject({
+      code: 'E_IO',
+    })
+    await expect(readdir(outside)).resolves.toEqual([])
+  })
+
+  it('rejects a document-directory junction swapped after the identity fence is captured', async () => {
+    const workspace = join(directory, 'workspace')
+    const outside = join(directory, 'outside')
+    await Promise.all([mkdir(workspace), mkdir(outside)])
+    const service = new FilePlanService({
+      repository: new PlanRepository(join(directory, 'state.json'), 'docs/plans', clock),
+      protectedTools: [],
+      exemptTools: [],
+    })
+    await service.initialize()
+    const plan = await service.submit({ workspace, slug: 'identity-swap', sections })
+    const documentDirectory = join(workspace, 'docs', 'plans')
+    await rm(documentDirectory, { recursive: true, force: true })
+    await createDirectoryLink(outside, documentDirectory)
+
+    await expect(
+      service.decide(plan.id, { decision: 'approve', expectedVersion: plan.version }, reviewer),
+    ).rejects.toMatchObject({ code: 'E_IO' })
+    await expect(readdir(outside)).resolves.toEqual([])
   })
 })

@@ -1,6 +1,17 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { link, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path'
+import {
+  link,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import type {
   Actor,
   Clock,
@@ -33,6 +44,17 @@ export interface StoredPlan extends Plan {
 interface PlanState {
   readonly schemaVersion: 1
   readonly plans: readonly StoredPlan[]
+}
+
+interface DirectoryIdentity {
+  readonly device: number | bigint
+  readonly inode: number | bigint
+  readonly birthtimeMs: number | bigint
+}
+
+interface DirectoryFence {
+  readonly path: string
+  readonly identity: DirectoryIdentity
 }
 
 function record(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -165,6 +187,33 @@ function workspaceRelative(workspace: string, absolutePath: string): string {
   return value.replaceAll('\\', '/')
 }
 
+function samePath(left: string, right: string): boolean {
+  return relative(left, right) === ''
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const child = relative(root, candidate)
+  return child !== '' && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child)
+}
+
+function directoryIdentity(info: Awaited<ReturnType<typeof lstat>>): DirectoryIdentity {
+  return { device: info.dev, inode: info.ino, birthtimeMs: info.birthtimeMs }
+}
+
+function sameDirectoryIdentity(left: DirectoryIdentity, right: DirectoryIdentity): boolean {
+  return (
+    left.device === right.device &&
+    left.inode === right.inode &&
+    left.birthtimeMs === right.birthtimeMs
+  )
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
+  const code = Reflect.get(error, 'code')
+  return typeof code === 'string' ? code : undefined
+}
+
 function normalizedRelativeDirectory(value: string): string {
   const candidate = normalize(value)
   if (candidate === '.' || isAbsolute(candidate) || candidate.split(/[\\/]/u)[0] === '..') {
@@ -177,8 +226,9 @@ async function atomicTextWrite(
   filePath: string,
   content: string,
   exclusive: boolean,
+  assertParent: () => Promise<void>,
 ): Promise<void> {
-  await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
+  await assertParent()
   const temporary = join(dirname(filePath), `.${randomUUID()}.tmp`)
   try {
     await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
@@ -188,6 +238,7 @@ async function atomicTextWrite(
     } finally {
       await handle.close()
     }
+    await assertParent()
     if (exclusive) {
       try {
         await link(temporary, filePath)
@@ -219,6 +270,8 @@ export class PlanRepository {
   readonly #store: AtomicJsonStore<PlanState>
   readonly #plansDir: string
   readonly #clock: Clock
+  readonly #workspaceFences = new Map<string, DirectoryFence>()
+  readonly #documentFences = new Map<string, DirectoryFence>()
 
   public constructor(stateFile: string, plansDir: string, clock: Clock) {
     this.#plansDir = normalizedRelativeDirectory(plansDir)
@@ -242,19 +295,20 @@ export class PlanRepository {
     readonly sessionId?: SessionId
     readonly status?: 'draft' | 'in-review'
   }): Promise<StoredPlan> {
-    const workspace = resolve(input.workspace)
-    const workspaceStat = await stat(workspace).catch((error: unknown): never => {
-      throw new LubanError('E_INVALID_INPUT', `Workspace does not exist: ${workspace}`, {
+    const requestedWorkspace = resolve(input.workspace)
+    const workspaceStat = await stat(requestedWorkspace).catch((error: unknown): never => {
+      throw new LubanError('E_INVALID_INPUT', `Workspace does not exist: ${requestedWorkspace}`, {
         cause: error,
       })
     })
     if (!workspaceStat.isDirectory())
       throw new LubanError('E_INVALID_INPUT', 'workspace must be a directory')
+    const workspace = await realpath(requestedWorkspace)
+    await this.#assertWorkspace(workspace)
     const now = this.#clock.now()
     const slug = normalizeSlug(input.slug)
     const filePath = `${this.#plansDir}/${dateKey(now)}-${slug}.md`
-    const absoluteFile = resolve(workspace, filePath)
-    workspaceRelative(workspace, absoluteFile)
+    const absoluteFile = await this.#documentPathFor(workspace, filePath, true, false)
     const plan: StoredPlan = {
       id: asPlanId(`P-${dateKey(now).replaceAll('-', '')}-${randomBytes(4).toString('hex')}`),
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
@@ -269,7 +323,9 @@ export class PlanRepository {
       createdAt: now,
       updatedAt: now,
     }
-    await atomicTextWrite(absoluteFile, renderPlanDocument(plan), true)
+    await atomicTextWrite(absoluteFile, renderPlanDocument(plan), true, async (): Promise<void> => {
+      await this.#assertDocumentRoot(workspace, true)
+    })
     try {
       await this.#store.update((state): PlanState => ({
         ...state,
@@ -308,7 +364,10 @@ export class PlanRepository {
       }
       const plans = [...state.plans]
       plans[index] = next
-      await atomicTextWrite(this.#documentPath(next), renderPlanDocument(next), false)
+      const path = await this.#documentPath(next, true, true)
+      await atomicTextWrite(path, renderPlanDocument(next), false, async (): Promise<void> => {
+        await this.#assertDocumentRoot(next.workspace, false)
+      })
       result = next
       return { ...state, plans }
     })
@@ -321,7 +380,7 @@ export class PlanRepository {
   }
 
   public async readDocument(plan: StoredPlan): Promise<string> {
-    const path = this.#documentPath(plan)
+    const path = await this.#documentPath(plan, false, true)
     return readFile(path, 'utf8').catch((error: unknown): never => {
       throw new LubanError('E_IO', `Unable to read plan document ${plan.filePath}`, {
         cause: error,
@@ -329,13 +388,106 @@ export class PlanRepository {
     })
   }
 
-  #documentPath(plan: StoredPlan): string {
+  async #documentPath(
+    plan: StoredPlan,
+    createDirectory: boolean,
+    requireFile: boolean,
+  ): Promise<string> {
     const normalized = normalize(plan.filePath).replaceAll('\\', '/')
     if (!normalized.startsWith(`${this.#plansDir}/`)) {
       throw new LubanError('E_IO', `Plan document is outside ${this.#plansDir}`)
     }
-    const absolute = resolve(plan.workspace, normalized)
-    workspaceRelative(plan.workspace, absolute)
-    return absolute
+    return this.#documentPathFor(plan.workspace, normalized, createDirectory, requireFile)
+  }
+
+  async #documentPathFor(
+    workspace: string,
+    filePath: string,
+    createDirectory: boolean,
+    requireFile: boolean,
+  ): Promise<string> {
+    await this.#assertWorkspace(workspace)
+    const absolute = resolve(workspace, filePath)
+    workspaceRelative(workspace, absolute)
+    const documentRoot = await this.#assertDocumentRoot(workspace, createDirectory)
+    const expectedParent = resolve(workspace, dirname(filePath))
+    if (!samePath(documentRoot, expectedParent)) {
+      throw new LubanError('E_IO', 'Plan document parent is outside the canonical plans directory')
+    }
+    const result = join(documentRoot, basename(absolute))
+    if (requireFile) await this.#assertRegularDocument(documentRoot, result)
+    return result
+  }
+
+  async #assertWorkspace(workspace: string): Promise<void> {
+    const [info, resolved] = await Promise.all([lstat(workspace), realpath(workspace)]).catch(
+      (error: unknown): never => {
+        throw new LubanError('E_IO', 'Plan workspace identity is unavailable', { cause: error })
+      },
+    )
+    if (!info.isDirectory() || info.isSymbolicLink() || !samePath(workspace, resolved)) {
+      throw new LubanError('E_IO', 'Plan workspace identity changed or is not canonical')
+    }
+    const current = directoryIdentity(info)
+    const fence = this.#workspaceFences.get(workspace)
+    if (fence !== undefined && !sameDirectoryIdentity(fence.identity, current)) {
+      throw new LubanError('E_IO', 'Plan workspace identity changed or is unavailable')
+    }
+    if (fence === undefined) {
+      this.#workspaceFences.set(workspace, { path: workspace, identity: current })
+    }
+  }
+
+  async #assertDocumentRoot(workspace: string, create: boolean): Promise<string> {
+    await this.#assertWorkspace(workspace)
+    try {
+      let current = workspace
+      for (const segment of this.#plansDir.split('/')) {
+        const candidate = join(current, segment)
+        const info = await lstat(candidate).catch(async (error: unknown) => {
+          if (!create || errorCode(error) !== 'ENOENT') throw error
+          await mkdir(candidate, { mode: 0o700 })
+          return lstat(candidate)
+        })
+        const resolved = await realpath(candidate)
+        if (
+          !info.isDirectory() ||
+          info.isSymbolicLink() ||
+          !samePath(candidate, resolved) ||
+          !isInside(workspace, resolved)
+        ) {
+          throw new LubanError(
+            'E_IO',
+            'Plan document directory resolves outside the workspace or changed identity',
+          )
+        }
+        current = resolved
+      }
+      const identity = directoryIdentity(await lstat(current))
+      const fence = this.#documentFences.get(workspace)
+      if (
+        fence !== undefined &&
+        (!samePath(fence.path, current) || !sameDirectoryIdentity(fence.identity, identity))
+      ) {
+        throw new LubanError('E_IO', 'Plan document directory identity changed or is unavailable')
+      }
+      if (fence === undefined) this.#documentFences.set(workspace, { path: current, identity })
+      return current
+    } catch (error: unknown) {
+      throw error instanceof LubanError
+        ? error
+        : new LubanError('E_IO', 'Plan document directory is unavailable', { cause: error })
+    }
+  }
+
+  async #assertRegularDocument(root: string, filePath: string): Promise<void> {
+    const [info, resolved] = await Promise.all([lstat(filePath), realpath(filePath)]).catch(
+      (error: unknown): never => {
+        throw new LubanError('E_IO', 'Plan document is unavailable', { cause: error })
+      },
+    )
+    if (!info.isFile() || info.isSymbolicLink() || !isInside(root, resolved)) {
+      throw new LubanError('E_IO', 'Plan document is not a canonical regular file')
+    }
   }
 }
