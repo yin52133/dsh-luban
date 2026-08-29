@@ -10,7 +10,10 @@ import importlib
 import importlib.metadata
 import json
 import logging
+import os
 import re
+import shutil
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -24,6 +27,7 @@ EventSink = Callable[[dict[str, Any]], Awaitable[None]]
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024
 _MAX_SCREENSHOT_TOTAL_BYTES = 256 * 1024 * 1024
+_BROWSER_USE_PROFILE_PREFIX = "browser-use-user-data-dir-"
 
 
 class BrowserEngine(Protocol):
@@ -98,7 +102,6 @@ class BrowserUseEngine:
         profile_type = getattr(browser_use, "BrowserProfile")
         kwargs = dict(profile.browser_kwargs)
         kwargs["allowed_domains"] = allow_domains or None
-        browser_profile = profile_type(**kwargs)
         screenshots: list[str] = []
         seen_screenshots: set[str] = set()
         stored_screenshot_bytes = 0
@@ -161,15 +164,23 @@ class BrowserUseEngine:
 
         task = _task_prompt(goal, start_url, output_schema)
         started_at = time.monotonic()
-        agent = agent_type(
-            task=task,
-            browser_profile=browser_profile,
-            register_new_step_callback=on_step,
-            register_should_stop_callback=should_stop,
-            enable_signal_handler=False,
-            use_judge=False,
-        )
+        source_user_data_dir = kwargs["user_data_dir"]
+        owned_profile_copy: Path | None = None
+        agent: Any | None = None
         try:
+            browser_profile = profile_type(**kwargs)
+            owned_profile_copy = _owned_browser_profile_copy(
+                source_user_data_dir,
+                getattr(browser_profile, "user_data_dir", None),
+            )
+            agent = agent_type(
+                task=task,
+                browser_profile=browser_profile,
+                register_new_step_callback=on_step,
+                register_should_stop_callback=should_stop,
+                enable_signal_handler=False,
+                use_judge=False,
+            )
             history = await agent.run(max_steps=max_steps)
             for screenshot in history.screenshot_paths(return_none_if_not_screenshot=False):
                 await record_screenshot(screenshot)
@@ -198,7 +209,16 @@ class BrowserUseEngine:
             self._logger.error("browser-use run failed: %s", error)
             raise BridgeError("E_BROWSER_RUN", "browser-use task failed") from error
         finally:
-            await agent.close()
+            try:
+                if agent is not None:
+                    await agent.close()
+            finally:
+                if owned_profile_copy is not None:
+                    await asyncio.to_thread(
+                        _cleanup_owned_browser_profile_copy,
+                        source_user_data_dir,
+                        owned_profile_copy,
+                    )
 
     async def stop(self) -> None:
         profile = self._profile
@@ -218,6 +238,51 @@ def _prepare_output_root(value: str) -> Path:
     output_root = Path(value).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     return output_root
+
+
+def _owned_browser_profile_copy(source: Any, candidate: Any) -> Path | None:
+    """Return a browser-use owned copy only when it is a safe temp-root child."""
+
+    if not isinstance(source, (str, os.PathLike)) or not isinstance(candidate, (str, os.PathLike)):
+        return None
+    source_path = _absolute_path(source)
+    candidate_path = _absolute_path(candidate)
+    temp_root = _absolute_path(tempfile.gettempdir())
+    name = candidate_path.name
+    if (
+        _same_path(candidate_path, source_path)
+        or not _same_path(candidate_path.parent, temp_root)
+        or not name.startswith(_BROWSER_USE_PROFILE_PREFIX)
+        or name == _BROWSER_USE_PROFILE_PREFIX
+    ):
+        return None
+    try:
+        if candidate_path.is_symlink() or not candidate_path.is_dir():
+            return None
+        resolved_candidate = candidate_path.resolve(strict=True)
+        resolved_temp_child = temp_root.resolve(strict=True) / name
+        resolved_source = source_path.resolve(strict=False)
+    except OSError:
+        return None
+    if not _same_path(resolved_candidate, resolved_temp_child) or _same_path(
+        resolved_candidate, resolved_source
+    ):
+        return None
+    return candidate_path
+
+
+def _cleanup_owned_browser_profile_copy(source: Any, candidate: Path) -> None:
+    safe_candidate = _owned_browser_profile_copy(source, candidate)
+    if safe_candidate is not None:
+        shutil.rmtree(safe_candidate, ignore_errors=True)
+
+
+def _absolute_path(value: str | os.PathLike[str]) -> Path:
+    return Path(os.path.abspath(os.fspath(Path(value).expanduser())))
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.fspath(left)) == os.path.normcase(os.fspath(right))
 
 
 def _read_screenshot(path: Path) -> bytes | None:
