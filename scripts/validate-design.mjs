@@ -15,7 +15,7 @@
  * Usage: node scripts/validate-design.mjs   (exit 0 = pass, 1 = findings)
  */
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { join, relative } from 'node:path'
 
 const ROOT = join(import.meta.dirname, '..')
 const DESIGN = join(ROOT, 'design')
