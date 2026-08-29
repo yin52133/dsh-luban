@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events'
+import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { AuthService } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -185,6 +187,57 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
         LUBAN_SESSION_COOKIE: 'luban_session=secret',
       }),
     ).rejects.toThrow('upstream failed [31m')
+  })
+
+  it('reads refreshed providers through the real loopback HTTP API', async (): Promise<void> => {
+    const telemetry = new DefaultTelemetryAggregator({ refreshMs: 1_000, providerTimeoutMs: 100 })
+    const registerProvider = (used: number, model: string): (() => void) =>
+      telemetry.register({
+        id: 'loopback-provider',
+        capabilities: () => ['context', 'workspace', 'model', 'rates'],
+        sample: () =>
+          Promise.resolve({
+            context: { used, max: 100, ratio: used / 100 },
+            workspace: { name: 'loopback-workspace' },
+            model: { name: model, thinkingDepth: 'medium' },
+            rates: { tpm1m: used, tpm5m: used / 5, rpm1m: 1, rpm5m: 0.2 },
+          }),
+      })
+    let unregisterProvider = registerProvider(25, 'model-a')
+    const api = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig })
+    const server = createServer((request, response): void => {
+      void api.handler(request, response)
+    })
+    await new Promise<void>((resolve, reject): void => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address() as AddressInfo
+    const environment = {
+      LUBAN_URL: `http://127.0.0.1:${String(address.port)}`,
+      LUBAN_SESSION_COOKIE: 'luban_session=ok',
+    }
+
+    try {
+      await expect(runCli([], environment)).resolves.toContain(
+        'Luban HUD [NORMAL] | ctx 25/100 (25.0%)',
+      )
+      await expect(runCli([], environment)).resolves.toContain('model model-a')
+
+      unregisterProvider()
+      unregisterProvider = registerProvider(96, 'model-b')
+
+      const refreshed = await runCli([], environment)
+      expect(refreshed).toContain('Luban HUD [CRITICAL] | ctx 96/100 (96.0%)')
+      expect(refreshed).toContain('model model-b')
+    } finally {
+      unregisterProvider()
+      api.dispose()
+      telemetry.dispose()
+      await new Promise<void>((resolve, reject): void => {
+        server.close((error): void => (error === undefined ? resolve() : reject(error)))
+      })
+    }
   })
 
   it('uses one registered SSE event id for fan-out and performs bounded replay', (): void => {
