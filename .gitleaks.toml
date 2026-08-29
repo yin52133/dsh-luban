@@ -2,3 +2,7 @@ title = "dsh-luban secret scanning policy"
 
 [extend]
 useDefault = true
+
+[[allowlists]]
+description = "Ignore dependency code inside local uv virtual environments"
+paths = ['''(^|/)\.venv/''']

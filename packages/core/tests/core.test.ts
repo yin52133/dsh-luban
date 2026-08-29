@@ -107,14 +107,17 @@ describe('TypedEventBus', (): void => {
 
 describe('redactSecrets', (): void => {
   it('redacts assignments, bearer tokens, provider tokens, and private keys', (): void => {
+    const rsaPrivateKeyHeader = ['-----BEGIN RSA', 'PRIVATE KEY-----'].join(' ')
+    const rsaPrivateKeyFooter = ['-----END RSA', 'PRIVATE KEY-----'].join(' ')
+    const openSshPrivateKeyHeader = ['-----BEGIN OPENSSH', 'PRIVATE KEY-----'].join(' ')
     const input = [
       'password: hunter2',
       'api_key=super-secret',
       'Authorization: Bearer abc.def-123==',
       'ghp_1234567890abcdef',
-      '[REDACTED TEST KEY HEADER]',
+      rsaPrivateKeyHeader,
       'private material',
-      '[REDACTED TEST KEY FOOTER]',
+      rsaPrivateKeyFooter,
     ].join('\n')
 
     const output = redactSecrets(input)
@@ -126,12 +129,12 @@ describe('redactSecrets', (): void => {
     expect(output.match(/\[REDACTED\]/gu)?.length).toBe(5)
 
     const partialKey = redactSecrets(
-      '[REDACTED TEST KEY HEADER]\npartial private material without a footer',
+      `${openSshPrivateKeyHeader}\npartial private material without a footer`,
     )
     expect(partialKey).toBe('[REDACTED]')
 
     const paddedKey = redactSecrets(
-      '[REDACTED TEST KEY HEADER]\nc2VjcmV0LW1hdGVyaWFsPT0=\n[REDACTED TEST KEY FOOTER]',
+      `${rsaPrivateKeyHeader}\nc2VjcmV0LW1hdGVyaWFsPT0=\n${rsaPrivateKeyFooter}`,
     )
     expect(paddedKey).toBe('[REDACTED]')
   })

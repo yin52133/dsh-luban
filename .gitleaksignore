@@ -1,0 +1,2 @@
+# Historical synthetic private-key fixture; current tests construct the marker at runtime.
+94501355dd416a11b1a748964ba72985fd3e4def:packages/core/tests/core.test.ts:private-key:129
