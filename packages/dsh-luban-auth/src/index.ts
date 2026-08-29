@@ -1,4 +1,5 @@
 import { type Context } from '@deepseek-ai/cordis'
+import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import { systemClock } from '@luban/core'
 import { JsonlAuditLogger } from './audit.js'
 import { AuthManager } from './auth-manager.js'
@@ -17,12 +18,31 @@ export * from './state.js'
 export * from './types.js'
 
 export const name = 'luban-auth'
-export const inject: readonly string[] = []
+export const inject = ['webServer']
 export const provide = 'lubanAuth'
+
+function originPort(origin: URL): number {
+  if (origin.port !== '') return Number(origin.port)
+  return origin.protocol === 'https:' ? 443 : 80
+}
+
+/** Refuse a topology that exposes the unauthenticated DSH listener or proxies another service. */
+export function assertProtectedDshUpstream(
+  webServer: Pick<WebServer, 'host' | 'port'>,
+  upstream: URL,
+): void {
+  if (webServer.host !== '127.0.0.1') {
+    throw new TypeError('luban-auth: DSH WebServer must bind to 127.0.0.1')
+  }
+  if (originPort(upstream) !== webServer.port) {
+    throw new TypeError('luban-auth: upstream port must match the DSH WebServer listening port')
+  }
+}
 
 /** Cordis plugin entry point: initialize state, provide AuthService, then own the sidecar effect. */
 export async function apply(ctx: Context, config: LubanAuthConfig): Promise<void> {
   const upstream = parseUpstream(config.upstream)
+  assertProtectedDshUpstream(ctx.webServer, upstream)
   const audit = new JsonlAuditLogger(expandHomePath(config.auditDirectory), systemClock, 30)
   const manager = new AuthManager({
     filePath: expandHomePath(config.usersFile),

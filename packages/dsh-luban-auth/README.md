@@ -25,6 +25,8 @@ dsh plugin --profile web add dsh-luban-auth
 
 Bind the built-in DSH WebServer to loopback (the default example upstream is
 `127.0.0.1:3080`) and expose only the auth sidecar port to the LAN.
+Startup fails closed unless that WebServer reports `127.0.0.1` and its actual
+listening port matches the configured upstream port.
 
 ## Configuration
 
