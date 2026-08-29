@@ -1,0 +1,88 @@
+# dsh-luban-taskboard
+
+Durable six-column work queue for people and DSH agents. The Web board, `taskctl`,
+the importer, and autonomous scheduler all use one authenticated API and one
+atomically written JSON ledger.
+
+## Features
+
+- `backlog → todo → doing → review → done` with a separate `dropped` terminal
+  state, explicit transition rules, and optimistic versions.
+- Responsive six-column drag-and-drop board with host, workspace, and tag filters.
+- Atomic agent claiming, acceptance criteria, session binding, progress and
+  output records, and human review of `autoDone` work.
+- Bounded SSE replay with a full baseline after an event gap.
+- Disabled-by-default night execution with host/tag allowlists, daily quota, and
+  a durable next-day circuit-breaker reset.
+- Idempotent import of common dashi-taskboard and cloader JSON fields.
+
+## Installation
+
+Install the authentication boundary first, then add this plugin to the same DSH
+profile:
+
+```sh
+dsh plugin --profile web add dsh-luban-auth dsh-luban-taskboard
+```
+
+Keep the DSH WebServer on loopback and access the profile through the
+`dsh-luban-auth` sidecar. The taskboard route is `/luban-taskboard`; the browser
+section appears under Settings as **Taskboard**.
+
+## Configuration
+
+```yaml
+- insert:
+    - id: luban-taskboard
+      name: dsh-luban-taskboard
+      config:
+        store: { dir: ~/.dsh/luban/taskboard }
+        hostScope: auto
+        claim: { requireAcceptance: true }
+        night:
+          enabled: false
+          window: 23:30-06:30
+          dailyQuota: 5
+          hostScopeWhitelist: [ubuntu]
+          tagWhitelist: [auto-ok]
+          circuitBreaker: { maxConsecutiveFailures: 3 }
+```
+
+Night mode remains off until explicitly enabled. It only claims `todo` tasks
+that have acceptance criteria and match both allowlists.
+
+`taskctl` talks to the same `/luban-taskboard` HTTP API. Put the complete Cookie
+header in `LUBAN_SESSION_COOKIE` and the CSRF value in `LUBAN_CSRF_TOKEN`; secrets
+are intentionally not accepted as command-line arguments.
+
+```sh
+taskctl list --status todo --tag auto-ok
+taskctl add --title "Verify firmware" --hostScope ubuntu --priority P1 \
+  --acceptance "CI artifact and test log are attached"
+taskctl claim --session agent-123 --tag auto-ok
+```
+
+## Demo
+
+Create a card with acceptance criteria, drag it from Todo to Doing, and open a
+second browser. Both views refresh from the SSE task event. Autonomous results
+return to Review with an `Auto-completed · review required` marker; only the
+human `review → done` transition clears that marker.
+
+## Compatibility
+
+Tested with DeepSeek Harness `0.1.1-rc.2`, Cordis 4.0.1, and Node.js 22.19+.
+The host adapter deliberately uses the rc2 `AgentRegistry` API and does not
+require unreleased session-controller APIs.
+
+## Platform Support
+
+The same package runs on Windows and Ubuntu. Each host owns a ledger named
+`<hostname>-ledger.json`; `hostScope` controls which local agent may claim a
+task. Cross-host ledger aggregation is outside this package.
+
+## License
+
+MIT. See `THIRD-PARTY-NOTICES.md`. The implementation is original; referenced
+taskboard projects informed requirements only and no source or interface assets
+were copied.

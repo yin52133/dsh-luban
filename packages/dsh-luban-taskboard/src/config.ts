@@ -1,0 +1,140 @@
+import { homedir } from 'node:os'
+import { resolve } from 'node:path'
+import type { HostScope } from '@luban/core'
+
+export interface NightConfig {
+  readonly enabled: boolean
+  readonly window: string
+  readonly dailyQuota: number
+  readonly hostScopeWhitelist: readonly Exclude<HostScope, 'any'>[]
+  readonly tagWhitelist: readonly string[]
+  readonly circuitBreaker: {
+    readonly maxConsecutiveFailures: number
+  }
+}
+
+export interface Config {
+  readonly store: {
+    readonly dir: string
+  }
+  readonly hostScope: HostScope | 'auto'
+  readonly claim: {
+    readonly requireAcceptance: boolean
+  }
+  readonly night: NightConfig
+}
+
+const DEFAULT_CONFIG: Config = Object.freeze({
+  store: { dir: '~/.dsh/luban/taskboard' },
+  hostScope: 'auto',
+  claim: { requireAcceptance: true },
+  night: {
+    enabled: false,
+    window: '23:30-06:30',
+    dailyQuota: 5,
+    hostScopeWhitelist: ['ubuntu'] as const,
+    tagWhitelist: ['auto-ok'],
+    circuitBreaker: { maxConsecutiveFailures: 3 },
+  },
+})
+
+type ValidationResult<Value> =
+  | { readonly value: Value }
+  | {
+      readonly issues: readonly {
+        readonly message: string
+        readonly path?: readonly PropertyKey[]
+      }[]
+    }
+
+export interface StandardConfigSchema<Value> {
+  readonly '~standard': {
+    readonly version: 1
+    readonly vendor: 'dsh-luban'
+    validate(input: unknown): ValidationResult<Value>
+  }
+}
+
+function objectValue(input: unknown): Readonly<Record<string, unknown>> {
+  return typeof input === 'object' && input !== null && !Array.isArray(input)
+    ? (input as Readonly<Record<string, unknown>>)
+    : {}
+}
+
+function booleanValue(input: unknown, fallback: boolean): boolean {
+  return typeof input === 'boolean' ? input : fallback
+}
+
+function positiveInteger(input: unknown, fallback: number): number {
+  return typeof input === 'number' && Number.isSafeInteger(input) && input > 0 ? input : fallback
+}
+
+function stringList(input: unknown, fallback: readonly string[]): readonly string[] {
+  return Array.isArray(input) && input.every((value): value is string => typeof value === 'string')
+    ? [...new Set(input.map((value): string => value.trim()).filter(Boolean))]
+    : fallback
+}
+
+export function parseConfig(input: unknown): Config {
+  const root = objectValue(input)
+  const store = objectValue(root.store)
+  const claim = objectValue(root.claim)
+  const night = objectValue(root.night)
+  const breaker = objectValue(night.circuitBreaker)
+  const rawScope = root.hostScope
+  const hostScope: Config['hostScope'] =
+    rawScope === 'win' || rawScope === 'ubuntu' || rawScope === 'any' || rawScope === 'auto'
+      ? rawScope
+      : DEFAULT_CONFIG.hostScope
+  const scopes = stringList(
+    night.hostScopeWhitelist,
+    DEFAULT_CONFIG.night.hostScopeWhitelist,
+  ).filter((value): value is 'win' | 'ubuntu' => value === 'win' || value === 'ubuntu')
+  const window = typeof night.window === 'string' ? night.window : DEFAULT_CONFIG.night.window
+  if (!/^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/u.test(window)) {
+    throw new TypeError('night.window must use HH:mm-HH:mm')
+  }
+  const rawDir =
+    typeof store.dir === 'string' && store.dir.trim() !== ''
+      ? store.dir.trim()
+      : DEFAULT_CONFIG.store.dir
+
+  return {
+    store: { dir: rawDir },
+    hostScope,
+    claim: { requireAcceptance: booleanValue(claim.requireAcceptance, true) },
+    night: {
+      enabled: booleanValue(night.enabled, false),
+      window,
+      dailyQuota: positiveInteger(night.dailyQuota, DEFAULT_CONFIG.night.dailyQuota),
+      hostScopeWhitelist: scopes.length > 0 ? scopes : DEFAULT_CONFIG.night.hostScopeWhitelist,
+      tagWhitelist: stringList(night.tagWhitelist, DEFAULT_CONFIG.night.tagWhitelist),
+      circuitBreaker: {
+        maxConsecutiveFailures: positiveInteger(
+          breaker.maxConsecutiveFailures,
+          DEFAULT_CONFIG.night.circuitBreaker.maxConsecutiveFailures,
+        ),
+      },
+    },
+  }
+}
+
+export function resolveStoreDirectory(path: string): string {
+  if (path === '~') return homedir()
+  if (path.startsWith('~/') || path.startsWith('~\\')) return resolve(homedir(), path.slice(2))
+  return resolve(path)
+}
+
+export const Config: StandardConfigSchema<Config> = Object.freeze({
+  '~standard': {
+    version: 1 as const,
+    vendor: 'dsh-luban' as const,
+    validate(input: unknown): ValidationResult<Config> {
+      try {
+        return { value: parseConfig(input) }
+      } catch (error: unknown) {
+        return { issues: [{ message: error instanceof Error ? error.message : 'invalid config' }] }
+      }
+    },
+  },
+})

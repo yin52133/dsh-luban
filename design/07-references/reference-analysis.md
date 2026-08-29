@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：A/B/C 档台账建立，标注核实状态 |
 | v0.2 | 2026-08-30 | Codex | 核实 browser-use 0.13.8 为 MIT 并确定 uv 集成形态 |
+| v0.3 | 2026-08-30 | Codex | 核实三项 taskboard 参考许可，仅保留 C 档功能描述参考 |
 
 ## 1. A 档 · 插件级安装原版（不进入本仓库代码）
 
@@ -36,9 +37,9 @@
 | 项目 | 地址 | License（核实状态） | 功能亮点（可借鉴的需求） | 不可碰边界 | 受益模块 |
 | --- | --- | --- | --- | --- | --- |
 | dashi-taskboard | github.com/chuspeeism/dashi-taskboard | **Apache-2.0（已核实）** | 任务版本化乐观锁；issue 绑定 git 分支/worktree；CLI 与 UI 共用同一 HTTP API；SSE 广播+断线全量刷新；任务 GFM 描述 | **代码与界面一律不参考**（Apache 档）；不做其「云模式」 | M02 |
-| cloader/dsh-taskboard | github.com/cloader/dsh-taskboard | 待核实 | 人建卡→agent 认领执行→人验收的协作流；任务挂项目（workspace）；指定模型；手动+定时执行 | license 核实前只读 README 级公开描述 | M02 |
-| maochiy/dsh-taskboard-plugin | github.com/maochiy/dsh-taskboard-plugin | 待核实 | 本地 JSON 存储、六列拖拽、任务-会话联动 | 同上 | M02 |
-| dsh-web-ui / dsh-task-board | github.com/zhu1090093659/dsh-web-ui | 待核实 | Host 权威任务账本、真实会话执行、Host cron 调度 | 同上 | M02 |
+| cloader/dsh-taskboard | github.com/cloader/dsh-taskboard | **Apache-2.0（已核实：[LICENSE](https://github.com/cloader/dsh-taskboard/blob/main/LICENSE)）** | 人建卡→agent 认领执行→人验收的协作流；任务挂项目（workspace）；指定模型；手动+定时执行 | **代码与界面一律不参考**；仅按公开描述原创实现 | M02 |
+| maochiy/dsh-taskboard-plugin | github.com/maochiy/dsh-taskboard-plugin | **MIT（已核实：[LICENSE](https://github.com/maochiy/dsh-taskboard-plugin/blob/master/LICENSE)）** | 本地 JSON 存储、六列拖拽、任务-会话联动 | 同上 | M02 |
+| dsh-web-ui / dsh-task-board | github.com/zhu1090093659/dsh-web-ui | **Apache-2.0（已核实：[LICENSE](https://github.com/zhu1090093659/dsh-web-ui/blob/main/LICENSE)）** | Host 权威任务账本、真实会话执行、Host cron 调度 | 同上 | M02 |
 | @linxin666/dsh-web-all（本机已装，观察对象） | npm | 待核实 | LAN 访问/任务板的**需求形态**（其 LAN 无认证是本项目的反面教材） | 不参考代码；作为运行中的参照系观察行为 | M01/M02 |
 | pi-mono（badlogic） | github.com/badlogic/pi-mono | 待核实（MIT 预期） | 极简 agent 上下文工程理念；RPC headless 模式 | license 核实前不读源码 | M08/M09 |
 | pi-agentic-compaction | pi 生态扩展（地址待查证） | 待核实 | 虚拟文件系统式上下文压缩：旧上下文外置为可检索文件 | 同上，仅策略形态参考 | M08 |
@@ -48,7 +49,7 @@
 
 - [ ] dsh-market / dsh-better-sidebar / dsh-memory 的 LICENSE 文件核验并登记（M12-F004 执行时）
 - [x] browser-use license + python 集成成本评估（MIT；0.13.8；uv 隔离 JSONL 子进程）
-- [ ] cloader / maochiy / dsh-web-ui 三家 taskboard license 核验（M02-F009 导入器前）
+- [x] cloader / maochiy / dsh-web-ui 三家 taskboard license 核验（Apache-2.0 / MIT / Apache-2.0；仅 C 档描述参考）
 - [ ] pi-mono / pi-agentic-compaction license 核验（M08-F001 前；核实为 MIT 后允许读源码级参考）
 - [ ] 全部 B 档外部工具版本与许可登记（M10 各通道落地时）
 - [ ] `THIRD-PARTY-NOTICES.md` 生成（首个 release 前，M12-F003）

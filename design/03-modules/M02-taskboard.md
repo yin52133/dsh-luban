@@ -7,6 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                                                     |
 | ---- | ---------- | ----- | ------------------------------------------------------------ |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：看板/范围标签/领单/夜间调度/回写复核/CLI/导入 全量设计 |
+| v0.2 | 2026-08-30 | Codex | 回填 rc2 AgentRegistry 适配、认证 API、实现与测试证据 |
 
 ## 1. 概述与目标
 
@@ -141,7 +142,19 @@ export interface NightScheduler {
 
 M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
 
-## 10. 开放问题
+## 10. 实现与验证记录
 
-- dsh 会话的编程式创建/注入 API 需实测（夜间循环的 F 步骤依赖它；备选：headless profile + RPC）。
+- Host 使用 DSH `0.1.1-rc.2` 已发布的 `AgentRegistry.create()`、`followup()` 与
+  `whenIdle()`；每轮结束释放活动 handle，会话 id 与产出引用保留在任务账本。
+- Host API 统一挂载在 `/luban-taskboard`，所有入口复用 M01 身份，写请求由外层
+  sidecar 校验 Origin/`x-luban-csrf`。Web 与 CLI 不自行复制认证逻辑。
+- `tests/task-store.test.ts` 覆盖状态机、版本冲突、并发原子认领、回写复核、失败与
+  幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复与 rc2
+  agent 适配；`tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE 与断档基线；
+  `tests/client-cli.test.ts` 覆盖客户端槽位、拖拽写 API 与 CLI 同源调用。
+- 发布包生成 Host ESM、`taskctl` 与 rc2 lazy-CJS `client.js`/`client.d.ts`；夜间模式
+  继续默认关闭，真实无人值守执行需在目标 profile 进行部署验收后才启用。
+
+## 11. 开放问题
+
 - 多机聚合视图：等 M05 落地后按需在 MS4+ 评估。

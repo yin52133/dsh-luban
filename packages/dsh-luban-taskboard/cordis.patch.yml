@@ -1,0 +1,18 @@
+# Add the Taskboard host once. The browser face is discovered from dsh.client.
+- insert:
+    - id: luban-taskboard
+      name: dsh-luban-taskboard
+      config:
+        store:
+          dir: ~/.dsh/luban/taskboard
+        hostScope: auto
+        claim:
+          requireAcceptance: true
+        night:
+          enabled: false
+          window: 23:30-06:30
+          dailyQuota: 5
+          hostScopeWhitelist: [ubuntu]
+          tagWhitelist: [auto-ok]
+          circuitBreaker:
+            maxConsecutiveFailures: 3
