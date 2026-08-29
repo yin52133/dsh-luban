@@ -5,8 +5,9 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { AuthService } from '@luban/core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import plugin from '../src/index.js'
+import { PNG_BYTES } from './helpers.js'
 
 function authentication(): AuthService {
   return {
@@ -67,6 +68,67 @@ describe('Cordis lifecycle', () => {
       await agentsFiber.dispose()
       await webFiber.dispose()
       await rm(workspace, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('runs the real TTL sweep on fake time and cancels it on unload', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'luban-image-timer-'))
+    const context = new Context()
+    const webFiber = context.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    const agentsFiber = context.plugin(AgentRegistry)
+    const authFiber = context.plugin({
+      name: 'luban-image-timer-auth',
+      apply(ctx: Context): void {
+        ctx.provide('lubanAuth', authentication())
+      },
+    })
+    let imageFiber: ReturnType<Context['plugin']> | undefined
+    let fakeTimersActive = false
+
+    try {
+      await Promise.all([webFiber, agentsFiber, authFiber])
+      vi.useFakeTimers({
+        now: Date.UTC(2026, 7, 30, 1, 2, 3),
+        toFake: ['Date', 'setInterval', 'clearInterval'],
+      })
+      fakeTimersActive = true
+      imageFiber = context.plugin(plugin, {
+        workspaceRoot: workspace,
+        compression: false,
+        retainDays: 1,
+        cleanupIntervalMinutes: 1,
+      })
+      await imageFiber
+      await context.lubanImageIngest.fromBlob(new Blob([PNG_BYTES], { type: 'image/png' }), {
+        nameHint: 'scheduled-cleanup.png',
+      })
+      const cleanup = vi.spyOn(context.lubanImageIngest, 'cleanup')
+
+      vi.setSystemTime(Date.UTC(2026, 8, 1, 1, 2, 3))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(cleanup).toHaveBeenCalledOnce()
+      expect(cleanup).toHaveBeenCalledWith(false)
+      const result = cleanup.mock.results[0]
+      if (result?.type !== 'return') throw new Error('scheduled cleanup did not return a promise')
+      await result.value
+      await expect(context.lubanImageIngest.recent()).resolves.toEqual([])
+
+      await imageFiber.dispose()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(cleanup).toHaveBeenCalledOnce()
+    } finally {
+      try {
+        await imageFiber?.dispose()
+      } finally {
+        if (fakeTimersActive) {
+          vi.clearAllTimers()
+          vi.useRealTimers()
+        }
+        await authFiber.dispose()
+        await agentsFiber.dispose()
+        await webFiber.dispose()
+        await rm(workspace, { recursive: true, force: true })
+      }
     }
   }, 30_000)
 })
