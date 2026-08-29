@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ------------------------------------------------------------ |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：看板/范围标签/领单/夜间调度/回写复核/CLI/导入 全量设计 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 AgentRegistry 适配、认证 API、实现与测试证据 |
+| v0.3 | 2026-08-30 | Codex | 补齐 SSE 进程重启后的超前游标 baseline 恢复验证 |
 
 ## 1. 概述与目标
 
@@ -148,6 +149,9 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
   `whenIdle()`；每轮结束释放活动 handle，会话 id 与产出引用保留在任务账本。
 - Host API 统一挂载在 `/luban-taskboard`，所有入口复用 M01 身份，写请求由外层
   sidecar 校验 Origin/`x-luban-csrf`。Web 与 CLI 不自行复制认证逻辑。
+- SSE 将事件序号视为单进程游标；`Last-Event-ID` 落后于有界重放窗口或领先于当前
+  进程序号（例如服务重启后）时，立即返回持久化任务全集 baseline，窗口内旧序号
+  继续按原顺序增量重放。
 - `tests/task-store.test.ts` 覆盖状态机、版本冲突、并发原子认领、回写复核、失败与
   幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复与 rc2
   agent 适配；`tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE 与断档基线；

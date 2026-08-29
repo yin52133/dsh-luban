@@ -292,7 +292,8 @@ export class TaskEventStream {
       10,
     )
     const oldest = this.#events[0]?.id ?? this.#sequence
-    const baselineRequired = !Number.isSafeInteger(requested) || requested < oldest - 1
+    const baselineRequired =
+      !Number.isSafeInteger(requested) || requested < oldest - 1 || requested > this.#sequence
     const pending = baselineRequired
       ? [{ id: this.#sequence, event: 'baseline' as const, data: await this.#store.query({}) }]
       : this.#events.filter((event): boolean => event.id > requested)
