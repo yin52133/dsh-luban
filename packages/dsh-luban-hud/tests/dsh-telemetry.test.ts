@@ -4,6 +4,7 @@ import { ReasoningEffortId, createAssistantMessage, createUserMessage } from '@d
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { asSessionId } from '@luban/core'
 import { describe, expect, it } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import {
@@ -12,6 +13,7 @@ import {
   DshRateCollector,
   DshSessionTelemetryProvider,
   type AgentLookup,
+  selectTelemetryAgent,
   tokenUsageTotal,
 } from '../src/dsh-telemetry.js'
 import { SlidingRateWindow, type MonotonicClock } from '../src/rate-window.js'
@@ -88,6 +90,37 @@ function historicalSession(idValue: string, time: number, usage: TokenUsage): Se
 }
 
 describe('rc2 DSH telemetry providers', (): void => {
+  it('selects the current initiator, then newest running, then newest registered agent', (): void => {
+    const initiator = agentFor(session('hud-initiator', resolve('workspace-root', 'initiator')))
+    const runningOld = {
+      ...agentFor(session('hud-running-old', resolve('workspace-root', 'running-old'))),
+      status: 'running',
+    } as Agent
+    const runningNew = {
+      ...agentFor(session('hud-running-new', resolve('workspace-root', 'running-new'))),
+      status: 'running',
+    } as Agent
+    const newest = agentFor(session('hud-newest-idle', resolve('workspace-root', 'newest')))
+    let current: Agent | undefined = initiator
+    let registered: Agent[] = [initiator, runningOld, runningNew, newest]
+    const agents: AgentLookup = {
+      currentInitiator: (): Agent | undefined => current,
+      get: (id): Agent | undefined => registered.find((agent): boolean => agent.id === id),
+      list: (): Agent[] => registered,
+    }
+
+    expect(selectTelemetryAgent(agents)).toBe(initiator)
+    current = undefined
+    expect(selectTelemetryAgent(agents)).toBe(runningNew)
+    registered = [
+      initiator,
+      { ...runningOld, status: 'idle' },
+      { ...runningNew, status: 'idle' },
+      newest,
+    ]
+    expect(selectTelemetryAgent(agents)).toBe(newest)
+  })
+
   it('uses official request/usage fields before the estimator', async (): Promise<void> => {
     const workspaceRoot = resolve('workspace-root')
     const value = session('hud-official', resolve(workspaceRoot, 'firmware', 'app'))
@@ -133,6 +166,39 @@ describe('rc2 DSH telemetry providers', (): void => {
         cacheWriteTokens: 5,
       }),
     ).toBe(115)
+  })
+
+  it('samples the requested session instead of the global newest-agent selection', async (): Promise<void> => {
+    const targetSession = session('hud-target', resolve('workspace-root', 'target'))
+    targetSession.append('request/context', {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      contextWindow: 100,
+    })
+    appendAssistant(targetSession, { inputTokens: 90, outputTokens: 1 })
+    const newestSession = session('hud-newest', resolve('workspace-root', 'newest'))
+    newestSession.append('request/context', {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      contextWindow: 1_000,
+    })
+    appendAssistant(newestSession, { inputTokens: 10, outputTokens: 1 })
+    const targetAgent = agentFor(targetSession)
+    const newestAgent = agentFor(newestSession)
+    const agents: AgentLookup = {
+      currentInitiator: (): Agent | undefined => undefined,
+      get: (id): Agent | undefined =>
+        id === targetAgent.id ? targetAgent : id === newestAgent.id ? newestAgent : undefined,
+      list: (): Agent[] => [targetAgent, newestAgent],
+    }
+    const aggregator = new DefaultTelemetryAggregator({ refreshMs: 1_000, providerTimeoutMs: 100 })
+    aggregator.register(new DshSessionTelemetryProvider(agents, resolve('workspace-root')))
+    aggregator.register(new DshContextEstimatorProvider(agents))
+
+    expect((await aggregator.snapshot()).context.ratio).toBe(0.01)
+    const target = await aggregator.snapshotFor(asSessionId(targetAgent.id))
+    expect(target.context).toEqual({ used: 90, max: 100, ratio: 0.9 })
+    expect(target.workspace.name).toBe('target')
   })
 
   it('falls back to a content estimate while retaining the official context maximum', async (): Promise<void> => {

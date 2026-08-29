@@ -1,4 +1,5 @@
 import type { TelemetryProvider, TelemetrySnapshot } from '@luban/core'
+import { asSessionId } from '@luban/core'
 import { describe, expect, it, vi } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import { parseConfig } from '../src/config.js'
@@ -122,6 +123,39 @@ describe('DefaultTelemetryAggregator', (): void => {
       compactionSuggested: true,
     })
     expect(advisories).toEqual(['normal', 'critical'])
+  })
+
+  it('samples one requested session without replacing or publishing the cached HUD snapshot', async (): Promise<void> => {
+    const monotonic = new ManualClock()
+    const globalSample = vi.fn((): Promise<Partial<TelemetrySnapshot>> =>
+      Promise.resolve({ workspace: { name: 'global-workspace' } }),
+    )
+    const sessionSample = vi.fn(
+      (sessionId: ReturnType<typeof asSessionId>): Promise<Partial<TelemetrySnapshot>> =>
+        Promise.resolve({ workspace: { name: `session:${sessionId}` } }),
+    )
+    const aggregator = new DefaultTelemetryAggregator({
+      monotonicClock: monotonic,
+      refreshMs: 1_000,
+      providerTimeoutMs: 100,
+    })
+    aggregator.register({
+      id: 'session-aware',
+      capabilities: (): readonly ['workspace'] => ['workspace'],
+      sample: globalSample,
+      sampleForSession: sessionSample,
+    })
+    const published: TelemetrySnapshot[] = []
+    aggregator.subscribe((snapshot): void => void published.push(snapshot))
+
+    expect((await aggregator.snapshot()).workspace.name).toBe('global-workspace')
+    const targeted = await aggregator.snapshotFor(asSessionId('target-session'))
+    expect(targeted.workspace.name).toBe('session:target-session')
+    expect((await aggregator.snapshot()).workspace.name).toBe('global-workspace')
+    expect(globalSample).toHaveBeenCalledTimes(1)
+    expect(sessionSample).toHaveBeenCalledExactlyOnceWith('target-session')
+    expect(published).toHaveLength(1)
+    expect(aggregator.history()).toHaveLength(1)
   })
 
   it('times out a hung provider without suppressing healthy fields', async (): Promise<void> => {

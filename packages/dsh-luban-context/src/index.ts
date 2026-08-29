@@ -94,9 +94,11 @@ export function apply(ctx: Context, input: Partial<ContextConfig> = {}): void {
     const unregisterStatus = ctx.on('agent/status', ({ agent, status }): void => {
       coordinator.onAgentStatus(agent, status)
     })
-    return (): void => {
+    return async (): Promise<void> => {
       unregisterStatus()
       unregisterRoute()
+      api.dispose()
+      await coordinator.dispose()
     }
   }, 'luban-context: turn-boundary compaction and replay route lifecycle')
 }

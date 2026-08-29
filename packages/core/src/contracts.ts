@@ -277,11 +277,15 @@ export interface TelemetryProvider {
   readonly id: string
   capabilities(): readonly TelemetryField[]
   sample(): Promise<Partial<TelemetrySnapshot>>
+  /** Sample one live session when the provider has session-scoped data. */
+  sampleForSession?(sessionId: SessionId): Promise<Partial<TelemetrySnapshot>>
 }
 
 export interface TelemetryAggregator {
   register(provider: TelemetryProvider): Unsubscribe
   snapshot(): Promise<TelemetrySnapshot>
+  /** Bypass the global HUD cache and sample the requested session. */
+  snapshotFor(sessionId: SessionId): Promise<TelemetrySnapshot>
   subscribe(listener: (snapshot: TelemetrySnapshot) => void): Unsubscribe
 }
 

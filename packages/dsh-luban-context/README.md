@@ -7,7 +7,7 @@ Auditable context compaction for DSH. The plugin compacts only at an idle turn b
 ### Checklist mapping
 
 - **M08-F001** — zero-intrusion `CompactionStrategy` registration with standalone summarize, virtual-file, and composite strategies.
-- **M08-F002** — telemetry threshold plus minimum-turn-gap triggering; a DSH maintenance task guarantees an idle boundary and replaces only a contiguous old surface prefix.
+- **M08-F002** — exact-session telemetry threshold plus minimum-turn-gap triggering; a DSH maintenance task guarantees an idle boundary and replaces only a contiguous old surface prefix.
 - **M08-F003** — redacted `.luban/context-archive/<session>/seg-*.md` files with checksummed `index.json` lookup.
 - **M08-F004** — durable `audit.json`, authenticated audit/index routes, and checksum-verified segment replay.
 - **M08-F005** — separate day/night cadence; `luban-night-*` sessions select the aggressive profile automatically and schedulers can call `markScope()` or the scope API.
@@ -66,7 +66,7 @@ The first two responses expose the chosen strategy, token estimates, compaction 
 
 ## Runtime behavior
 
-When an agent becomes idle, the coordinator claims a DSH maintenance boundary, samples `lubanTelemetry`, and calls the selected strategy. The default composite strategy:
+When an agent becomes idle, the coordinator claims a DSH maintenance boundary, requests a fresh `lubanTelemetry.snapshotFor(sessionId)`, and calls the selected strategy. The targeted read bypasses the global HUD cache, so another initiator/running/newest agent cannot supply the ratio for this session. The default composite strategy:
 
 1. keeps the newest complete surface messages within the token budget;
 2. archives the old prefix after credential-pattern redaction;
@@ -75,6 +75,7 @@ When an agent becomes idle, the coordinator claims a DSH maintenance boundary, s
 5. records the plan, before/after token estimates, strategy, and archive files.
 
 A strategy failure is retried once. A second failure degrades to archive-only compaction; failure of that safe fallback aborts without an audit success record.
+During plugin disposal, new maintenance and HTTP work fail closed, pre-engine sampling is cancelled, and an already-running engine operation is drained before the lifecycle disposer returns.
 
 ## Strategy API and night coordination
 

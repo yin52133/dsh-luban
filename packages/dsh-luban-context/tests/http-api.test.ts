@@ -72,4 +72,50 @@ describe('ContextHttpApi', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
+
+  it('fails closed when disposal races an in-flight authentication check', async (): Promise<void> => {
+    let releaseAuth:
+      | ((decision: {
+          readonly allowed: true
+          readonly status: 200
+          readonly user: string
+        }) => void)
+      | undefined
+    const decision = new Promise<{
+      readonly allowed: true
+      readonly status: 200
+      readonly user: string
+    }>((resolve): void => {
+      releaseAuth = resolve
+    })
+    const middleware = vi.fn(() => decision)
+    const delayedAuth = {
+      middleware: (): typeof middleware => middleware,
+    } as unknown as AuthService
+    const audit = vi.fn<CompactionEngineWithReplay['audit']>().mockResolvedValue([])
+    const api = new ContextHttpApi({ audit } as unknown as CompactionEngineWithReplay, delayedAuth)
+    const server = createServer((request, response): void => {
+      void api.handler(request, response)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('server did not bind')
+    try {
+      const pending = fetch(
+        `http://127.0.0.1:${String(address.port)}/luban-context/sessions/s-1/audit`,
+      )
+      await vi.waitFor((): void => expect(middleware).toHaveBeenCalledOnce())
+      api.dispose()
+      releaseAuth?.({ allowed: true, status: 200, user: 'operator' })
+
+      const response = await pending
+      expect(response.status).toBe(503)
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'E_UNAVAILABLE' },
+      })
+      expect(audit).not.toHaveBeenCalled()
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
 })

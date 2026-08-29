@@ -232,6 +232,8 @@ export class DshCompactionCoordinator {
   readonly #engine: CompactionEngineWithReplay
   readonly #telemetry: TelemetryAggregator
   readonly #onError: (error: unknown) => void
+  readonly #pending = new Set<Promise<void>>()
+  readonly #lifecycle = new AbortController()
 
   public constructor(options: CompactionCoordinatorOptions) {
     this.#engine = options.engine
@@ -240,18 +242,42 @@ export class DshCompactionCoordinator {
   }
 
   public onAgentStatus(agent: Agent, status: Agent['status']): void {
-    if (status !== 'idle' || agent.session.surface.nodes.length < 2) return
+    if (this.#isDisposed() || status !== 'idle' || agent.session.surface.nodes.length < 2) return
+    let maintenance: Promise<void>
     try {
-      void agent
-        .runMaintenance(async (): Promise<void> => {
-          await this.#engine.maybeCompact(
-            sessionRefFromAgent(agent),
-            await this.#telemetry.snapshot(),
-          )
-        })
-        .catch(this.#onError)
+      maintenance = Promise.resolve(
+        agent.runMaintenance(async (): Promise<void> => {
+          if (this.#isDisposed()) return
+          const session = sessionRefFromAgent(agent)
+          const telemetry = await this.#telemetry.snapshotFor(session.id)
+          if (this.#isDisposed()) return
+          await this.#engine.maybeCompact(session, telemetry)
+        }),
+      )
     } catch (error: unknown) {
-      this.#onError(error)
+      this.#reportError(error)
+      return
     }
+    const tracked = maintenance
+      .catch((error: unknown): void => this.#reportError(error))
+      .finally((): void => void this.#pending.delete(tracked))
+    this.#pending.add(tracked)
+  }
+
+  public async dispose(): Promise<void> {
+    this.#lifecycle.abort()
+    await Promise.allSettled([...this.#pending])
+  }
+
+  #reportError(error: unknown): void {
+    try {
+      this.#onError(error)
+    } catch {
+      // Diagnostics must not escape an agent status listener or lifecycle disposer.
+    }
+  }
+
+  #isDisposed(): boolean {
+    return this.#lifecycle.signal.aborted
   }
 }

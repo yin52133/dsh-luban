@@ -56,7 +56,7 @@ flowchart LR
 | PlanService / PlanGuard | M04 | M02 | [M04 §4](../03-modules/M04-plan.md) |
 | SessionRegistry | M05 | M02 | [M05 §4](../03-modules/M05-session-share.md) |
 | ImageIngestService | M06 | M10 | [M06 §4](../03-modules/M06-image-paste.md) |
-| TelemetryAggregator / TelemetryProvider | M07 | M08、M02 | [M07 §4](../03-modules/M07-hud.md) |
+| TelemetryAggregator / TelemetryProvider | M07 | M08 | [M07 §4](../03-modules/M07-hud.md) |
 | CompactionEngine / CompactionStrategy | M08 | M02 | [M08 §4](../03-modules/M08-context.md) |
 | ServerModeService | M09 | — | [M09 §4](../03-modules/M09-server-mode.md) |
 | ChannelAdapter / WinDebugService | M10 | M06 | [M10 §4](../03-modules/M10-win-debug.md) |
@@ -92,7 +92,7 @@ flowchart LR
 | `luban.night.status` | windowActive、quotaUsed、circuit | M02 | HUD、看板 |
 | `luban.keepalive.health` | sessionId、alive、detail | M03 | 看板告警、HUD |
 | `luban.session.lock` | sessionId、holder、role | M05 | 看板、HUD |
-| `luban.telemetry.snapshot` | TelemetrySnapshot（节流 1s） | M07 | HUD UI、M08 |
+| `luban.telemetry.snapshot` | TelemetrySnapshot（节流 1s） | M07 | 扩展插件 |
 | `luban.compaction.done` | sessionId、strategy、前后 token | M08 | HUD、审计 |
 | `luban.channel.data` | endpointId、kind、方向 | M10 | 监视 UI |
 | `luban.build.job` | jobId、状态迁移 | M09 | 看板 |

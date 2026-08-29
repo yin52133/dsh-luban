@@ -1,8 +1,12 @@
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock, TokenUsage } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type { Clock, TelemetryProvider, TelemetrySnapshot } from '@luban/core'
+import {
+  SessionId as DshSessionId,
+  type Session,
+  type SessionEvent,
+} from '@deepseek-ai/dsh-session'
+import type { Clock, SessionId, TelemetryProvider, TelemetrySnapshot } from '@luban/core'
 import { systemClock } from '@luban/core'
 import type { MonotonicClock, SlidingRateWindow } from './rate-window.js'
 import { systemMonotonicClock } from './rate-window.js'
@@ -24,6 +28,14 @@ export function selectTelemetryAgent(agents: AgentLookup): Agent | undefined {
   }
   const registered = agents.list()
   return registered.findLast((agent): boolean => agent.status === 'running') ?? registered.at(-1)
+}
+
+function telemetryAgentById(agents: AgentLookup, sessionId: SessionId): Agent | undefined {
+  try {
+    return agents.get(DshSessionId(sessionId))
+  } catch {
+    return undefined
+  }
 }
 
 function tokenCountTotal(values: readonly unknown[]): number | 'unknown' {
@@ -148,7 +160,14 @@ export class DshSessionTelemetryProvider implements TelemetryProvider {
   }
 
   public sample(): Promise<Partial<TelemetrySnapshot>> {
-    const agent = selectTelemetryAgent(this.#agents)
+    return this.#sampleAgent(selectTelemetryAgent(this.#agents))
+  }
+
+  public sampleForSession(sessionId: SessionId): Promise<Partial<TelemetrySnapshot>> {
+    return this.#sampleAgent(telemetryAgentById(this.#agents, sessionId))
+  }
+
+  #sampleAgent(agent: Agent | undefined): Promise<Partial<TelemetrySnapshot>> {
     if (agent === undefined) return Promise.resolve({})
     const requestContext = agent.session.requestContext()
     const requestHeader = agent.session.requestHeader()
@@ -188,7 +207,14 @@ export class DshContextEstimatorProvider implements TelemetryProvider {
   }
 
   public sample(): Promise<Partial<TelemetrySnapshot>> {
-    const agent = selectTelemetryAgent(this.#agents)
+    return this.#sampleAgent(selectTelemetryAgent(this.#agents))
+  }
+
+  public sampleForSession(sessionId: SessionId): Promise<Partial<TelemetrySnapshot>> {
+    return this.#sampleAgent(telemetryAgentById(this.#agents, sessionId))
+  }
+
+  #sampleAgent(agent: Agent | undefined): Promise<Partial<TelemetrySnapshot>> {
     return Promise.resolve(
       agent === undefined
         ? {}

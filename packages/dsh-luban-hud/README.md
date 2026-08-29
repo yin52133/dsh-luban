@@ -9,7 +9,7 @@ An authenticated, always-visible DSH telemetry HUD backed by concurrent, pluggab
 - **M07-F003** — workspace-relative display plus live model and reasoning-effort values from public rc2 `Session`/`AgentRegistry` interfaces. Selection prefers the current initiator, then a running agent, then the newest registered agent.
 - **M07-F004** — monotonic 1-minute and 5-minute sliding TPM/RPM windows. Cached input/output fields are disjoint and included; reasoning tokens are not double-counted inside output.
 - **M07-F005** — compact/full Web status bar in the official rc2 `shell.overlay` slot and a one-line `luban-hud` CLI rendered from the same snapshot response.
-- **M07-F006** — normal/warn/danger/critical states at 70%/85%/95%; critical renders a compaction advisory while M08 independently consumes `lubanTelemetry.snapshot()` without a runtime dependency cycle.
+- **M07-F006** — normal/warn/danger/critical states at 70%/85%/95%; critical renders a compaction advisory while M08 independently requests a fresh `lubanTelemetry.snapshotFor(sessionId)` without a runtime dependency cycle.
 
 One-hour history is an in-memory, time-bounded ring. Telemetry contains metadata only and never session text. Browser SSE is closed while the page is hidden.
 
@@ -21,7 +21,7 @@ Install after the rc2 agent/Web runtime and `dsh-luban-auth`, then apply the bun
 dsh plugin --profile default add dsh-luban-hud
 ```
 
-The host provides `lubanTelemetry`; M08 can inject that Core contract. No production dependency is added beyond `@luban/core`.
+The host provides `lubanTelemetry`; M08 can inject that Core contract and request one exact live session without replacing or publishing the cached HUD snapshot. No production dependency is added beyond `@luban/core`.
 
 For development, run package-scoped gates from the repository root:
 

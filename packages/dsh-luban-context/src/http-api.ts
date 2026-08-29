@@ -78,6 +78,7 @@ async function requireAuth(
 export class ContextHttpApi {
   readonly #engine: CompactionEngineWithReplay
   readonly #auth: AuthService
+  #disposed = false
 
   public constructor(engine: CompactionEngineWithReplay, auth: AuthService) {
     this.#engine = engine
@@ -94,6 +95,7 @@ export class ContextHttpApi {
         throw new LubanError('E_NOT_FOUND', 'Route not found')
       }
       await requireAuth(request, url.pathname, this.#auth)
+      this.#assertAvailable()
       const path = url.pathname.slice(PREFIX.length) || '/'
       const method = request.method ?? 'GET'
       if (method === 'GET' && path === '/profiles') {
@@ -109,26 +111,29 @@ export class ContextHttpApi {
       }
       const sessionId = asSessionId(decodeURIComponent(match[1]))
       if (method === 'GET' && match[2] === 'audit') {
-        sendJson(response, 200, { records: await this.#engine.audit(sessionId) })
+        const records = await this.#engine.audit(sessionId)
+        this.#assertAvailable()
+        sendJson(response, 200, { records })
         return
       }
       if (method === 'GET' && match[2] === 'archives') {
-        sendJson(response, 200, { entries: await this.#engine.archives(sessionId) })
+        const entries = await this.#engine.archives(sessionId)
+        this.#assertAvailable()
+        sendJson(response, 200, { entries })
         return
       }
       if (method === 'GET' && match[2] === 'replay') {
         const archivePath = url.searchParams.get('path')
-        sendText(
-          response,
-          200,
+        const body =
           archivePath === null
             ? await this.#engine.replay(
                 sessionId,
                 safeInteger(url.searchParams.get('startSeq'), 'startSeq'),
                 safeInteger(url.searchParams.get('endSeq'), 'endSeq'),
               )
-            : await this.#engine.replayFile(sessionId, archivePath),
-        )
+            : await this.#engine.replayFile(sessionId, archivePath)
+        this.#assertAvailable()
+        sendText(response, 200, body)
         return
       }
       if (method === 'POST' && match[2] === 'scope') {
@@ -153,5 +158,13 @@ export class ContextHttpApi {
         : new LubanError('E_IO', 'Context request failed', { cause: error })
       sendJson(response, errorStatus(normalized), { error: normalized.toJSON() })
     }
+  }
+
+  public dispose(): void {
+    this.#disposed = true
+  }
+
+  #assertAvailable(): void {
+    if (this.#disposed) throw new LubanError('E_UNAVAILABLE', 'Context API is disposed')
   }
 }

@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：遥测聚合/用量/环境/速率/展示/阈值 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 遥测口径、SSE、降级与验证证据 |
+| v0.3 | 2026-08-30 | Codex | 增加会话定向新鲜采样，消除多 agent 缓存串扰 |
 
 ## 1. 概述与目标
 
@@ -53,11 +54,13 @@ export interface TelemetryProvider {
   readonly id: string;
   capabilities(): TelemetryField[];          // 声明可提供哪些字段
   sample(): Promise<Partial<TelemetrySnapshot>>;
+  sampleForSession?(sessionId: SessionId): Promise<Partial<TelemetrySnapshot>>;
 }
 
 export interface TelemetryAggregator {
   register(p: TelemetryProvider): Unsubscribe;
   snapshot(): Promise<TelemetrySnapshot>;     // 字段级合并，缺失字段标 unknown
+  snapshotFor(sessionId: SessionId): Promise<TelemetrySnapshot>; // 不复用全局 HUD 缓存
   subscribe(listener: (s: TelemetrySnapshot) => void): Unsubscribe;
 }
 
@@ -113,11 +116,13 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 - context pressure 口径为 input + cache read + cache write；TPM 使用 input + output + cache read + cache write，
   reasoning token 已包含在 output 中不重复计数。1m/5m 均使用 monotonic 滑动窗口，历史事件按 wall-clock age 映射。
 - `DefaultTelemetryAggregator` 并发采样、按 Provider 注册顺序做字段级 first-wins 合并；generation 防止注册/卸载竞态提交陈旧结果。
+- `snapshotFor(sessionId)` 对指定 live agent 重新采样，不读取或替换全局 HUD 缓存，也不向订阅者发布；
+  M08 因而不会把 initiator/running/newest 的全局选择结果误用于另一个刚进入 idle 的会话。
 - Web 使用官方 `shell.overlay` slot，并在页面隐藏时关闭 SSE；CLI 从环境读取 Cookie，输出单行去控制字符，HTTP 10 秒超时。
 - SSE 支持共享 ID、`Last-Event-ID`、256 条 replay 与断档 baseline；API/stream 在插件卸载竞态中 fail closed。
-- 本地 Prettier、严格类型、ESLint、构建、18 项 M07 测试、architecture、release metadata 与 pack dry-run 通过。
+- 本地 Prettier、严格类型、ESLint、构建、21 项 M07 测试、architecture、release metadata 与 pack dry-run 通过。
 
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu DSH profile 核对 workspace/model/reasoning 切换、Web 常驻 HUD、CLI 首行与页面隐藏重连。
-- 仍需用真实 Provider/账单流水验证 TPM/RPM 口径，并联调 M08 在 critical 阈值下读取 snapshot 后给出压缩建议。
+- 仍需用真实 Provider/账单流水验证 TPM/RPM 口径，并在真实长会话复核 M08 的会话定向采样与压缩质量。

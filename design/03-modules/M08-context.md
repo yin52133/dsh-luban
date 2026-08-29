@@ -8,6 +8,7 @@ Codex 式上下文工程的本地实现：阈值触发自动压缩 + 旧上下�
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：策略接口/自动压缩/虚拟文件/审计/协同 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 回合边界、可审计归档与降级实现验证 |
+| v0.3 | 2026-08-30 | Codex | 补齐会话定向遥测与卸载期间维护任务收口 |
 
 ## 1. 概述与目标
 
@@ -31,13 +32,16 @@ Codex 式上下文工程的本地实现：阈值触发自动压缩 + 旧上下�
 ```mermaid
 sequenceDiagram
     autonumber
-    participant H as M07 HUD（ratio 信号）
+    participant H as M07 TelemetryAggregator
     participant C as CompactionEngine
     participant S as 活跃策略
     participant V as 虚拟文件仓库
     participant A as agent 会话
-    H->>C: ratio ≥ threshold
-    C->>C: 等待回合边界（不打断工具调用）
+    A->>C: agent/status = idle
+    C->>C: 进入 maintenance 边界（不打断工具调用）
+    C->>H: snapshotFor(sessionId)
+    H-->>C: 指定会话的新鲜 ratio
+    C->>C: ratio ≥ threshold？
     C->>S: plan(segments, budget)
     S->>V: 归档较早分段原文（M08-F003）
     S->>A: 注入分段摘要 + 归档索引说明
@@ -91,6 +95,8 @@ export interface CompactionEngine {
 ## 8. 非功能与安全
 
 - 压缩期间会话不可被打断（回合边界保证）；失败重试一次后降级为「只归档不摘要」并告警。
+- 插件卸载先拒绝新维护任务和 HTTP 请求；遥测等待中的任务在进入 engine 前取消，已进入 engine 的任务由
+  disposer 排空后才完成卸载，避免卸载返回后继续修改会话 surface。
 - 归档目录遵守 P6.1：不含密钥等敏感内容（归档来源本就是会话内容，正常情况下无密钥；仍做正则扫描打码）。
 
 ## 9. checklist 映射
@@ -112,5 +118,7 @@ M08-F001 ~ M08-F005 共 5 项，与 `checklist.json` 一一对应。
   多轮复用同一临时序号时仍保留各代文件，可按范围取最新或按索引路径精确回放。
 - 主策略失败重试一次，再降级为仅归档；day/night profile 可独立选策略、阈值和预算，
   `/luban-context` 提供认证审计、索引、回放和 scope API。
-- 本地 Prettier、ESLint、严格类型检查、构建、12 项测试、发布元数据与 npm pack 白名单审计通过；
+- idle coordinator 通过 `snapshotFor(sessionId)` 强制读取准确且不走 HUD 缓存的会话快照；卸载竞态覆盖
+  auth 等待、engine 前取消、已运行 engine 排空与卸载后拒绝新任务。
+- 本地 Prettier、ESLint、严格类型检查、构建、17 项测试、发布元数据与 npm pack 白名单审计通过；
   测试覆盖真实 rc2 Session surface，未调用外部模型或服务。

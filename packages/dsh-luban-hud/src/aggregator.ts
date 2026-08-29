@@ -1,5 +1,6 @@
 import type {
   Clock,
+  SessionId,
   TelemetryAggregator,
   TelemetryField,
   TelemetryProvider,
@@ -216,6 +217,15 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
     return this.envelope().then((envelope): TelemetrySnapshot => envelope.snapshot)
   }
 
+  public snapshotFor(sessionId: SessionId): Promise<TelemetrySnapshot> {
+    return this.#sample(
+      this.#monotonicClock.now(),
+      this.#providerGeneration,
+      sessionId,
+      false,
+    ).then((envelope): TelemetrySnapshot => envelope.snapshot)
+  }
+
   public envelope(): Promise<HudTelemetryEnvelope> {
     const now = this.#monotonicClock.now()
     if (this.#lastEnvelope !== undefined && now - this.#lastSampleAt < this.#refreshMs) {
@@ -269,19 +279,28 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
     }
   }
 
-  async #sample(monotonicAt: number, providerGeneration: number): Promise<HudTelemetryEnvelope> {
+  async #sample(
+    monotonicAt: number,
+    providerGeneration: number,
+    sessionId?: SessionId,
+    publish = true,
+  ): Promise<HudTelemetryEnvelope> {
     const providers = [...this.#providers.values()]
     const results = await Promise.allSettled(
       providers.map(async ({ provider }): Promise<Partial<TelemetrySnapshot>> =>
         timeout(
-          Promise.resolve().then(() => provider.sample()),
+          Promise.resolve().then(() =>
+            sessionId === undefined || provider.sampleForSession === undefined
+              ? provider.sample()
+              : provider.sampleForSession(sessionId),
+          ),
           this.#providerTimeoutMs,
           provider.id,
         ),
       ),
     )
     if (providerGeneration !== this.#providerGeneration) {
-      return this.#sample(this.#monotonicClock.now(), this.#providerGeneration)
+      return this.#sample(this.#monotonicClock.now(), this.#providerGeneration, sessionId, publish)
     }
     const at = this.#clock.now()
     const snapshot = unknownSnapshot(at)
@@ -410,7 +429,7 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
         .join('+')
     }
     if (providerGeneration !== this.#providerGeneration) {
-      return this.#sample(this.#monotonicClock.now(), this.#providerGeneration)
+      return this.#sample(this.#monotonicClock.now(), this.#providerGeneration, sessionId, publish)
     }
 
     const finalSnapshot = freezeSnapshot(mutable)
@@ -421,6 +440,7 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
       sources: Object.freeze({ ...sources }),
       failures: Object.freeze(failures),
     })
+    if (!publish) return envelope
     const previousLevel = this.#lastEnvelope?.advisory.level
     this.#lastEnvelope = envelope
     this.#lastSampleAt = monotonicAt
