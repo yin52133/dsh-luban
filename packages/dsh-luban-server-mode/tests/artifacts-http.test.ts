@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -109,6 +109,30 @@ describe('ArtifactManager and ArtifactLinkSigner', (): void => {
 
     await manager.prune([jobId])
     await expect(manager.discover(jobId)).resolves.toEqual([])
+  })
+
+  it('rejects a job-directory junction without reading or pruning its target', async (): Promise<void> => {
+    const directory = join(tmpdir(), `luban-artifact-junction-${randomUUID()}`)
+    const root = join(directory, 'artifacts')
+    const outside = join(directory, 'outside')
+    directories.add(directory)
+    await mkdir(root, { recursive: true })
+    await mkdir(outside, { recursive: true })
+    await writeFile(join(outside, 'private.txt'), 'outside', 'utf8')
+    const jobId = randomUUID()
+    await symlink(outside, join(root, jobId), process.platform === 'win32' ? 'junction' : 'dir')
+    const manager = new ArtifactManager(root)
+
+    await expect(manager.discover(jobId)).rejects.toThrow(/symbolic link|junction/u)
+    await expect(
+      manager.secureFile(jobId, {
+        name: 'private.txt',
+        path: join(root, jobId, 'private.txt'),
+        sizeBytes: 7,
+      }),
+    ).rejects.toThrow(/symbolic link|junction/u)
+    await expect(manager.prune([jobId])).rejects.toThrow(/symbolic link|junction/u)
+    await expect(access(join(outside, 'private.txt'))).resolves.toBeUndefined()
   })
 })
 

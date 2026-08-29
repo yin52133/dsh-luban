@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import type { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
@@ -338,5 +338,38 @@ describe('M09 resource and process boundaries', (): void => {
     expect(JSON.parse(await readFile(resultFile, 'utf8'))).toEqual(result)
     expect(processIsAlive(pid)).toBe(false)
     childProcesses.delete(pid)
+  })
+
+  it('refuses a forged worker spec whose cwd was replaced by a junction', async (): Promise<void> => {
+    const directory = join(tmpdir(), `luban-worker-junction-${randomUUID()}`)
+    const workspaceRoot = join(directory, 'workspace')
+    const outside = join(directory, 'outside')
+    const linked = join(workspaceRoot, 'linked')
+    const resultFile = join(directory, 'result.json')
+    const specFile = join(directory, 'worker.json')
+    directories.add(directory)
+    await mkdir(workspaceRoot, { recursive: true })
+    await mkdir(outside, { recursive: true })
+    await symlink(outside, linked, process.platform === 'win32' ? 'junction' : 'dir')
+    await writeFile(
+      specFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        command: process.execPath,
+        args: ['-e', 'require("node:fs").writeFileSync("escaped.txt", "should-not-run")'],
+        cwd: linked,
+        timeoutMs: 5_000,
+        artifactDirectory: join(directory, 'artifacts'),
+        collect: [],
+        resultFile,
+      }),
+      'utf8',
+    )
+
+    const result = await runWorker(specFile)
+
+    expect(result).toMatchObject({ exitCode: 1 })
+    expect(result.stderr).toMatch(/junction|identity changed/u)
+    await expect(access(join(outside, 'escaped.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

@@ -1,7 +1,8 @@
-import { isAbsolute, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { LubanError } from '@luban/core'
 import type { BuildTemplateConfig } from './config.js'
 import { resolveUserPath } from './config.js'
+import { canonicalExistingDirectoryWithinSync, canonicalWithinSync } from './path-boundary.js'
 import type { WorkerSpec } from './worker-protocol.js'
 
 const PLACEHOLDER = /\$\{([a-zA-Z][a-zA-Z0-9_]*)\}/gu
@@ -78,11 +79,13 @@ export function compileTemplate(input: CompileTemplateInput): WorkerSpec {
     jobId: input.jobId,
     artifactDir: input.artifactDirectory,
   }
-  const cwd = resolveUserPath(interpolate(input.template.cwd, values))
+  const requestedCwd = resolveUserPath(interpolate(input.template.cwd, values))
   const roots = input.workspaceRoots.map(resolveUserPath)
-  if (!roots.some((root): boolean => inside(root, cwd))) {
-    throw new LubanError('E_INVALID_INPUT', 'build workspace is outside configured roots')
-  }
+  const cwd = canonicalExistingDirectoryWithinSync(
+    roots,
+    requestedCwd,
+    'build workspace is outside configured roots or resolves through a junction',
+  )
   const collect = input.template.collect.map((value): string => {
     const expanded = interpolate(value, values)
     const source = resolve(cwd, expanded)
@@ -91,14 +94,26 @@ export function compileTemplate(input: CompileTemplateInput): WorkerSpec {
     }
     return source
   })
+  const requestedArtifactDirectory = resolve(input.artifactDirectory)
+  const artifactDirectory = canonicalWithinSync(
+    dirname(requestedArtifactDirectory),
+    requestedArtifactDirectory,
+    'artifact directory resolves outside its configured root',
+  )
+  const requestedResultFile = resolve(input.resultFile)
+  const resultFile = canonicalWithinSync(
+    dirname(requestedResultFile),
+    requestedResultFile,
+    'worker result path resolves outside its configured directory',
+  )
   return {
     schemaVersion: 1,
     command: input.template.command,
     args: input.template.args.map((value): string => interpolate(value, values)),
     cwd,
     timeoutMs: input.timeoutMs,
-    artifactDirectory: resolve(input.artifactDirectory),
+    artifactDirectory,
     collect,
-    resultFile: resolve(input.resultFile),
+    resultFile,
   }
 }

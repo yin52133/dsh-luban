@@ -4,6 +4,12 @@ import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { NodeProcessRunner } from './process-runner.js'
+import {
+  canonicalExistingWithin,
+  rejectSymbolicLink,
+  stableCanonicalDirectory,
+  stableCanonicalPath,
+} from './path-boundary.js'
 import { decodeWorkerResult, decodeWorkerSpec, type WorkerResult } from './worker-protocol.js'
 
 interface CopyBudget {
@@ -47,8 +53,16 @@ async function copyTree(source: string, target: string, budget: CopyBudget): Pro
   await copyFile(source, target)
 }
 
-async function collectArtifacts(sources: readonly string[], directory: string): Promise<void> {
+async function collectArtifacts(
+  sources: readonly string[],
+  directory: string,
+  workspace: string,
+): Promise<void> {
+  await stableCanonicalPath(dirname(directory), 'artifact root identity changed')
+  await stableCanonicalPath(directory, 'artifact directory resolves through a junction')
+  await rejectSymbolicLink(directory, 'artifact directory cannot be a symbolic link or junction')
   await mkdir(directory, { recursive: true, mode: 0o700 })
+  await stableCanonicalDirectory(directory, 'artifact directory identity changed')
   const budget: CopyBudget = { files: 0 }
   const names = new Set<string>()
   for (const source of sources) {
@@ -56,7 +70,12 @@ async function collectArtifacts(sources: readonly string[], directory: string): 
     if (names.has(name)) throw new Error(`duplicate artifact root ${name}`)
     names.add(name)
     try {
-      await copyTree(source, join(directory, name), budget)
+      const canonicalSource = await canonicalExistingWithin(
+        [workspace],
+        source,
+        'artifact source resolves outside the build workspace',
+      )
+      await copyTree(canonicalSource, join(directory, name), budget)
     } catch (error: unknown) {
       if (typeof error === 'object' && error !== null && Reflect.get(error, 'code') === 'ENOENT') {
         continue
@@ -81,8 +100,12 @@ export async function runWorker(specFile: string): Promise<WorkerResult> {
   process.once('SIGTERM', abort)
   let result: WorkerResult
   try {
+    const cwd = await stableCanonicalDirectory(
+      spec.cwd,
+      'build workspace identity changed or resolves through a junction',
+    )
     const executed = await new NodeProcessRunner().run(spec.command, spec.args, {
-      cwd: spec.cwd,
+      cwd,
       timeoutMs: spec.timeoutMs,
       signal: controller.signal,
       maxOutputBytes: 256 * 1024,
@@ -91,7 +114,7 @@ export async function runWorker(specFile: string): Promise<WorkerResult> {
     let stderr = executed.stderr
     if (exitCode === 0) {
       try {
-        await collectArtifacts(spec.collect, spec.artifactDirectory)
+        await collectArtifacts(spec.collect, spec.artifactDirectory, cwd)
       } catch (error: unknown) {
         exitCode = 1
         const message = error instanceof Error ? error.message : 'artifact collection failed'

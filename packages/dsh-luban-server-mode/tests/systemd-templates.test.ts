@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -117,9 +117,10 @@ describe('UserSystemdInstaller', (): void => {
 })
 
 describe('build config and template compiler', (): void => {
-  it('compiles params as argv values inside configured workspace roots', (): void => {
+  it('compiles params as argv values inside configured workspace roots', async (): Promise<void> => {
     const root = temporaryDirectory('luban-workspaces')
     const workspace = join(root, 'firmware')
+    await mkdir(workspace, { recursive: true })
     const spec = compileTemplate({
       template: {
         id: 'firmware',
@@ -147,8 +148,9 @@ describe('build config and template compiler', (): void => {
     expect(spec.collect).toEqual([join(workspace, 'build/firmware.bin')])
   })
 
-  it('blocks workspace escape, collection traversal, unknown params, and dynamic executables', (): void => {
+  it('blocks workspace escape, collection traversal, unknown params, and dynamic executables', async (): Promise<void> => {
     const root = temporaryDirectory('luban-safe-root')
+    await mkdir(join(root, 'project'), { recursive: true })
     const base = {
       params: { workspace: join(root, 'project') },
       jobId: randomUUID(),
@@ -212,5 +214,33 @@ describe('build config and template compiler', (): void => {
       }),
     ).toThrow(/executable/u)
     expect(() => parseConfig({ build: { maxConcurrent: 0 } })).toThrow(/positive integer/u)
+  })
+
+  it('rejects a workspace junction that resolves outside its configured root', async (): Promise<void> => {
+    const root = temporaryDirectory('luban-junction-root')
+    const outside = temporaryDirectory('luban-junction-outside')
+    await mkdir(root, { recursive: true })
+    await mkdir(outside, { recursive: true })
+    const linked = join(root, 'linked-workspace')
+    await symlink(outside, linked, process.platform === 'win32' ? 'junction' : 'dir')
+
+    expect(() =>
+      compileTemplate({
+        template: {
+          id: 'junction',
+          title: 'junction',
+          command: process.execPath,
+          args: ['-e', 'process.exit(0)'],
+          cwd: '${workspace}',
+          collect: ['secret.txt'],
+        },
+        params: { workspace: linked },
+        jobId: randomUUID(),
+        artifactDirectory: join(root, 'artifacts'),
+        resultFile: join(root, 'result.json'),
+        timeoutMs: 1_000,
+        workspaceRoots: [root],
+      }),
+    ).toThrow(/junction|outside configured roots/u)
   })
 })

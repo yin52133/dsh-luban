@@ -1,8 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import type { Stats } from 'node:fs'
 import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ArtifactRef } from '@luban/core'
 import { LubanError } from '@luban/core'
+import { canonicalExistingWithin } from './path-boundary.js'
 
 function inside(root: string, candidate: string): boolean {
   const path = relative(root, candidate)
@@ -26,16 +28,11 @@ export class ArtifactManager {
   }
 
   public async discover(jobId: string): Promise<readonly ArtifactRef[]> {
-    const directory = this.jobDirectory(jobId)
-    try {
-      const artifacts: ArtifactRef[] = []
-      await this.#walk(directory, directory, artifacts)
-      return artifacts.sort((left, right): number => left.name.localeCompare(right.name))
-    } catch (error: unknown) {
-      if (typeof error === 'object' && error !== null && Reflect.get(error, 'code') === 'ENOENT')
-        return []
-      throw error
-    }
+    const job = await this.#safeJobDirectory(jobId)
+    if (job === undefined) return []
+    const artifacts: ArtifactRef[] = []
+    await this.#walk(job.lexical, job.lexical, artifacts)
+    return artifacts.sort((left, right): number => left.name.localeCompare(right.name))
   }
 
   public resolveArtifact(jobId: string, artifact: ArtifactRef): string {
@@ -50,14 +47,15 @@ export class ArtifactManager {
     jobId: string,
     artifact: ArtifactRef,
   ): Promise<{ readonly path: string; readonly sizeBytes: number }> {
-    const root = this.jobDirectory(jobId)
+    const job = await this.#safeJobDirectory(jobId)
+    if (job === undefined) throw new LubanError('E_NOT_FOUND', 'artifact run was not found')
     const candidate = this.resolveArtifact(jobId, artifact)
     const metadata = await lstat(candidate)
     if (!metadata.isFile() || metadata.isSymbolicLink()) {
       throw new LubanError('E_NOT_FOUND', 'artifact is not a regular file')
     }
-    const [resolvedRoot, resolvedFile] = await Promise.all([realpath(root), realpath(candidate)])
-    if (!inside(resolvedRoot, resolvedFile)) {
+    const resolvedFile = await realpath(candidate)
+    if (!inside(job.canonical, resolvedFile)) {
       throw new LubanError('E_INVALID_INPUT', 'artifact resolves outside its run')
     }
     return { path: resolvedFile, sizeBytes: metadata.size }
@@ -66,8 +64,36 @@ export class ArtifactManager {
   public async prune(jobIds: readonly string[]): Promise<void> {
     await mkdir(this.#root, { recursive: true, mode: 0o700 })
     for (const jobId of jobIds) {
-      await rm(this.jobDirectory(jobId), { recursive: true, force: true })
+      const job = await this.#safeJobDirectory(jobId)
+      if (job !== undefined) await rm(job.canonical, { recursive: true, force: true })
     }
+  }
+
+  async #safeJobDirectory(
+    jobId: string,
+  ): Promise<{ readonly lexical: string; readonly canonical: string } | undefined> {
+    const lexical = this.jobDirectory(jobId)
+    let metadata: Stats
+    try {
+      metadata = await lstat(lexical)
+    } catch (error: unknown) {
+      if (typeof error === 'object' && error !== null && Reflect.get(error, 'code') === 'ENOENT') {
+        return undefined
+      }
+      throw error
+    }
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+      throw new LubanError(
+        'E_INVALID_INPUT',
+        'artifact job directory cannot be a symbolic link, junction, or non-directory',
+      )
+    }
+    const canonical = await canonicalExistingWithin(
+      [this.#root],
+      lexical,
+      'artifact job directory resolves outside the artifact root',
+    )
+    return { lexical, canonical }
   }
 
   async #walk(root: string, directory: string, output: ArtifactRef[]): Promise<void> {
