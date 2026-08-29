@@ -57,8 +57,12 @@ def normalize_domain_pattern(pattern: str) -> str:
         parsed = urlparse(value)
         if parsed.hostname is None:
             raise ValueError(f"Invalid domain pattern: {pattern}")
-        return parsed.hostname
-    return value.split("/", 1)[0].split(":", 1)[0]
+        normalized = parsed.hostname
+    else:
+        normalized = value.split("/", 1)[0].split(":", 1)[0]
+    if normalized.rstrip(".") == "*":
+        raise ValueError("Wildcard domain pattern '*' is not allowed")
+    return normalized
 
 
 def host_matches(host: str, pattern: str) -> bool:
@@ -66,8 +70,6 @@ def host_matches(host: str, pattern: str) -> bool:
 
     normalized_host = host.rstrip(".").lower()
     normalized_pattern = normalize_domain_pattern(pattern).rstrip(".")
-    if normalized_pattern == "*":
-        return True
     if normalized_pattern.startswith("*."):
         suffix = normalized_pattern[2:]
         return normalized_host == suffix or normalized_host.endswith(f".{suffix}")
@@ -77,7 +79,7 @@ def host_matches(host: str, pattern: str) -> bool:
 def assert_url_allowed(url: str | None, allow_domains: Iterable[str]) -> None:
     """Reject a start URL outside a non-empty domain allowlist."""
 
-    patterns = tuple(allow_domains)
+    patterns = tuple(normalize_domain_pattern(pattern) for pattern in allow_domains)
     if url is None or not patterns:
         return
     parsed = urlparse(url)

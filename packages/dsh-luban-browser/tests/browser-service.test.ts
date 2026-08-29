@@ -161,6 +161,64 @@ describe('BrowserService', () => {
     await service.close()
   })
 
+  it('rejects unrestricted wildcards while preserving the manual empty-list mode', async () => {
+    expect(() => resolveConfig({ defaults: { allowDomains: ['*'] } })).toThrow(/wildcard \*/u)
+    expect(
+      resolveConfig({ defaults: { allowDomains: ['*.example.com'] } }).defaults.allowDomains,
+    ).toEqual(['*.example.com'])
+
+    const directory = await temporaryDirectory()
+    const bridge = new FakeBridge()
+    const service = createService(directory, bridge)
+    expect(() =>
+      service.enqueue({
+        task: { goal: 'blocked', constraints: { allowDomains: ['https://*'] } },
+      }),
+    ).toThrow(/wildcard \*/u)
+
+    const manual = service.enqueue({
+      task: {
+        goal: 'manual navigation remains unconstrained',
+        startUrl: 'https://unlisted.example.test',
+        constraints: { allowDomains: [] },
+      },
+    })
+    expect((await service.wait(manual.id)).status).toBe('succeeded')
+    await service.close()
+  })
+
+  it('fails automatic jobs whose template attempts an unrestricted wildcard', async () => {
+    const directory = await temporaryDirectory()
+    const templateDirectory = join(directory, 'templates')
+    await writeFile(
+      join(await ensureDirectory(templateDirectory), 'unsafe.yaml'),
+      [
+        'id: unsafe',
+        'title: Unsafe research',
+        'goal: Inspect the page',
+        'allowDomains:',
+        '  - "*"',
+        'timeoutSec: 30',
+        'maxSteps: 5',
+        'profile:',
+        '  mode: isolated',
+      ].join('\n'),
+      'utf8',
+    )
+    const service = createService(
+      directory,
+      new FakeBridge(),
+      new TemplateRepository([templateDirectory]),
+    )
+
+    const job = service.enqueue({ task: { templateId: 'unsafe', goal: '' }, automatic: true })
+    const completed = await service.wait(job.id)
+
+    expect(completed.status).toBe('failed')
+    expect(completed.error?.code).toBe('E_BROWSER_INVALID_TASK')
+    await service.close()
+  })
+
   it('fails queued work cleanly when its data directories cannot be prepared', async () => {
     const directory = await temporaryDirectory()
     const blockedPath = join(directory, 'not-a-directory')

@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { BrowserProfile } from '@luban/core'
+import { isUnrestrictedDomainPattern } from './domain-policy.js'
 import { BrowserError } from './errors.js'
 import { DEFAULT_PASSED_ENVIRONMENT } from './security.js'
 
@@ -126,7 +127,11 @@ function stringArray(value: unknown, name: string): readonly string[] {
   if (!isStringArray(value) || value.some((item) => item.trim() === '')) {
     throw new BrowserError('E_BROWSER_INVALID_PROFILE', `${name} must contain non-empty strings`)
   }
-  return Object.freeze(value.map((item) => item.trim()))
+  const values = value.map((item) => item.trim())
+  if (values.some(isUnrestrictedDomainPattern)) {
+    throw new BrowserError('E_BROWSER_INVALID_PROFILE', `${name} cannot contain wildcard *`)
+  }
+  return Object.freeze(values)
 }
 
 function isStringArray(value: unknown): value is string[] {

@@ -21,6 +21,13 @@ class SecurityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside allowDomains"):
             assert_url_allowed("https://evil.test", ["example.com"])
 
+    def test_rejects_unrestricted_wildcards_but_keeps_empty_list_unconstrained(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Wildcard domain pattern"):
+            assert_url_allowed(None, ["*"])
+        with self.assertRaisesRegex(ValueError, "Wildcard domain pattern"):
+            assert_url_allowed("https://example.com", ["https://*"])
+        assert_url_allowed("https://unlisted.example.test", [])
+
 
 if __name__ == "__main__":
     unittest.main()

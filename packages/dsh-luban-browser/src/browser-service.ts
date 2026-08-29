@@ -12,6 +12,7 @@ import type {
 } from '@luban/core'
 import { AsyncQueue } from './async-queue.js'
 import type { ResolvedConfig } from './config.js'
+import { isUnrestrictedDomainPattern } from './domain-policy.js'
 import { BrowserError, asBrowserError } from './errors.js'
 import { renderTemplate, TemplateRepository } from './templates.js'
 import type {
@@ -308,6 +309,9 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
       )
     }
     const allowDomains = Object.freeze([...(requestedDomains ?? templateDomains)])
+    if (allowDomains.some(isUnrestrictedDomainPattern)) {
+      throw new BrowserError('E_BROWSER_POLICY', 'allowDomains cannot contain wildcard *')
+    }
     if (job.automatic && allowDomains.length === 0) {
       throw new BrowserError('E_BROWSER_POLICY', 'Automatic browser tasks require allowDomains')
     }
@@ -462,6 +466,9 @@ function validateTask(task: BrowserTaskSpec): void {
   ) {
     throw new BrowserError('E_BROWSER_INVALID_TASK', 'allowDomains must contain non-empty strings')
   }
+  if (task.constraints?.allowDomains?.some(isUnrestrictedDomainPattern)) {
+    throw new BrowserError('E_BROWSER_INVALID_TASK', 'allowDomains cannot contain wildcard *')
+  }
 }
 
 function assertStartUrl(url: string, allowDomains: readonly string[]): void {
@@ -486,7 +493,6 @@ function hostMatches(host: string, pattern: string): boolean {
   const normalizedHost = host.toLowerCase().replace(/\.$/u, '')
   const withoutScheme = pattern.toLowerCase().replace(/^[a-z]+:\/\//u, '')
   const normalizedPattern = withoutScheme.split('/')[0]?.split(':')[0]?.replace(/\.$/u, '') ?? ''
-  if (normalizedPattern === '*') return true
   if (normalizedPattern.startsWith('*.')) {
     const suffix = normalizedPattern.slice(2)
     return normalizedHost === suffix || normalizedHost.endsWith(`.${suffix}`)

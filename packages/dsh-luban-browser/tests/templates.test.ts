@@ -39,6 +39,25 @@ describe('TemplateRepository', () => {
     )
     await expect(new TemplateRepository([root]).list()).rejects.toThrow(/requires a safe name/u)
   })
+
+  it('rejects unrestricted domain wildcards while allowing subdomain patterns', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'luban-template-test-'))
+    cleanup.push(root)
+    await writeFile(
+      join(root, 'safe.yaml'),
+      template('Subdomain policy').replace('  - example.com', '  - "*.example.com"'),
+      'utf8',
+    )
+    await expect(new TemplateRepository([root]).list()).resolves.toHaveLength(1)
+    await writeFile(
+      join(root, 'unsafe.yaml'),
+      template('Unsafe policy').replace('  - example.com', '  - "*"'),
+      'utf8',
+    )
+    await expect(new TemplateRepository([root]).list()).rejects.toThrow(
+      /cannot contain wildcard \*/u,
+    )
+  })
 })
 
 describe('bridge environment security', () => {

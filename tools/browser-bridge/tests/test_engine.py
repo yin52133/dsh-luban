@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from luban_browser_bridge.engine import BrowserUseEngine
+from luban_browser_bridge.errors import BridgeError
 
 
 class _FakeProfile:
@@ -87,6 +88,29 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await asyncio.to_thread(screenshot.read_bytes), b"png-data")
             self.assertEqual([event["type"] for event in events], ["progress", "screenshot"])
             self.assertTrue(_FakeAgent.closed)
+
+    async def test_rejects_wildcard_before_loading_browser_use(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("luban_browser_bridge.engine.importlib.metadata.version", return_value="0.13.8"),
+        ):
+            engine = BrowserUseEngine()
+            await engine.start({"kernel": "chromium-headless"})
+            with self.assertRaises(BridgeError) as raised:
+                await engine.run(
+                    {
+                        "runId": "run-wildcard",
+                        "goal": "Return data",
+                        "allowDomains": ["*"],
+                        "outputDir": directory,
+                    },
+                    lambda event: _append([], event),
+                    asyncio.Event(),
+                )
+            await engine.stop()
+
+        self.assertEqual(raised.exception.payload.code, "E_BROWSER_INVALID_TASK")
+        self.assertIn("Wildcard domain pattern", raised.exception.payload.message)
 
 
 async def _append(events: list[dict[str, object]], event: dict[str, object]) -> None:

@@ -9,6 +9,11 @@ Standard output is reserved for protocol frames. Diagnostics go to standard
 error through a credential-redacting logging filter. A browser or LLM is never
 started by the test suite; tests inject a fake engine.
 
+`allowDomains` supports exact hosts and `*.example.com` subdomain patterns. A
+bare `*` (or a spelling that normalizes to it) is rejected even when no
+`startUrl` is supplied; an empty list remains the manual-task unconstrained
+mode enforced by the TypeScript host.
+
 Run the checks with:
 
 ```sh

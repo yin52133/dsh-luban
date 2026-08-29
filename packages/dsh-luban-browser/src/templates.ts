@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parse } from 'yaml'
+import { isUnrestrictedDomainPattern } from './domain-policy.js'
 import { BrowserError } from './errors.js'
 import type { LubanBrowserTemplate } from './types.js'
 
@@ -180,7 +181,14 @@ function stringList(value: unknown, key: string, filename: string): readonly str
   ) {
     throw new BrowserError('E_BROWSER_INVALID_TASK', `${key} must be a string array in ${filename}`)
   }
-  return Object.freeze(value.map((item: string) => item.trim()))
+  const values = value.map((item: string) => item.trim())
+  if (values.some(isUnrestrictedDomainPattern)) {
+    throw new BrowserError(
+      'E_BROWSER_INVALID_TASK',
+      `${key} cannot contain wildcard * in ${filename}`,
+    )
+  }
+  return Object.freeze(values)
 }
 
 function boundedInteger(

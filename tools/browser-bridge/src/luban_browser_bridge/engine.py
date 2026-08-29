@@ -75,7 +75,10 @@ class BrowserUseEngine:
         start_url = _optional_string(spec, "startUrl")
         max_steps = _bounded_int(spec.get("maxSteps", 30), "maxSteps", 1, 500)
         allow_domains = _string_list(spec.get("allowDomains", []), "allowDomains")
-        assert_url_allowed(start_url, allow_domains)
+        try:
+            assert_url_allowed(start_url, allow_domains)
+        except ValueError as error:
+            raise BridgeError("E_BROWSER_INVALID_TASK", str(error)) from error
         output_root = await asyncio.to_thread(
             _prepare_output_root, _required_string(spec, "outputDir")
         )

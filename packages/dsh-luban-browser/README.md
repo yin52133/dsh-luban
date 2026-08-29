@@ -75,7 +75,10 @@ an `outputSchema`; the bridge validates a bounded JSON Schema subset before
 returning structured output.
 
 The bundled `templates/research.yaml` is an example, not an unrestricted web
-template. User files with the same id override bundled files.
+template. `allowDomains` accepts exact hosts and `*.example.com` subdomain
+patterns; a bare `*` (including a scheme or port spelling that normalizes to it)
+is rejected. An empty list remains available only for manually submitted,
+unconstrained tasks. User files with the same id override bundled files.
 
 ## Authenticated API
 
@@ -126,6 +129,7 @@ following hold:
 - tags include `browser` and `auto-ok`;
 - exactly one `browser-template:<id>` tag is present;
 - the template has a non-empty `allowDomains` policy;
+- that policy contains no unrestricted `*` wildcard;
 - the claim belongs to an agent.
 
 Template parameters may be supplied as `browser-param:<name>=<value>` tags.

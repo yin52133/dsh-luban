@@ -9,6 +9,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：适配层/任务模板/看板联动/内核收口 |
 | v0.2 | 2026-08-30 | Codex | 固化 browser-use 版本并采用 uv 管理本地桥接环境 |
 | v0.3 | 2026-08-30 | Codex | 记录 JSONL 桥接、模板发布、鉴权 API 与看板联动实现验证 |
+| v0.4 | 2026-08-30 | Codex | 收紧自动任务域名白名单，拒绝裸 `*` wildcard |
 
 ## 1. 概述与目标
 
@@ -87,6 +88,7 @@ export interface BrowserTaskSpec {
 ## 8. 非功能与安全
 
 - 域名白名单默认为空=仅手动触发；夜间自动执行必须模板 + 域名白名单齐备（继承 M02 夜间三重防护）。
+- `allowDomains` 仅接受精确域名与 `*.example.com` 子域模式；裸 `*`（及归一化后为 `*` 的写法）在 TS 配置/模板/任务入口和 Python 执行端均拒绝。空列表仍只表示手动无约束，自动任务 fail closed。
 - 登录态凭据只存系统凭据管理器/环境变量，绝不入仓库与模板文件（P6.1）。
 
 ## 9. checklist 映射
@@ -101,9 +103,11 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
   内置 YAML 模板复制到 `dist/`，运行环境落在用户数据目录而非全局 Python。
 - `/luban-browser` HTTP/SSE API 复用 `lubanAuth`，会话入口统一为 `/luban-auth/login`；
   自动任务仅响应已由 agent 认领且带 `browser`、`auto-ok` 和唯一模板标签的看板卡片。
-- 本地 ESLint、严格类型、构建、12 项 TypeScript 测试、9 项 `uv --locked` Python 测试、
+- 本地 ESLint、严格类型、构建、15 项 TypeScript 测试、11 项 `uv --locked` Python 测试、
   compileall、ESM 导入及 npm pack 白名单均通过；测试使用假进程/引擎，未访问真实网站、
   浏览器或模型提供商。
+- M11-F002/M11-F003 域名策略复核：TS 配置、YAML 模板和任务解析拒绝裸 `*`，自动任务
+  仍要求非空白名单；Python 桥接在执行前再次拒绝，精确域名与 `*.example.com` 继续可用。
 
 ## 11. 开放问题
 
