@@ -143,5 +143,19 @@ describe('config policy', (): void => {
     expect(() =>
       parseConfig({ desktopMcp: { enabled: true, command: 'windows-mcp.exe' } }),
     ).toThrow('absolute allowlisted path')
+    expect(() =>
+      parseConfig({
+        desktopMcp: { enabled: true, command: join(process.cwd(), 'windows-mcp.exe') },
+      }),
+    ).toThrow('at least one allowlisted tool')
+    expect(() =>
+      parseConfig({
+        desktopMcp: {
+          enabled: true,
+          command: join(process.cwd(), 'windows-mcp.exe'),
+          tools: ['run_code'],
+        },
+      }),
+    ).toThrow('invalid or reserved tool name')
   })
 })

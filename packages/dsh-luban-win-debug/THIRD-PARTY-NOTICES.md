@@ -10,17 +10,17 @@ dependency and may be installed by the package manager; the other tools are
 independently installed. Exact deployed versions must be recorded in the hardware
 profile, and no integration is executed automatically during package installation.
 
-| Integration                         | Typical upstream license                            | Integration boundary                                   |
-| ----------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
-| Node SerialPort (`serialport` 13.x) | MIT                                                 | Dynamically loaded optional COM HAL                    |
-| OpenOCD                             | GPL-2.0-or-later                                    | Allowlisted executable and fixed argument templates    |
-| SEGGER J-Link                       | SEGGER proprietary terms                            | Allowlisted executable and CommanderScript path        |
-| Espressif esptool                   | GPL-2.0-or-later                                    | Allowlisted executable and fixed flash/erase templates |
-| STM32CubeProgrammer                 | STMicroelectronics proprietary terms                | Allowlisted CLI executable and fixed templates         |
-| GNU GDB                             | GPL-3.0-or-later                                    | Batch snapshot subprocess                              |
-| Android adb/fastboot                | Apache-2.0                                          | Device enumeration and fixed/allowlisted commands      |
-| Windows OpenSSH                     | BSD-family notices distributed by Microsoft/OpenBSD | Configured SSH command channel                         |
-| Windows-MCP/CursorTouch-like server | Project-specific; verify before enabling            | Disabled-by-default local stdio MCP descriptor         |
+| Integration                         | Typical upstream license                            | Integration boundary                                                |
+| ----------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------- |
+| Node SerialPort (`serialport` 13.x) | MIT                                                 | Dynamically loaded optional COM HAL                                 |
+| OpenOCD                             | GPL-2.0-or-later                                    | Allowlisted executable and fixed argument templates                 |
+| SEGGER J-Link                       | SEGGER proprietary terms                            | Allowlisted executable and CommanderScript path                     |
+| Espressif esptool                   | GPL-2.0-or-later                                    | Allowlisted executable and fixed flash/erase templates              |
+| STM32CubeProgrammer                 | STMicroelectronics proprietary terms                | Allowlisted CLI executable and fixed templates                      |
+| GNU GDB                             | GPL-3.0-or-later                                    | Batch snapshot subprocess                                           |
+| Android adb/fastboot                | Apache-2.0                                          | Device enumeration and fixed/allowlisted commands                   |
+| Windows OpenSSH                     | BSD-family notices distributed by Microsoft/OpenBSD | Configured SSH command channel                                      |
+| Windows-MCP/CursorTouch-like server | Project-specific; verify before enabling            | Disabled-by-default stdio MCP 2024-11-05 + DSH tool registry bridge |
 
 License names above describe common upstream distributions and are not a
 substitute for checking the exact binary/package installed on a workstation.

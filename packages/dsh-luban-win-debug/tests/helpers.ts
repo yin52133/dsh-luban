@@ -13,6 +13,7 @@ import type {
   SerialPortDescriptor,
   SerialProvider,
 } from '../src/types.js'
+import type { DesktopMcpClient, DesktopMcpConnectOptions } from '../src/mcp-stdio.js'
 
 export interface Invocation {
   readonly command: string
@@ -62,16 +63,53 @@ export class FakeManagedProcessRunner implements ManagedProcessRunner {
     readonly options: ManagedProcessOptions
   }[] = []
   public readonly processes: FakeManagedProcess[] = []
+  public startBarrier: Promise<void> | undefined
 
-  public start(
+  public async start(
     command: string,
     args: readonly string[],
     options: ManagedProcessOptions,
   ): Promise<ManagedProcess> {
     this.calls.push({ command, args: [...args], options })
+    await this.startBarrier
     const process = new FakeManagedProcess()
     this.processes.push(process)
-    return Promise.resolve(process)
+    return process
+  }
+}
+
+export class FakeDesktopMcpClient implements DesktopMcpClient {
+  public readonly pid = 4243
+  public connected = false
+  public advertisedTools: readonly string[] = []
+  public recentOutput: readonly ManagedProcessEvent[] = []
+  public readonly connects: DesktopMcpConnectOptions[] = []
+  public readonly calls: {
+    readonly tool: string
+    readonly args: Readonly<Record<string, unknown>>
+    readonly signal?: AbortSignal
+  }[] = []
+
+  public connect(options: DesktopMcpConnectOptions): Promise<void> {
+    this.connects.push(options)
+    this.connected = true
+    this.advertisedTools = options.allowedTools
+    return Promise.resolve()
+  }
+
+  public call(
+    tool: string,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    this.calls.push({ tool, args, ...(signal === undefined ? {} : { signal }) })
+    return Promise.resolve(`called ${tool}`)
+  }
+
+  public stop(): Promise<void> {
+    this.connected = false
+    this.advertisedTools = []
+    return Promise.resolve()
   }
 }
 
@@ -80,18 +118,21 @@ export class FakeSerialConnection implements SerialConnection {
   readonly #status = new Set<(status: 'closed' | 'error', detail?: string) => void>()
   public readonly writes: Uint8Array[] = []
   public closed = false
+  public closeCalls = 0
+  public closeBarrier: Promise<void> | undefined
 
   public write(data: Uint8Array): Promise<void> {
     this.writes.push(data)
     return Promise.resolve()
   }
 
-  public close(): Promise<void> {
+  public async close(): Promise<void> {
+    this.closeCalls += 1
+    await this.closeBarrier
     if (!this.closed) {
       this.closed = true
       for (const listener of this.#status) listener('closed')
     }
-    return Promise.resolve()
   }
 
   public onData(listener: (data: Uint8Array) => void): () => void {
@@ -122,16 +163,20 @@ export class FakeSerialProvider implements SerialProvider {
   public ports: SerialPortDescriptor[] = [{ path: 'COM3', manufacturer: 'Fake Probe' }]
   public readonly connections: FakeSerialConnection[] = []
   public readonly opens: { readonly path: string; readonly baudRate: number }[] = []
+  public openBarrier: Promise<void> | undefined
+  public connectionCloseBarrier: Promise<void> | undefined
 
   public list(): Promise<readonly SerialPortDescriptor[]> {
     return Promise.resolve(this.ports)
   }
 
-  public open(path: string, baudRate: number): Promise<SerialConnection> {
+  public async open(path: string, baudRate: number): Promise<SerialConnection> {
     this.opens.push({ path, baudRate })
+    await this.openBarrier
     const connection = new FakeSerialConnection()
+    connection.closeBarrier = this.connectionCloseBarrier
     this.connections.push(connection)
-    return Promise.resolve(connection)
+    return connection
   }
 }
 

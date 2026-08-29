@@ -251,6 +251,17 @@ export function parseConfig(input: unknown): Config {
   if (enabled && !isAbsolute(mcpCommand)) {
     throw new TypeError('desktopMcp.command must be an absolute allowlisted path')
   }
+  const mcpTools = stringList(desktopMcp.tools, [], 'desktopMcp.tools')
+  if (enabled && mcpTools.length === 0) {
+    throw new TypeError('desktopMcp.tools must contain at least one allowlisted tool when enabled')
+  }
+  if (
+    mcpTools.some(
+      (tool): boolean => tool === 'run_code' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(tool),
+    )
+  ) {
+    throw new TypeError('desktopMcp.tools contains an invalid or reserved tool name')
+  }
 
   return Object.freeze({
     serial: Object.freeze({
@@ -329,7 +340,7 @@ export function parseConfig(input: unknown): Config {
       enabled,
       command: mcpCommand,
       args: stringList(desktopMcp.args, [], 'desktopMcp.args'),
-      tools: stringList(desktopMcp.tools, [], 'desktopMcp.tools'),
+      tools: mcpTools,
     }),
   })
 }

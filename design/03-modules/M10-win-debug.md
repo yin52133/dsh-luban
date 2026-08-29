@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ---------------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：串口/烧录/GDB/adb-fastboot/桌面自动化/远程/通道层 |
 | v0.2 | 2026-08-30 | Codex | 回填安全通道层、工具模板与会话注入实现验证           |
+| v0.3 | 2026-08-30 | Codex | 补齐设备占用预检与 rc2 MCP 工具注册/调用闭环       |
 
 ## 1. 概述与目标
 
@@ -80,11 +81,13 @@ export interface WinDebugService {
       name: dsh-luban-win-debug
       config:
         serial: { defaultBaud: 115200, timestamp: true }
-        templatesDir: "templates"        # 用户可增补烧录模板（yaml）
+        # 首批烧录/调试模板由插件内置；外部 profile 扩展暂未开放
         snippet: { dir: ".luban/snippets", maxLines: 500 }
         desktopMcp:                      # M10-F006：B 档 MCP 接入
           enabled: false
           command: ""                    # 具体命令写在本地配置，不入库
+          args: []
+          tools: []                       # 启用时必须显式列出 DSH tool 名称
 ```
 
 ## 7. 依赖与边界
@@ -95,7 +98,9 @@ export interface WinDebugService {
 
 ## 8. 非功能与安全
 
-- 串口独占冲突：打开被占用的口时给出占用者提示；烧录前设备占用检查。
+- 串口独占冲突：重复打开显示 Luban channel id；Windows 独占打开失败统一提示可能占用者类型；
+  串口烧录前执行一次有界 open/close 独占探测。烧录/GDB 对同一目标持有进程内 lease，冲突时
+  fail closed；外部进程抢占仍以 Windows 串口独占错误为准。
 - 模板命令执行前回显确认（危险命令如 erase 二次确认）；日志片段落盘前正则打码 token/密码（P6.1）。
 - 外部工具路径经配置解析，缺失时给出安装指引而非崩溃。
 
@@ -122,7 +127,11 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
   参数数组、根目录约束和 `shell: false`；擦除等危险操作要求精确二次确认，错误行结构化返回。
 - OpenOCD/GDB 托管、adb/fastboot 状态、SSH 命令白名单、telnet/TCP 透传及默认关闭的 stdio MCP
   均复用有界输出、超时、取消和生命周期清理，并可将快照注入会话。
+- `dsh-tools` rc2 已公开 `ctx.tools.register(ToolDefinition)`；启用 Desktop MCP 时，插件把本地
+  allowlist 中每个名称注册为真实 DSH tool。首次调用或显式启动时通过 MCP 2024-11-05 stdio
+  完成 `initialize -> tools/list -> tools/call`，服务端未发布 allowlist 任一项即拒绝连接；协议
+  消息、stderr、生命周期和取消均有界。测试使用内存 stdio 进程，没有启动真实 MCP。
 - `/luban-win-debug` REST/SSE 要求 M01 会话与 CSRF，限制请求体、事件和输出；客户端使用 DSH rc2
   lazy-CJS 加载器，服务注册为 `ctx.lubanWinDebug`。
-- 本地 Prettier、ESLint、严格类型检查、构建、24 项测试、发布元数据和 npm pack 白名单审计通过；
+- 本地 Prettier、ESLint、严格类型检查、构建、56 项测试、发布元数据和 npm pack 白名单审计通过；
   测试使用 fake provider/runner/connector，未连接真实设备、网络或外部工具进程。

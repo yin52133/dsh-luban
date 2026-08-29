@@ -2,14 +2,23 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
+import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { SnippetFile } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DesktopMcpManager } from '../src/desktop-mcp.js'
+import { DesktopMcpManager, type DesktopToolRegistry } from '../src/desktop-mcp.js'
+import { DeviceExecutionGate } from '../src/device-gate.js'
 import { GdbSessionManager } from '../src/gdb.js'
 import { DshSessionInjection } from '../src/session-injector.js'
+import { DefaultWinDebugService } from '../src/service.js'
 import { SnippetStore } from '../src/snippet-store.js'
-import { CommandTemplateRegistry } from '../src/templates.js'
-import { FakeCommandRunner, FakeManagedProcessRunner, testConfig } from './helpers.js'
+import { CommandTemplateRegistry, type TemplateExecutionPreflight } from '../src/templates.js'
+import {
+  FakeCommandRunner,
+  FakeDesktopMcpClient,
+  FakeManagedProcessRunner,
+  flush,
+  testConfig,
+} from './helpers.js'
 
 const directories: string[] = []
 
@@ -105,6 +114,110 @@ describe('GDB session manager', (): void => {
     expect(manager.status().state).toBe('stopped')
   })
 
+  it('bounds and sanitizes process output including event-stream failures', async (): Promise<void> => {
+    const root = await temporary()
+    const base = testConfig(root)
+    const maxOutputBytes = 1024
+    const config = Object.freeze({
+      ...base,
+      execution: Object.freeze({ ...base.execution, maxOutputBytes }),
+    })
+    const commands = new FakeCommandRunner()
+    const processes = new FakeManagedProcessRunner()
+    const manager = new GdbSessionManager({
+      config,
+      templates: new CommandTemplateRegistry(config, commands),
+      commands,
+      processes,
+      snippets: new SnippetStore(config.snippet),
+    })
+
+    await manager.start({
+      interfaceConfig: join(root, 'interface.cfg'),
+      targetConfig: join(root, 'target.cfg'),
+    })
+    const process = processes.processes[0]
+    if (process === undefined) throw new Error('missing fake OpenOCD process')
+
+    process.queue.push({ type: 'stdout', text: 'token=', at: 1 })
+    process.queue.push({ type: 'stdout', text: '\u0001', at: 2 })
+    process.queue.push({ type: 'stdout', text: 'event-secret\n', at: 3 })
+    process.queue.push({ type: 'stderr', text: 'Bearer', at: 4 })
+    process.queue.push({ type: 'stderr', text: '\u0007', at: 5 })
+    process.queue.push({ type: 'stderr', text: 'event-auth\n', at: 6 })
+    await flush()
+
+    const crossChunkStatus = manager.status()
+    const crossChunkText = crossChunkStatus.recentOutput
+      .map((event): string => event.text ?? '')
+      .join('')
+    expect(crossChunkText).toContain('token=[REDACTED]')
+    expect(crossChunkText).not.toContain('event-secret')
+    expect(crossChunkText).not.toContain('event-auth')
+    expect(crossChunkText).not.toContain('\u0001')
+    expect(crossChunkText).not.toContain('\u0007')
+
+    process.queue.push({ type: 'stdout', text: 'O'.repeat(700), at: 7 })
+    process.queue.push({ type: 'stderr', text: 'E'.repeat(700), at: 8 })
+    await flush()
+
+    const aggregateStatus = manager.status()
+    const aggregateText = aggregateStatus.recentOutput
+      .map((event): string => event.text ?? '')
+      .join('')
+    expect(aggregateText).toContain('E'.repeat(50))
+    expect(aggregateText).not.toContain('O'.repeat(50))
+    expect(
+      aggregateStatus.recentOutput.reduce(
+        (bytes, event): number =>
+          bytes + (event.text === undefined ? 0 : Buffer.byteLength(event.text, 'utf8')),
+        0,
+      ),
+    ).toBeLessThanOrEqual(maxOutputBytes)
+
+    for (let index = 0; index < 300; index += 1) {
+      process.queue.push({ type: 'exit', exitCode: 0, at: index + 20 })
+    }
+    process.queue.end(new Error(`secret=\u0002catch-secret ${'界'.repeat(1000)}`))
+    await flush()
+
+    const status = manager.status()
+    expect(status.state).toBe('stopped')
+    expect(status.recentOutput).toHaveLength(256)
+    const failureEvent = [...status.recentOutput]
+      .reverse()
+      .find((event): boolean => event.type === 'stderr')
+    expect(failureEvent?.text).toContain('exceeded the safe display limit')
+    const finalText = status.recentOutput.map((event): string => event.text ?? '').join('')
+    expect(finalText).not.toContain('catch-secret')
+    expect(finalText).not.toContain('\u0002')
+    expect(
+      status.recentOutput.reduce(
+        (bytes, event): number =>
+          bytes + (event.text === undefined ? 0 : Buffer.byteLength(event.text, 'utf8')),
+        0,
+      ),
+    ).toBeLessThanOrEqual(maxOutputBytes)
+    expect(
+      status.recentOutput.every(
+        (event): boolean =>
+          event.text === undefined || Buffer.byteLength(event.text, 'utf8') <= maxOutputBytes,
+      ),
+    ).toBe(true)
+
+    expect(
+      status.recentOutput.every(
+        (event): boolean =>
+          event.text === undefined ||
+          (!event.text.includes('\u0001') &&
+            !event.text.includes('\u0002') &&
+            !event.text.includes('\u0007')),
+      ),
+    ).toBe(true)
+
+    await manager.stop()
+  })
+
   it('rejects an OpenOCD config outside the configured root before starting', async (): Promise<void> => {
     const root = await temporary()
     const config = testConfig(root)
@@ -125,10 +238,148 @@ describe('GDB session manager', (): void => {
     ).rejects.toThrow('outside execution.allowedRoots')
     expect(processes.calls).toHaveLength(0)
   })
+
+  it('holds the debug-target lease until OpenOCD stops', async (): Promise<void> => {
+    const root = await temporary()
+    const config = testConfig(root)
+    const commands = new FakeCommandRunner()
+    const processes = new FakeManagedProcessRunner()
+    const gate = new DeviceExecutionGate({ activeChannels: () => [] })
+    const preflight: TemplateExecutionPreflight = (invocation, signal) =>
+      gate.acquire(invocation, signal)
+    const templates = new CommandTemplateRegistry(config, commands, undefined, preflight)
+    const manager = new GdbSessionManager({
+      config,
+      templates,
+      commands,
+      processes,
+      snippets: new SnippetStore(config.snippet),
+      preflight,
+    })
+    const interfaceConfig = join(root, 'interface.cfg')
+    const flashInterfaceConfig = join(root, 'alternate-interface.cfg')
+    const targetConfig = join(root, 'target.cfg')
+    const firmware = join(root, 'firmware.bin')
+
+    await manager.start({ interfaceConfig, targetConfig })
+    await expect(
+      templates.run('openocd-flash', {
+        interfaceConfig: flashInterfaceConfig,
+        targetConfig,
+        firmware,
+      }),
+    ).rejects.toThrow('occupied by running template openocd-server')
+    expect(commands.calls).toHaveLength(0)
+
+    await manager.stop()
+    await expect(
+      templates.run('openocd-flash', {
+        interfaceConfig: flashInterfaceConfig,
+        targetConfig,
+        firmware,
+      }),
+    ).resolves.toMatchObject({ outcome: 'ok' })
+    expect(commands.calls).toHaveLength(1)
+  })
+
+  it('releases the debug-target lease when process stop rejects', async (): Promise<void> => {
+    const root = await temporary()
+    const config = testConfig(root)
+    const commands = new FakeCommandRunner()
+    const processes = new FakeManagedProcessRunner()
+    const release = vi.fn()
+    const preflight: TemplateExecutionPreflight = vi.fn(() => Promise.resolve(release))
+    const manager = new GdbSessionManager({
+      config,
+      templates: new CommandTemplateRegistry(config, commands),
+      commands,
+      processes,
+      snippets: new SnippetStore(config.snippet),
+      preflight,
+    })
+
+    await manager.start({
+      interfaceConfig: join(root, 'interface.cfg'),
+      targetConfig: join(root, 'target.cfg'),
+    })
+    const process = processes.processes[0]
+    if (process === undefined) throw new Error('missing fake OpenOCD process')
+    process.stop.mockImplementationOnce((): Promise<never> => {
+      process.queue.end()
+      return Promise.reject(new Error('stop failed'))
+    })
+
+    await expect(manager.stop()).rejects.toThrow('stop failed')
+    expect(release).toHaveBeenCalledOnce()
+    expect(manager.status().state).toBe('stopped')
+  })
+
+  it('allows the GDB client channel to connect to its managed OpenOCD server', async (): Promise<void> => {
+    const root = await temporary()
+    const processes = new FakeManagedProcessRunner()
+    const service = new DefaultWinDebugService(testConfig(root), { processes })
+    try {
+      await service.gdbStart({
+        interfaceConfig: join(root, 'interface.cfg'),
+        targetConfig: join(root, 'target.cfg'),
+      })
+
+      const channel = await service.open('gdb:local')
+      expect(channel.endpoint.params.target).toBe('127.0.0.1:3333')
+      await service.close(channel.id)
+      await service.gdbStop()
+    } finally {
+      await service.dispose()
+    }
+  })
+
+  it('serializes concurrent start and stop-during-start transitions', async (): Promise<void> => {
+    const root = await temporary()
+    const config = testConfig(root)
+    const commands = new FakeCommandRunner()
+    const processes = new FakeManagedProcessRunner()
+    let finishStart!: () => void
+    processes.startBarrier = new Promise<void>((resolve): void => {
+      finishStart = resolve
+    })
+    const manager = new GdbSessionManager({
+      config,
+      templates: new CommandTemplateRegistry(config, commands),
+      commands,
+      processes,
+      snippets: new SnippetStore(config.snippet),
+    })
+    const starting = manager.start({
+      interfaceConfig: join(root, 'interface.cfg'),
+      targetConfig: join(root, 'target.cfg'),
+    })
+    await flush()
+
+    expect(() =>
+      manager.start({
+        interfaceConfig: join(root, 'other-interface.cfg'),
+        targetConfig: join(root, 'other-target.cfg'),
+      }),
+    ).toThrow('already running or starting')
+    const stopping = manager.stop()
+    expect(manager.stop()).toBe(stopping)
+    let stopSettled = false
+    void stopping.finally((): void => {
+      stopSettled = true
+    })
+    await flush()
+    expect(stopSettled).toBe(false)
+
+    finishStart()
+    await starting
+    await stopping
+    expect(processes.processes[0]?.stop).toHaveBeenCalledOnce()
+    expect(manager.status().state).toBe('stopped')
+  })
 })
 
 describe('desktop MCP wrapper', (): void => {
-  it('starts only the locally configured command and publishes a tool allowlist descriptor', async (): Promise<void> => {
+  it('registers allowlisted DSH tools and lazily connects with the execution signal', async (): Promise<void> => {
     const root = await temporary()
     const base = testConfig(root)
     const config = Object.freeze({
@@ -140,8 +391,8 @@ describe('desktop MCP wrapper', (): void => {
         tools: Object.freeze(['desktop.capture', 'desktop.click']),
       }),
     })
-    const processes = new FakeManagedProcessRunner()
-    const manager = new DesktopMcpManager(config, processes)
+    const client = new FakeDesktopMcpClient()
+    const manager = new DesktopMcpManager(config, client)
 
     expect(manager.descriptor()).toEqual({
       transport: 'stdio',
@@ -149,13 +400,47 @@ describe('desktop MCP wrapper', (): void => {
       args: ['--stdio'],
       allowedTools: ['desktop.capture', 'desktop.click'],
     })
-    await manager.start()
-    expect(processes.calls[0]).toMatchObject({
+    const definitions: ToolDefinition[] = []
+    const unregisters = [vi.fn(), vi.fn()]
+    const registry: DesktopToolRegistry = {
+      register(definition): () => void {
+        definitions.push(definition)
+        return unregisters[definitions.length - 1] ?? vi.fn()
+      },
+    }
+    const unregisterTools = manager.registerTools(registry)
+    expect(definitions.map((definition): string => definition.name)).toEqual([
+      'desktop.capture',
+      'desktop.click',
+    ])
+    expect(client.connects).toHaveLength(0)
+    expect(manager.status().state).toBe('stopped')
+    const capture = definitions[0]
+    if (capture === undefined) throw new Error('missing registered desktop tool')
+    const controller = new AbortController()
+    const execution = {
+      signal: controller.signal,
+    } as unknown as ToolRunContext
+    await expect(capture.execute({ display: 1 }, execution)).resolves.toEqual({
+      content: 'called desktop.capture',
+    })
+    expect(client.connects[0]).toMatchObject({
       command: join(root, 'windows-mcp.exe'),
       args: ['--stdio'],
-      options: { timeoutMs: 60_000, startupTimeoutMs: 1000, maxOutputBytes: 64 * 1024 },
+      requestTimeoutMs: 5000,
+      startupTimeoutMs: 1000,
+      maxMessageBytes: 64 * 1024,
+      signal: controller.signal,
     })
     expect(manager.status().state).toBe('running')
+    expect(client.calls).toHaveLength(1)
+    expect(client.calls[0]).toMatchObject({ tool: 'desktop.capture', args: { display: 1 } })
+    expect(client.calls[0]?.signal).toBe(controller.signal)
+    unregisterTools()
+    expect(unregisters.every((unregister): boolean => unregister.mock.calls.length === 1)).toBe(
+      true,
+    )
+
     await manager.stop()
     expect(manager.status().state).toBe('stopped')
   })

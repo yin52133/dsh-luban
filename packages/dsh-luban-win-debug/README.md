@@ -19,8 +19,9 @@ redacted file-plus-excerpt for a DSH session.
   registers, and backtrace snapshots.
 - Explicit adb states (`device`, `offline`, `unauthorized`) and fastboot
   `bootloader` state.
-- Disabled-by-default stdio desktop-MCP wrapper with a local command and tool
-  allowlist.
+- Disabled-by-default stdio desktop-MCP bridge. Every local allowlist entry is
+  registered through the public DSH rc2 tool registry and forwarded over a
+  bounded MCP 2024-11-05 session.
 - Configured SSH command allowlists plus raw telnet and TCP-serial endpoints.
 - Authenticated `/luban-win-debug` REST/SSE API, bounded bodies/events/output,
   timeout and cancellation propagation, credential redaction, and atomic
@@ -105,9 +106,27 @@ working directory and cannot be empty. Firmware, ELF, OpenOCD config, and script
 parameters must resolve inside one of those roots. Tool and MCP executable paths
 are exact profile-time allowlists; HTTP callers cannot replace them.
 
+When `desktopMcp.enabled` is true, `desktopMcp.tools` must be non-empty. Each
+name becomes a global DSH tool via `ctx.tools.register()`. The server process is
+still lazy: an explicit **Start** action or the first tool call performs MCP
+`initialize` and `tools/list`; startup fails closed unless the server advertises
+every configured name. Calls then use `tools/call`, preserve the caller's abort
+signal, bound every protocol message, and tear down the owned process before a
+cancelled call settles. Input schemas are intentionally open objects because
+tools must be visible before the external server is started; the profile
+allowlist and the server's discovery response are both enforced.
+
+Opening the same endpoint twice reports the owning Luban channel. For esptool
+serial templates, the service also performs an immediate exclusive open/close
+probe before launching the flasher. Keep serial monitors and vendor debug tools
+closed; Windows/SerialPort cannot reliably identify an arbitrary external PID,
+so the stable error names the likely owner class instead. OpenOCD/GDB and flash
+templates hold an in-process target lease until their process completes.
+
 The service is available to other Cordis plugins as `ctx.lubanWinDebug`.
-Desktop-MCP consumers can read its stdio descriptor, but the HTTP API deliberately
-does not return the configured command or arguments.
+Desktop-MCP consumers can read its local configured stdio descriptor, while DSH agents
+invoke the registered tools directly. The HTTP API deliberately does not return
+the configured command or arguments.
 
 ## Demo
 
@@ -132,6 +151,8 @@ against a configured endpoint/template is always required.
 Tested against DeepSeek Harness **0.1.1-rc.2**, Cordis 4.0.1, React 18.2, and
 Node.js 22.19+. Session injection uses the rc2 `AgentRegistry.get/resume` and
 `Agent.followup` APIs; it does not depend on unreleased session-controller APIs.
+Desktop MCP uses rc2's public `ctx.tools.register()` boundary rather than an
+unpublished MCP registry.
 The browser contribution is a DSH rc2 lazy-CJS module loaded through
 `window.__ModuleLoader__` and keeps React/Cordis/DSH packages external.
 
@@ -148,7 +169,8 @@ compatible optional `serialport` build for the installed Node ABI.
 
 No automated test opens a real COM port, network device, debugger, flasher, adb,
 fastboot, SSH, telnet, or MCP process; every external boundary is covered with a
-fake runner/provider/connector.
+fake runner/provider/connector or an in-memory stdio process. Real workstation,
+hardware, and approved MCP qualification remain deployment acceptance steps.
 
 ## License
 

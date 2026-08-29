@@ -16,13 +16,22 @@ import type { ChannelLine, FilterOptions, ManagedChannel, WinDebugEvent } from '
 interface ActiveChannel extends ManagedChannel {
   readonly lines: ChannelLine[]
   readonly decoder: TextDecoder
+  readonly releaseLease: () => void
   pending: string
   pump: Promise<void>
+  closing?: Promise<void>
 }
 
 interface CancellableCommandHandle extends ChannelHandle {
   exec(command: string, signal?: AbortSignal): Promise<ExecResult>
 }
+
+export type ChannelOpenPreflight = (
+  endpoint: ChannelEndpoint,
+  signal?: AbortSignal,
+) => Promise<() => void>
+
+const NOOP_RELEASE = (): void => undefined
 
 function safePattern(query: string, caseSensitive: boolean): RegExp {
   if (
@@ -61,7 +70,9 @@ export class ChannelHub {
   readonly #snippetStore: SnippetStore
   readonly #maxLines: number
   readonly #timestamp: boolean
+  readonly #openPreflight: ChannelOpenPreflight | undefined
   readonly #channels = new Map<string, ActiveChannel>()
+  readonly #openingEndpointIds = new Set<string>()
   readonly #handles = new WeakMap<ChannelHandle, ActiveChannel>()
   readonly #listeners = new Set<(event: WinDebugEvent) => void>()
   readonly #adapterErrors = new Map<ChannelKind, string>()
@@ -72,6 +83,7 @@ export class ChannelHub {
     readonly snippetStore: SnippetStore
     readonly maxLines: number
     readonly timestamp: boolean
+    readonly openPreflight?: ChannelOpenPreflight
   }) {
     const entries = options.adapters.map((adapter): readonly [ChannelKind, ChannelAdapter] => [
       adapter.kind,
@@ -84,6 +96,7 @@ export class ChannelHub {
     this.#snippetStore = options.snippetStore
     this.#maxLines = options.maxLines
     this.#timestamp = options.timestamp
+    this.#openPreflight = options.openPreflight
   }
 
   public adapters(): readonly ChannelAdapter[] {
@@ -146,21 +159,49 @@ export class ChannelHub {
         (candidate): boolean => candidate.id === endpointId,
       )
       if (endpoint === undefined) continue
-      const handle = await adapter.open(endpoint, options)
-      const active: ActiveChannel = {
-        id: randomUUID(),
-        endpoint,
-        handle,
-        openedAt: Date.now(),
-        lines: [],
-        decoder: new TextDecoder(),
-        pending: '',
-        pump: Promise.resolve(),
+      const occupied = [...this.#channels.values()].find(
+        (channel): boolean => channel.endpoint.id === endpoint.id,
+      )
+      if (occupied !== undefined || this.#openingEndpointIds.has(endpoint.id)) {
+        throw new LubanError(
+          'E_CHANNEL_UNAVAILABLE',
+          `${endpoint.label} is already open in Luban; close its existing channel before retrying`,
+          {
+            retriable: true,
+            details: {
+              reason: 'occupied',
+              endpointId: endpoint.id,
+              owner: occupied === undefined ? 'luban-opening-channel' : 'luban-active-channel',
+              ...(occupied === undefined ? {} : { channelId: occupied.id }),
+            },
+          },
+        )
       }
-      this.#channels.set(active.id, active)
-      this.#handles.set(handle, active)
-      active.pump = this.#pump(active)
-      return active
+      this.#openingEndpointIds.add(endpoint.id)
+      let releaseLease: (() => void) | undefined
+      try {
+        releaseLease = await this.#openPreflight?.(endpoint, options.signal)
+        const handle = await adapter.open(endpoint, options)
+        const active: ActiveChannel = {
+          id: randomUUID(),
+          endpoint,
+          handle,
+          openedAt: Date.now(),
+          lines: [],
+          decoder: new TextDecoder(),
+          releaseLease: releaseLease ?? NOOP_RELEASE,
+          pending: '',
+          pump: Promise.resolve(),
+        }
+        this.#channels.set(active.id, active)
+        this.#handles.set(handle, active)
+        active.pump = this.#pump(active)
+        releaseLease = undefined
+        return active
+      } finally {
+        this.#openingEndpointIds.delete(endpoint.id)
+        releaseLease?.()
+      }
     }
     throw new LubanError('E_CHANNEL_UNAVAILABLE', `Endpoint ${endpointId} is not available`, {
       retriable: true,
@@ -219,10 +260,7 @@ export class ChannelHub {
   }
 
   public async close(channelId: string): Promise<void> {
-    const active = this.#require(channelId)
-    this.#channels.delete(channelId)
-    await active.handle.close()
-    await active.pump
+    await this.#closing(this.#require(channelId))
   }
 
   public publishEndpointChange(
@@ -233,10 +271,26 @@ export class ChannelHub {
 
   public async dispose(): Promise<void> {
     const channels = [...this.#channels.values()]
-    this.#channels.clear()
-    await Promise.allSettled(channels.map(async (channel): Promise<void> => channel.handle.close()))
-    await Promise.allSettled(channels.map(async (channel): Promise<void> => channel.pump))
+    await Promise.allSettled(channels.map(async (channel): Promise<void> => this.#closing(channel)))
     this.#listeners.clear()
+  }
+
+  #closing(active: ActiveChannel): Promise<void> {
+    active.closing ??= this.#closeActive(active)
+    return active.closing
+  }
+
+  async #closeActive(active: ActiveChannel): Promise<void> {
+    try {
+      try {
+        await active.handle.close()
+      } finally {
+        await active.pump
+      }
+    } finally {
+      if (this.#channels.get(active.id) === active) this.#channels.delete(active.id)
+      active.releaseLease()
+    }
   }
 
   async #safeList(adapter: ChannelAdapter): Promise<readonly ChannelEndpoint[]> {

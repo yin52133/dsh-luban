@@ -21,13 +21,15 @@ import {
 } from './channels.js'
 import { NodeCommandRunner, NodeManagedProcessRunner } from './command-runner.js'
 import type { Config } from './config.js'
-import { DesktopMcpManager } from './desktop-mcp.js'
+import { DesktopMcpManager, type DesktopToolRegistry } from './desktop-mcp.js'
+import { DeviceExecutionGate } from './device-gate.js'
 import { GdbSessionManager, type GdbSnapshotRequest, type GdbStartRequest } from './gdb.js'
 import { HotplugWatcher } from './hotplug.js'
+import type { DesktopMcpClient } from './mcp-stdio.js'
 import { ChannelHub } from './monitor.js'
 import { OptionalSerialPortProvider, SerialChannelAdapter } from './serial.js'
 import { SnippetStore } from './snippet-store.js'
-import { CommandTemplateRegistry } from './templates.js'
+import { CommandTemplateRegistry, type TemplateExecutionPreflight } from './templates.js'
 import type {
   AndroidDevice,
   CommandRunner,
@@ -49,6 +51,7 @@ export interface WinDebugDependencies {
   readonly sockets?: SocketConnector
   readonly sessionInjection?: SessionInjection
   readonly adapters?: readonly ChannelAdapter[]
+  readonly desktopMcp?: DesktopMcpClient
 }
 
 /** L3 assembly implementing every channel through the one @luban/core contract. */
@@ -68,7 +71,6 @@ export class DefaultWinDebugService implements WinDebugService {
     const commands = dependencies.commands ?? new NodeCommandRunner()
     const processes = dependencies.processes ?? new NodeManagedProcessRunner()
     const snippets = new SnippetStore(config.snippet)
-    const templates = new CommandTemplateRegistry(config, commands)
     const adb = new AndroidChannelAdapter('adb', commands, config)
     const fastboot = new AndroidChannelAdapter('fastboot', commands, config)
     const serial = new SerialChannelAdapter(
@@ -85,17 +87,37 @@ export class DefaultWinDebugService implements WinDebugService {
       new TcpChannelAdapter('telnet', config.remote, sockets),
       new TcpChannelAdapter('tcp-serial', config.remote, sockets),
     ]
-    this.#hub = new ChannelHub({
+    const configuredSerial = adapters.find(
+      (adapter): adapter is SerialChannelAdapter => adapter instanceof SerialChannelAdapter,
+    )
+    const executionGate = new DeviceExecutionGate({
+      activeChannels: (): readonly ManagedChannel[] => this.#hub.active(),
+      ...(configuredSerial === undefined ? {} : { serial: configuredSerial }),
+      preflightTimeoutMs: Math.min(config.execution.startupTimeoutMs, config.execution.timeoutMs),
+    })
+    const hub = new ChannelHub({
       adapters,
       snippetStore: snippets,
       maxLines: config.snippet.maxLines,
       timestamp: config.serial.timestamp,
+      openPreflight: (endpoint, signal) => executionGate.acquireChannel(endpoint, signal),
     })
+    this.#hub = hub
+    const preflight: TemplateExecutionPreflight = (invocation, signal) =>
+      executionGate.acquire(invocation, signal)
+    const templates = new CommandTemplateRegistry(config, commands, undefined, preflight)
     this.#templates = templates
     this.#snippets = snippets
     this.#android = new AndroidService(adb, fastboot)
-    this.#gdb = new GdbSessionManager({ config, templates, commands, processes, snippets })
-    this.#mcp = new DesktopMcpManager(config, processes)
+    this.#gdb = new GdbSessionManager({
+      config,
+      templates,
+      commands,
+      processes,
+      snippets,
+      preflight,
+    })
+    this.#mcp = new DesktopMcpManager(config, dependencies.desktopMcp)
     this.#injection = dependencies.sessionInjection
     const serialAdapter = adapters.find((adapter): boolean => adapter.kind === 'serial')
     if (serialAdapter !== undefined) {
@@ -262,6 +284,10 @@ export class DefaultWinDebugService implements WinDebugService {
 
   public desktopMcpDescriptor(): ReturnType<DesktopMcpManager['descriptor']> {
     return this.#mcp.descriptor()
+  }
+
+  public registerDesktopMcpTools(registry: DesktopToolRegistry): () => void {
+    return this.#mcp.registerTools(registry)
   }
 
   public desktopMcpStart(signal?: AbortSignal): ReturnType<DesktopMcpManager['start']> {

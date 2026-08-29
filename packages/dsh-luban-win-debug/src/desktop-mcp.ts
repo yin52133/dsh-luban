@@ -1,11 +1,12 @@
+import type { ToolDefinition, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { LubanError } from '@luban/core'
 import type { Config } from './config.js'
-import type {
-  DesktopMcpStatus,
-  ManagedProcess,
-  ManagedProcessEvent,
-  ManagedProcessRunner,
-} from './types.js'
+import {
+  NodeStdioMcpClient,
+  type DesktopMcpClient,
+  type DesktopMcpConnectOptions,
+} from './mcp-stdio.js'
+import type { DesktopMcpStatus, ManagedProcessEvent } from './types.js'
 
 export interface DesktopMcpDescriptor {
   readonly transport: 'stdio'
@@ -14,17 +15,58 @@ export interface DesktopMcpDescriptor {
   readonly allowedTools: readonly string[]
 }
 
-/** B-grade desktop automation wrapper; command/config stay local and tools are allowlisted. */
+export type DesktopToolRegistry = Pick<ToolRuntime, 'register'>
+
+function toolArguments(value: unknown): Readonly<Record<string, unknown>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new LubanError('E_INVALID_INPUT', 'Desktop MCP arguments must be an object')
+  }
+  return value as Readonly<Record<string, unknown>>
+}
+
+function toolDefinition(
+  manager: DesktopMcpManager,
+  name: string,
+  timeoutMs: number,
+): ToolDefinition {
+  return {
+    name,
+    description: `Locally configured desktop MCP tool ${name}. The MCP server and allowlist are deployment-owned.`,
+    parameters: { type: 'object', additionalProperties: true },
+    timeoutMs,
+    output: {
+      schema: {
+        type: 'object',
+        properties: { content: { type: 'string' } },
+        required: ['content'],
+        additionalProperties: false,
+      },
+      render(_args, value) {
+        const row = value as Readonly<Record<string, unknown>>
+        const content = typeof row.content === 'string' ? row.content : ''
+        return [
+          {
+            type: 'text',
+            text: content === '' ? '(Desktop MCP tool completed with no text output)' : content,
+          },
+        ]
+      },
+    },
+    async execute(args, execution) {
+      return { content: await manager.call(name, toolArguments(args), execution.signal) }
+    },
+  }
+}
+
+/** B-grade MCP bridge exposed through the public DSH rc2 tool registry. */
 export class DesktopMcpManager {
   readonly #config: Config
-  readonly #runner: ManagedProcessRunner
-  readonly #output: ManagedProcessEvent[] = []
-  #process: ManagedProcess | undefined
-  #pump: Promise<void> | undefined
+  readonly #client: DesktopMcpClient
+  #starting: Promise<DesktopMcpStatus> | undefined
 
-  public constructor(config: Config, runner: ManagedProcessRunner) {
+  public constructor(config: Config, client: DesktopMcpClient = new NodeStdioMcpClient()) {
     this.#config = config
-    this.#runner = runner
+    this.#client = client
   }
 
   public descriptor(): DesktopMcpDescriptor | null {
@@ -42,54 +84,79 @@ export class DesktopMcpManager {
       enabled: this.#config.desktopMcp.enabled,
       state: !this.#config.desktopMcp.enabled
         ? 'disabled'
-        : this.#process === undefined
-          ? 'stopped'
-          : 'running',
+        : this.#client.connected
+          ? 'running'
+          : 'stopped',
       commandConfigured: this.#config.desktopMcp.command !== '',
       tools: this.#config.desktopMcp.tools,
-      recentOutput: [...this.#output],
+      recentOutput: this.#client.recentOutput,
     }
   }
 
-  public async start(signal?: AbortSignal): Promise<DesktopMcpStatus> {
-    const descriptor = this.descriptor()
-    if (descriptor === null)
-      throw new LubanError('E_CHANNEL_UNAVAILABLE', 'Desktop MCP is disabled or unconfigured')
-    if (this.#process !== undefined) return this.status()
-    this.#output.length = 0
-    this.#process = await this.#runner.start(descriptor.command, descriptor.args, {
-      timeoutMs: this.#config.execution.processLifetimeMs,
-      startupTimeoutMs: this.#config.execution.startupTimeoutMs,
-      maxOutputBytes: this.#config.execution.maxOutputBytes,
-      ...(this.#config.execution.cwd === undefined ? {} : { cwd: this.#config.execution.cwd }),
-      ...(signal === undefined ? {} : { signal }),
-    })
-    const owned = this.#process
-    this.#pump = (async (): Promise<void> => {
-      try {
-        for await (const event of owned.events()) {
-          this.#output.push(event)
-          if (this.#output.length > 128) this.#output.shift()
-          if (event.type === 'exit' && this.#process === owned) this.#process = undefined
-        }
-      } catch (error: unknown) {
-        this.#output.push({
-          type: 'stderr',
-          text: error instanceof Error ? error.message : 'Desktop MCP event stream failed',
-          at: Date.now(),
-        })
-        if (this.#process === owned) this.#process = undefined
+  /** Register every profile-allowlisted MCP capability as a global DSH tool. */
+  public registerTools(registry: DesktopToolRegistry): () => void {
+    if (!this.#config.desktopMcp.enabled) return (): void => undefined
+    const unregisters: (() => void)[] = []
+    try {
+      for (const name of this.#config.desktopMcp.tools) {
+        unregisters.push(
+          registry.register(toolDefinition(this, name, this.#config.execution.timeoutMs)),
+        )
       }
-    })()
-    return this.status()
+    } catch (error: unknown) {
+      for (const unregister of unregisters.reverse()) unregister()
+      throw error
+    }
+    let active = true
+    return (): void => {
+      if (!active) return
+      active = false
+      for (const unregister of unregisters.reverse()) unregister()
+    }
+  }
+
+  public start(signal?: AbortSignal): Promise<DesktopMcpStatus> {
+    if (this.#client.connected) return Promise.resolve(this.status())
+    this.#starting ??= this.#start(signal).finally((): void => {
+      this.#starting = undefined
+    })
+    return this.#starting
+  }
+
+  public async call(
+    tool: string,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (!this.#config.desktopMcp.tools.includes(tool)) {
+      throw new LubanError('E_INVALID_INPUT', `Desktop MCP tool ${tool} is not allowlisted`)
+    }
+    await this.start(signal)
+    return this.#client.call(tool, args, signal)
   }
 
   public async stop(): Promise<DesktopMcpStatus> {
-    const process = this.#process
-    this.#process = undefined
-    if (process !== undefined) await process.stop()
-    await this.#pump
-    this.#pump = undefined
+    await this.#client.stop()
+    return this.status()
+  }
+
+  async #start(signal?: AbortSignal): Promise<DesktopMcpStatus> {
+    const descriptor = this.descriptor()
+    if (descriptor === null) {
+      throw new LubanError('E_CHANNEL_UNAVAILABLE', 'Desktop MCP is disabled or unconfigured')
+    }
+    const options: DesktopMcpConnectOptions = {
+      command: descriptor.command,
+      args: descriptor.args,
+      allowedTools: descriptor.allowedTools,
+      startupTimeoutMs: this.#config.execution.startupTimeoutMs,
+      requestTimeoutMs: this.#config.execution.timeoutMs,
+      processLifetimeMs: this.#config.execution.processLifetimeMs,
+      maxMessageBytes: this.#config.execution.maxOutputBytes,
+      ...(this.#config.execution.cwd === undefined ? {} : { cwd: this.#config.execution.cwd }),
+      ...(signal === undefined ? {} : { signal }),
+    }
+    await this.#client.connect(options)
     return this.status()
   }
 }

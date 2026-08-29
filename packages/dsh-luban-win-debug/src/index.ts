@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-tools'
 import type { AuthService } from '@luban/core'
 import { LubanError, modulePrefix } from '@luban/core'
 import { Config as ConfigSchema, type Config as WinDebugConfig, parseConfig } from './config.js'
@@ -17,7 +18,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export const name = 'luban-win-debug'
-export const inject = ['webServer', 'lubanAuth', 'agents']
+export const inject = ['webServer', 'lubanAuth', 'agents', 'tools']
 export const Config = ConfigSchema
 export type Config = WinDebugConfig
 
@@ -36,6 +37,7 @@ export function apply(ctx: Context, input: unknown = {}): void {
   const api = new WinDebugHttpApi(service, ctx.lubanAuth)
   ctx.provide('lubanWinDebug', service)
   ctx.effect(() => {
+    const unregisterTools = service.registerDesktopMcpTools(ctx.tools)
     const unregister = ctx.webServer.register({
       kind: 'prefix',
       path: modulePrefix('win-debug'),
@@ -43,6 +45,7 @@ export function apply(ctx: Context, input: unknown = {}): void {
     })
     service.start()
     return async (): Promise<void> => {
+      unregisterTools()
       unregister()
       api.dispose()
       await service.dispose()
@@ -68,13 +71,23 @@ export { NodeCommandRunner, NodeManagedProcessRunner, parseCommandWords } from '
 export { assertAllowedPath, expandPath, parseConfig } from './config.js'
 export type { RemoteEndpointConfig } from './config.js'
 export { DesktopMcpManager } from './desktop-mcp.js'
-export type { DesktopMcpDescriptor } from './desktop-mcp.js'
+export type { DesktopMcpDescriptor, DesktopToolRegistry } from './desktop-mcp.js'
+export { DeviceExecutionGate } from './device-gate.js'
 export { GdbSessionManager } from './gdb.js'
 export type { GdbSnapshotRequest, GdbStartRequest, GdbStatus } from './gdb.js'
 export { HotplugWatcher } from './hotplug.js'
 export type { EndpointChange } from './hotplug.js'
+export { formatDesktopMcpResult, NodeStdioMcpClient } from './mcp-stdio.js'
+export type {
+  DesktopMcpCallResult,
+  DesktopMcpClient,
+  DesktopMcpConnectOptions,
+  DesktopMcpProcess,
+  DesktopMcpProcessFactory,
+} from './mcp-stdio.js'
 export { WinDebugHttpApi } from './http-api.js'
 export { ChannelHub, filterLines } from './monitor.js'
+export type { ChannelOpenPreflight } from './monitor.js'
 export { OptionalSerialPortProvider, SerialChannelAdapter } from './serial.js'
 export { DefaultWinDebugService } from './service.js'
 export type { WinDebugDependencies } from './service.js'
@@ -86,5 +99,5 @@ export {
   CommandTemplateRegistry,
   toolForTemplate,
 } from './templates.js'
-export type { ResolvedInvocation } from './templates.js'
+export type { ResolvedInvocation, TemplateExecutionPreflight } from './templates.js'
 export type * from './types.js'

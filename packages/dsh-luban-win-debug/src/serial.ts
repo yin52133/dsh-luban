@@ -32,6 +32,39 @@ interface SerialPortConstructor {
 
 type ModuleLoader = (specifier: string) => Promise<unknown>
 
+function errorCode(error: Error): string | undefined {
+  const code = (error as Error & { readonly code?: unknown }).code
+  return typeof code === 'string' ? code.toUpperCase() : undefined
+}
+
+function serialOpenFailure(path: string, error: Error): LubanError {
+  const occupied =
+    ['EACCES', 'EBUSY', 'EPERM'].includes(errorCode(error) ?? '') ||
+    /(?:access|permission) denied|busy|in use|already open|cannot open.*(?:com|serial)/iu.test(
+      error.message,
+    )
+  if (occupied) {
+    return new LubanError(
+      'E_CHANNEL_UNAVAILABLE',
+      `Serial port ${path} is occupied; close the serial monitor, debugger, terminal, or service that owns it and retry`,
+      {
+        retriable: true,
+        cause: error,
+        details: {
+          reason: 'occupied',
+          path,
+          ownerHint: 'another serial monitor, debugger, terminal, or background service',
+        },
+      },
+    )
+  }
+  return new LubanError('E_CHANNEL_UNAVAILABLE', `Unable to open serial port ${path}`, {
+    retriable: true,
+    cause: error,
+    details: { reason: 'open-failed', path },
+  })
+}
+
 function moduleConstructor(value: unknown): SerialPortConstructor {
   if (typeof value !== 'object' || value === null) {
     throw new LubanError(
@@ -83,8 +116,63 @@ export class OptionalSerialPortProvider implements SerialProvider {
       })
     }
     const Constructor = await this.#load()
-    const port = new Constructor({ path, baudRate, autoOpen: false })
-    await callbackOperation((done): void => port.open(done), `Unable to open serial port ${path}`)
+    let port: SerialPortInstance
+    try {
+      port = new Constructor({ path, baudRate, autoOpen: false })
+    } catch (error: unknown) {
+      throw serialOpenFailure(
+        path,
+        error instanceof Error ? error : new Error('Unknown serial construction failure'),
+      )
+    }
+    await new Promise<void>((resolve, reject): void => {
+      let settled = false
+      const detach = (): void => signal?.removeEventListener('abort', abort)
+      const abort = (): void => {
+        if (settled) return
+        settled = true
+        detach()
+        try {
+          port.close((): void => undefined)
+        } catch {
+          // A late successful open callback below makes one more best-effort close.
+        }
+        reject(
+          new LubanError('E_CHANNEL_UNAVAILABLE', 'Serial open was cancelled', {
+            retriable: true,
+          }),
+        )
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+      if (abortRequested(signal, abort)) return
+      try {
+        port.open((error): void => {
+          if (settled) {
+            if (error === undefined || error === null) {
+              try {
+                port.close((): void => undefined)
+              } catch {
+                // The caller has already failed closed; no command will use this port.
+              }
+            }
+            return
+          }
+          settled = true
+          detach()
+          if (error === undefined || error === null) resolve()
+          else reject(serialOpenFailure(path, error))
+        })
+      } catch (error: unknown) {
+        settled = true
+        detach()
+        reject(
+          serialOpenFailure(
+            path,
+            error instanceof Error ? error : new Error('Unknown serial open failure'),
+          ),
+        )
+      }
+    })
     if (isAborted(signal)) {
       await callbackOperation(
         (done): void => port.close(done),
@@ -113,6 +201,12 @@ export class OptionalSerialPortProvider implements SerialProvider {
 
 function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true
+}
+
+function abortRequested(signal: AbortSignal | undefined, abort: () => void): boolean {
+  if (!isAborted(signal)) return false
+  abort()
+  return true
 }
 
 function callbackOperation(
@@ -279,5 +373,27 @@ export class SerialChannelAdapter implements ChannelAdapter {
     return new SerialHandle(
       await this.#provider.open(allowed.params.port ?? '', baudRate, options.signal),
     )
+  }
+
+  /** Probe Windows' exclusive-open boundary immediately before a flasher takes ownership. */
+  public async checkAvailable(
+    path: string,
+    baudRate = this.#defaultBaud,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!Number.isSafeInteger(baudRate) || baudRate < 50 || baudRate > 12_000_000) {
+      throw new LubanError('E_INVALID_INPUT', 'baudRate is outside the supported range')
+    }
+    const port = (await this.#provider.list()).find(
+      (candidate): boolean => candidate.path.toLocaleUpperCase() === path.toLocaleUpperCase(),
+    )
+    if (port === undefined) {
+      throw new LubanError('E_CHANNEL_UNAVAILABLE', `Serial port ${path} is no longer available`, {
+        retriable: true,
+        details: { reason: 'missing', path },
+      })
+    }
+    const connection = await this.#provider.open(port.path, baudRate, signal)
+    await connection.close()
   }
 }

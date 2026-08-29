@@ -14,8 +14,14 @@ export interface ResolvedInvocation {
   readonly template: CommandTemplate
   readonly command: string
   readonly args: readonly string[]
+  readonly params: Readonly<Record<string, string>>
   readonly cwd?: string
 }
+
+export type TemplateExecutionPreflight = (
+  invocation: ResolvedInvocation,
+  signal?: AbortSignal,
+) => Promise<() => void>
 
 const BUILT_INS: readonly CommandTemplate[] = Object.freeze([
   {
@@ -248,14 +254,17 @@ export class CommandTemplateRegistry {
   readonly #config: Config
   readonly #runner: CommandRunner
   readonly #templates = new Map<string, CommandTemplate>()
+  readonly #preflight: TemplateExecutionPreflight | undefined
 
   public constructor(
     config: Config,
     runner: CommandRunner,
     templates: readonly CommandTemplate[] = BUILT_INS,
+    preflight?: TemplateExecutionPreflight,
   ) {
     this.#config = config
     this.#runner = runner
+    this.#preflight = preflight
     for (const template of templates) this.register(template)
   }
 
@@ -313,6 +322,7 @@ export class CommandTemplateRegistry {
       template,
       command: this.#config.tools[template.tool],
       args,
+      params: Object.freeze(Object.fromEntries(values)),
       ...(this.#config.execution.cwd === undefined ? {} : { cwd: this.#config.execution.cwd }),
     }
   }
@@ -324,12 +334,18 @@ export class CommandTemplateRegistry {
     signal?: AbortSignal,
   ): Promise<TemplateRunResult> {
     const invocation = this.resolve(templateId, params, confirmation)
-    const result = await this.#runner.run(invocation.command, invocation.args, {
-      timeoutMs: this.#config.execution.timeoutMs,
-      maxOutputBytes: this.#config.execution.maxOutputBytes,
-      ...(invocation.cwd === undefined ? {} : { cwd: invocation.cwd }),
-      ...(signal === undefined ? {} : { signal }),
-    })
+    const release = await this.#preflight?.(invocation, signal)
+    let result: ExecResult
+    try {
+      result = await this.#runner.run(invocation.command, invocation.args, {
+        timeoutMs: this.#config.execution.timeoutMs,
+        maxOutputBytes: this.#config.execution.maxOutputBytes,
+        ...(invocation.cwd === undefined ? {} : { cwd: invocation.cwd }),
+        ...(signal === undefined ? {} : { signal }),
+      })
+    } finally {
+      release?.()
+    }
     return {
       ...result,
       templateId,
