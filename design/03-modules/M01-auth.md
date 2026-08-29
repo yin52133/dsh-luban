@@ -41,7 +41,7 @@ sequenceDiagram
     participant S as 账户存储 (HAL)
     B->>G: GET /（任意业务路由）
     alt 无有效 token
-        G-->>B: 302 → /login
+        G-->>B: 302 → /luban-auth/login
         B->>G: POST /luban-auth/login {user, password}
         G->>A: verify(user, password)
         A->>S: 读取哈希 + 失败计数
