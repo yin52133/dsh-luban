@@ -1,0 +1,11 @@
+- insert:
+    - id: luban-context
+      name: dsh-luban-context
+      config:
+        trigger: { ratio: 0.80, minGapRounds: 4 }
+        strategy: summarize+virtualfile
+        keepRecentTokens: 24000
+        archiveDir: .luban/context-archive
+        nightProfile:
+          trigger: { ratio: 0.70 }
+          keepRecentTokens: 16000
