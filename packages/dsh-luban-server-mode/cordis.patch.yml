@@ -1,0 +1,24 @@
+# Ubuntu-only server operations. The plugin logs a disabled notice elsewhere.
+- insert:
+    - id: luban-server-mode
+      name: dsh-luban-server-mode
+      config:
+        service:
+          name: dsh-luban
+          user: ''
+          profile: ubuntu-server
+          dshExecutable: dsh
+        build:
+          maxConcurrent: 1
+          defaultTimeoutMin: 30
+          workspaceRoots: [~/workspace, ~/projects]
+        guard:
+          diskMinGb: 10
+          loadMax: 8
+          checkIntervalSec: 15
+        artifacts:
+          dir: ~/builds
+          retainRuns: 10
+          linkTtlSec: 300
+        store:
+          file: ~/.dsh/luban/server-mode/ledger.json

@@ -7,6 +7,7 @@ Ubuntu 编译服务器的 dsh 常驻与操作模式：systemd 托管启动、编
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：systemd 启动器/命令集/看护/产物 |
+| v0.2 | 2026-08-30 | Codex | 回填持久构建队列、资源门禁与认证产物实现验证 |
 
 ## 1. 概述与目标
 
@@ -86,4 +87,20 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
 
 ## 10. 开放问题
 
-- 交叉编译工具链（用户的实际 MCU 工具链清单）在 MS4 前确认，命令模板按清单落地。
+- 内置 pnpm/CMake 模板与严格的用户模板配置已落地；仍需按目标服务器的 MCU/交叉编译工具链
+  清单补充 profile 配置，并执行真实 systemd、linger、编译器和浏览器下载验收。
+
+## 11. 实现与验证记录
+
+- `UserSystemdInstaller` 原子生成加固的 user unit，使用参数数组执行 `loginctl` 与
+  `systemctl --user`；安装需显式调用，非 Linux 平台不注册服务或路由。
+- 原子 build ledger 与 FIFO queue 实现并发上限、重启恢复和稳定状态迁移；构建参数只能进入
+  argv/cwd/collect，workspace 与产物源受根目录约束，Node 不启用 shell。
+- M03 托管的独立 worker 以私有 spec/result 文件交接，执行超时、日志尾部和文件数有界；
+  重启时复用存活 worker 或持久结果，终态销毁托管会话并清除保活账本。
+- 磁盘/负载探测失败时 fail closed，超阈值暂停新任务并可写 TaskStore 告警；失败摘要可由
+  Settings 页面注入会话。
+- 产物收集跳过符号链接，按完成时间保留；`/luban-server-mode` 认证 API/SSE 提供有界重放与
+  baseline，下载同时要求 M01 会话和短期 HMAC 签名。
+- 本地 Prettier、ESLint、严格类型检查、构建、17 项测试、发布元数据与 npm pack 白名单审计通过；
+  测试全部使用 fake runner/probe/executor，未安装 systemd unit、运行编译器或下载真实产物。
