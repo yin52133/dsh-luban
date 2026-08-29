@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：tmux 托管/win 保活/重启恢复/巡检/断点 |
 | v0.2 | 2026-08-30 | Codex | 回填双平台 HAL、持久恢复与检查点实现验证 |
+| v0.3 | 2026-08-30 | Codex | 接通异常健康事件到 M07 HUD 的脱敏实时投影 |
 
 ## 1. 概述与目标
 
@@ -90,13 +91,15 @@ export interface KeepaliveService {
 
 ## 7. 依赖与边界
 
-- 下层：HAL（tmux 命令行、Windows `schtasks`/服务控制、进程探针）；协作：M02（健康事件、断点来源任务）、M09（systemd 单元由其启动器注册）。
+- 下层：HAL（tmux 命令行、Windows `schtasks`/服务控制、进程探针）；协作：M02（健康事件、断点来源任务）、M07（消费健康事件并展示）、M09（systemd 单元由其启动器注册）。
 - 复用档位：tmux（B 档外部工具）、NSSM（B 档，license 待核实，可退化为原生 `schtasks`）。
 - 平台属性：双端公用（差异全在 HAL）。
 
 ## 8. 非功能与安全
 
 - 巡检与恢复日志脱敏（不含会话内容，只含元数据）。
+- `luban.keepalive.health` 的 `detail` 视为不可信诊断文本；M07 在进入 REST/SSE/Web/CLI
+  前统一去控制字符、脱敏并限长，最多保留 256 个当前异常会话。
 - 恢复策略幂等：重复调用不产生重复会话；账本损坏时降级为「只列出孤儿会话待人工处理」而非自作主张清理。
 - Windows 计划任务以当前用户或 SYSTEM 运行在部署文档中给出选择建议与安全差异。
 
@@ -118,7 +121,10 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   `--patch` 参数；命令行按 `CommandLineToArgvW` 规则编码，不经过 Node shell。
 - 原子账本记录 session spec、归属和里程碑检查点；启动时只恢复账本拥有的缺失会话，
   账本损坏时仅报告孤儿而不删除或重建。
-- 巡检发布 `luban.keepalive.health`，可选 `lubanTaskStore` 告警去重；有限任务可通过
-  `release()` 销毁会话并清除账本，供 M09 worker 完成后收口。
+- 巡检发布 `luban.keepalive.health`，可选 `lubanTaskStore` 告警去重；M07 通过 Cordis
+  事件松耦合消费，健康变化立即进入认证 snapshot/SSE，并在 Web 状态栏与 CLI 首行显示。
+  有限任务可通过 `release()` 销毁会话并清除账本，供 M09 worker 完成后收口。
+- 真实 Cordis mount 测试覆盖 HUD 先加载、异常/恢复事件、认证 REST 投影、客户端提示与卸载；
+  detail 中的凭据型文本不会进入响应。
 - 本地 Prettier、ESLint、严格类型检查、构建、12 项测试、发布元数据与 npm pack 白名单审计通过；
   外部 tmux/schtasks 边界均使用 fake runner，未创建真实系统会话或计划任务。

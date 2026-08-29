@@ -6,6 +6,7 @@
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：契约汇总、依赖关系、事件总线登记表 |
 | v0.2 | 2026-08-30 | Codex | 统一插件 HTTP 路由为 `/luban-<module>/...` |
+| v0.3 | 2026-08-30 | Codex | 登记 HUD 对健康事件与可选 TaskStore 的松耦合消费 |
 
 ## 1. 契约一览与依赖方向
 
@@ -44,6 +45,7 @@ flowchart LR
     M10 --> A
     M11 --> T
     M03 --> T
+    M07 --> T
 ```
 
 各契约的完整 TypeScript 签名分布在对应模块文档「接口设计」章节；本章维护**登记表与公共约定**，新增跨模块契约必须先在此登记。
@@ -51,7 +53,7 @@ flowchart LR
 | 契约 | 提供模块 | 主要消费方 | 文档 |
 | --- | --- | --- | --- |
 | AuthService / AuthMiddleware | M01 | M02、M05、M09、M10、M11 | [M01 §4](../03-modules/M01-auth.md) |
-| TaskStore / AgentClaimService / NightScheduler | M02 | M03、M09、M11 | [M02 §4](../03-modules/M02-taskboard.md) |
+| TaskStore / AgentClaimService / NightScheduler | M02 | M03、M07、M09、M11 | [M02 §4](../03-modules/M02-taskboard.md) |
 | KeepaliveService / KeepaliveAdapter | M03 | M02、M09 | [M03 §4](../03-modules/M03-keepalive.md) |
 | PlanService / PlanGuard | M04 | M02 | [M04 §4](../03-modules/M04-plan.md) |
 | SessionRegistry | M05 | M02 | [M05 §4](../03-modules/M05-session-share.md) |
@@ -90,7 +92,7 @@ flowchart LR
 | `luban.task.changed` | taskId、from→to、actor、version | M02 | 看板 UI、M03、M09 |
 | `luban.task.claimed` | taskId、actor(agent 会话)、hostScope | M02 | M03、M07 |
 | `luban.night.status` | windowActive、quotaUsed、circuit | M02 | HUD、看板 |
-| `luban.keepalive.health` | sessionId、alive、detail | M03 | 看板告警、HUD |
+| `luban.keepalive.health` | sessionId、alive、detail（消费方对外前脱敏限长） | M03 | 看板告警、HUD |
 | `luban.session.lock` | sessionId、holder、role | M05 | 看板、HUD |
 | `luban.telemetry.snapshot` | TelemetrySnapshot（节流 1s） | M07 | 扩展插件 |
 | `luban.compaction.done` | sessionId、strategy、前后 token | M08 | HUD、审计 |
@@ -103,6 +105,8 @@ flowchart LR
 - 各插件的 HTTP 端点统一前缀 `/luban-<module>/...`（如 `/luban-taskboard/tasks`、`/luban-auth/login`），与 cordis 插件 id `luban-<module>` 一致并避免和 dsh 内建路由冲突。
 - 除 `/luban-auth/login` 外所有端点经 M01 门禁中间件（P6.2）。
 - SSE 端点约定 `GET /luban-<module>/events`，断线重连携带 `Last-Event-ID` 做补发。
+- `GET /luban-hud/snapshot` 与 HUD SSE envelope 可选携带 `keepalive { healthy, alerts[] }`；
+  这是向后兼容扩展，alerts 只含有界、脱敏的 `sessionId/detail` 元数据。
 
 ## 5. 变更流程
 

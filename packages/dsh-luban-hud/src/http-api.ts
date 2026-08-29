@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AuthService } from '@luban/core'
 import { LubanError, isLubanError, modulePrefix } from '@luban/core'
 import type { DefaultTelemetryAggregator } from './aggregator.js'
+import { HudKeepaliveHealthStore } from './keepalive-health.js'
 import { HUD_TELEMETRY_EVENT } from './types.js'
 import type { HudPublicConfig, HudSnapshotResponse, HudTelemetryEnvelope } from './types.js'
 
@@ -183,6 +184,8 @@ export interface HudHttpApiOptions {
   readonly telemetry: DefaultTelemetryAggregator
   readonly auth: AuthService
   readonly config: HudPublicConfig
+  readonly keepalive?: HudKeepaliveHealthStore
+  readonly onError?: (error: unknown) => void
 }
 
 /** Authenticated snapshot/history/SSE API under the canonical `/luban-hud` prefix. */
@@ -190,19 +193,23 @@ export class HudHttpApi {
   readonly #telemetry: DefaultTelemetryAggregator
   readonly #auth: AuthService
   readonly #config: HudPublicConfig
+  readonly #keepalive: HudKeepaliveHealthStore
+  readonly #ownsKeepalive: boolean
+  readonly #onError: (error: unknown) => void
   readonly #stream = new HudEventStream()
-  readonly #unsubscribe: () => void
+  readonly #unsubscribeTelemetry: () => void
+  readonly #unsubscribeKeepalive: () => void
   #disposed = false
 
   public constructor(options: HudHttpApiOptions) {
     this.#telemetry = options.telemetry
     this.#auth = options.auth
     this.#config = options.config
-    this.#unsubscribe = this.#telemetry.subscribe((): void => {
-      void this.#telemetry
-        .envelope()
-        .then((envelope): void => this.#stream.publish(this.#response(envelope)))
-    })
+    this.#keepalive = options.keepalive ?? new HudKeepaliveHealthStore()
+    this.#ownsKeepalive = options.keepalive === undefined
+    this.#onError = options.onError ?? ((): void => undefined)
+    this.#unsubscribeTelemetry = this.#telemetry.subscribe((): void => this.#publishLatest())
+    this.#unsubscribeKeepalive = this.#keepalive.subscribe((): void => this.#publishLatest())
   }
 
   public readonly handler = async (
@@ -251,12 +258,34 @@ export class HudHttpApi {
   public dispose(): void {
     if (this.#disposed) return
     this.#disposed = true
-    this.#unsubscribe()
+    this.#unsubscribeKeepalive()
+    this.#unsubscribeTelemetry()
     this.#stream.dispose()
+    if (this.#ownsKeepalive) this.#keepalive.dispose()
   }
 
   #response(envelope: HudTelemetryEnvelope): HudSnapshotResponse {
-    return Object.freeze({ ...envelope, config: this.#config })
+    return Object.freeze({
+      ...envelope,
+      config: this.#config,
+      keepalive: this.#keepalive.snapshot(),
+    })
+  }
+
+  #publishLatest(): void {
+    if (this.#disposed) return
+    void this.#telemetry
+      .envelope()
+      .then((envelope): void => {
+        if (!this.#disposed) this.#stream.publish(this.#response(envelope))
+      })
+      .catch((error: unknown): void => {
+        try {
+          this.#onError(error)
+        } catch {
+          // Diagnostics cannot restore a failed refresh and must not leak a rejection.
+        }
+      })
   }
 
   #assertAvailable(): void {

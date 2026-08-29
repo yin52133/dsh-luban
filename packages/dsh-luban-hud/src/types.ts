@@ -3,6 +3,22 @@ import type { HudDisplayField, HudThresholds } from './config.js'
 
 export const HUD_TELEMETRY_EVENT = 'luban.telemetry.snapshot' as const
 
+export interface KeepaliveHealthPayload {
+  readonly sessionId: string
+  readonly alive: boolean
+  readonly detail?: string
+}
+
+export interface HudKeepaliveAlert {
+  readonly sessionId: string
+  readonly detail?: string
+}
+
+export interface HudKeepaliveStatus {
+  readonly healthy: boolean
+  readonly alerts: readonly HudKeepaliveAlert[]
+}
+
 export type HudLevel = 'unknown' | 'normal' | 'warn' | 'danger' | 'critical'
 
 export interface TelemetryAdvisory {
@@ -45,4 +61,6 @@ export interface HudPublicConfig {
 
 export interface HudSnapshotResponse extends HudTelemetryEnvelope {
   readonly config: HudPublicConfig
+  /** Added compatibly: older HUD servers and captured fixtures may omit M03 health. */
+  readonly keepalive?: HudKeepaliveStatus
 }

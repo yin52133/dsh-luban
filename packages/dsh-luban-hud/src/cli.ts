@@ -76,7 +76,7 @@ export async function runCli(
   const envelope = snapshotResponse((await response.json()) as unknown)
   return parsed.values.json === true
     ? JSON.stringify(envelope, null, 2)
-    : renderCliHeader(envelope.snapshot, envelope.advisory)
+    : renderCliHeader(envelope.snapshot, envelope.advisory, envelope.keepalive)
 }
 
 async function main(): Promise<void> {

@@ -9,7 +9,8 @@ An authenticated, always-visible DSH telemetry HUD backed by concurrent, pluggab
 - **M07-F003** — workspace-relative display plus live model and reasoning-effort values from public rc2 `Session`/`AgentRegistry` interfaces. Selection prefers the current initiator, then a running agent, then the newest registered agent.
 - **M07-F004** — monotonic 1-minute and 5-minute sliding TPM/RPM windows. Cached input/output fields are disjoint and included; reasoning tokens are not double-counted inside output.
 - **M07-F005** — compact/full Web status bar in the official rc2 `shell.overlay` slot and a one-line `luban-hud` CLI rendered from the same snapshot response.
-- **M07-F006** — normal/warn/danger/critical states at 70%/85%/95%; critical renders a compaction advisory while M08 independently requests a fresh `lubanTelemetry.snapshotFor(sessionId)` without a runtime dependency cycle.
+- **M07-F006** — normal/warn/danger/critical states at 70%/85%/95%; critical renders a compaction advisory and, when M02 is present, creates one deduplicated active Taskboard alert while M08 independently requests a fresh `lubanTelemetry.snapshotFor(sessionId)` without a runtime dependency cycle.
+- **M03-F004 integration** — consumes `luban.keepalive.health` without importing M03, exposes bounded/redacted current failures in REST/SSE, and renders `keepalive N down` in both the Web bar and CLI.
 
 One-hour history is an in-memory, time-bounded ring. Telemetry contains metadata only and never session text. Browser SSE is closed while the page is hidden.
 
@@ -21,7 +22,7 @@ Install after the rc2 agent/Web runtime and `dsh-luban-auth`, then apply the bun
 dsh plugin --profile default add dsh-luban-hud
 ```
 
-The host provides `lubanTelemetry`; M08 can inject that Core contract and request one exact live session without replacing or publishing the cached HUD snapshot. No production dependency is added beyond `@luban/core`.
+The host provides `lubanTelemetry`; M08 can inject that Core contract and request one exact live session without replacing or publishing the cached HUD snapshot. If `lubanTaskStore` appears before or after HUD startup, Cordis dynamically connects the critical-alert sink; the dependency remains optional. No production dependency is added beyond `@luban/core`.
 
 For development, run package-scoped gates from the repository root:
 
@@ -55,12 +56,19 @@ Thresholds must be ordered `warn < danger < critical`. Five-minute TPM/RPM value
 
 Every HTTP endpoint is authenticated through `lubanAuth` at `/luban-hud/snapshot`, `/luban-hud/history`, and `/luban-hud/events`.
 The event stream uses the registered `luban.telemetry.snapshot` name and bounded `Last-Event-ID` replay; a replay gap receives the latest immutable envelope.
+`HudSnapshotResponse.keepalive` is an optional compatibility extension. Health changes immediately
+publish a new envelope through the same SSE event; M03 diagnostic text is stripped of controls,
+redacted, capped, and never persisted by HUD. At most 256 current failures are retained in memory.
 The initial Web snapshot and CLI request use a 10-second deadline. Route and SSE
 lifecycle checks fail closed if plugin disposal races with authentication or sampling.
 
+Critical Taskboard cards use the fixed `hud:context-critical` tag and contain only the numeric
+context ratio. Calls are serialized so concurrent samples cannot create duplicates; an active card
+is reused, and a continuous critical episode is reported once until telemetry recovers.
+
 ## Demo
 
-The Web client displays a persistent pill in DSH's frame-wide overlay. Click it to toggle compact and full modes. Unknown fields use `?`; one failed provider marks the result `partial` without hiding healthy data.
+The Web client displays a persistent pill in DSH's frame-wide overlay. Click it to toggle compact and full modes. Unknown fields use `?`; one failed provider marks the result `partial` without hiding healthy data. A keepalive failure remains visible in both compact and full modes and its tooltip contains only the sanitized M03 diagnosis.
 
 Render the identical snapshot as the CLI's first line:
 

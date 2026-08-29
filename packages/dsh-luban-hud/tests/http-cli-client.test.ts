@@ -5,8 +5,9 @@ import type { AuthService } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import { runCli } from '../src/cli.js'
-import { apply as applyClient } from '../src/client/index.js'
+import { apply as applyClient, keepaliveIndicator } from '../src/client/index.js'
 import { HudEventStream, HudHttpApi } from '../src/http-api.js'
+import { HudKeepaliveHealthStore } from '../src/keepalive-health.js'
 import { HUD_TELEMETRY_EVENT, type HudSnapshotResponse } from '../src/types.js'
 
 class MockResponse extends EventEmitter {
@@ -115,6 +116,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
       snapshot: { context: { used: 'unknown' } },
       advisory: { level: 'unknown' },
       config: publicConfig,
+      keepalive: { healthy: true, alerts: [] },
     })
     api.dispose()
   })
@@ -139,6 +141,10 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
             sources: {},
             failures: [],
             config: publicConfig,
+            keepalive: {
+              healthy: false,
+              alerts: [{ sessionId: 'luban-build', detail: 'offline' }],
+            },
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         ),
@@ -154,6 +160,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     expect(line).not.toMatch(/\p{Cc}/u)
     expect(line).toContain('workspace firmware forged [31m')
     expect(line).toContain('model deep seek-chat')
+    expect(line).toContain('keepalive 1 down: luban-build')
     const call = fetchMock.mock.calls.at(0)
     expect(call?.[0]).toEqual(new URL('http://127.0.0.1:42600/luban-hud/snapshot'))
     expect(new Headers(call?.[1]?.headers).get('cookie')).toBe('luban_session=secret')
@@ -229,6 +236,28 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     ).toThrow('disposed')
   })
 
+  it('pushes redacted M03 health changes through the existing compatible SSE envelope', async (): Promise<void> => {
+    const telemetry = new DefaultTelemetryAggregator({ refreshMs: 1_000, providerTimeoutMs: 100 })
+    const keepalive = new HudKeepaliveHealthStore()
+    const api = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig, keepalive })
+    const streamRequest = request('/luban-hud/events', 'luban_session=ok')
+    const response = new MockResponse()
+    await api.handler(streamRequest, response as unknown as ServerResponse)
+    expect(response.body).toContain('"keepalive":{"healthy":true,"alerts":[]}')
+
+    keepalive.record({
+      sessionId: 'luban-worker',
+      alive: false,
+      detail: 'lost token=not-public',
+    })
+    await vi.waitFor((): void => expect(response.body).toContain('"keepalive":{"healthy":false'))
+    expect(response.body).toContain('lost token=[REDACTED]')
+    expect(response.body).not.toContain('not-public')
+    streamRequest.emit('close')
+    api.dispose()
+    keepalive.dispose()
+  })
+
   it('fails closed when plugin disposal races with asynchronous authentication', async (): Promise<void> => {
     let finishAuthentication:
       ((decision: { allowed: true; status: 200; user: string }) => void) | undefined
@@ -271,5 +300,20 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
       expect.objectContaining({ name: 'shell.overlay', id: 'luban-hud' }),
       expect.any(Function),
     )
+  })
+
+  it('keeps old envelopes compatible and renders unhealthy M03 metadata visibly', (): void => {
+    expect(keepaliveIndicator(undefined)).toBeNull()
+    expect(keepaliveIndicator({ healthy: true, alerts: [] })).toBeNull()
+    expect(
+      keepaliveIndicator({
+        healthy: false,
+        alerts: [{ sessionId: 'luban-a', detail: 'offline' }, { sessionId: 'luban-b' }],
+      }),
+    ).toEqual({
+      count: 2,
+      label: 'keepalive 2 down',
+      title: 'luban-a: offline; luban-b',
+    })
   })
 })

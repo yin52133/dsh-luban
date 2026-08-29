@@ -2,9 +2,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-session'
-import type { AuthService, TelemetryAggregator, TelemetrySnapshot } from '@luban/core'
+import type { AuthService, TaskStore, TelemetryAggregator, TelemetrySnapshot } from '@luban/core'
 import { LubanError, modulePrefix, redactSecrets, systemClock } from '@luban/core'
 import { DefaultTelemetryAggregator } from './aggregator.js'
+import { TaskboardHudAlertSink } from './alerts.js'
 import { Config as ConfigSchema, type Config as HudConfig, parseConfig } from './config.js'
 import {
   DshContextEstimatorProvider,
@@ -12,15 +13,19 @@ import {
   DshSessionTelemetryProvider,
 } from './dsh-telemetry.js'
 import { HudHttpApi } from './http-api.js'
+import { HudKeepaliveHealthStore } from './keepalive-health.js'
 import { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
+import type { KeepaliveHealthPayload } from './types.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     lubanAuth: AuthService
+    lubanTaskStore: TaskStore
     lubanTelemetry: TelemetryAggregator
   }
 
   interface Events {
+    'luban.keepalive.health'(payload: KeepaliveHealthPayload): void
     'luban.telemetry.snapshot'(snapshot: TelemetrySnapshot): void
   }
 }
@@ -33,6 +38,7 @@ export type Config = HudConfig
 
 export { DefaultTelemetryAggregator } from './aggregator.js'
 export type { TelemetryAggregatorOptions } from './aggregator.js'
+export { TaskboardHudAlertSink } from './alerts.js'
 export { renderCliHeader, sanitizeTerminalText } from './cli-render.js'
 export { parseConfig } from './config.js'
 export type { HudDisplayField, HudThresholds } from './config.js'
@@ -48,18 +54,30 @@ export {
 } from './dsh-telemetry.js'
 export type { AgentLookup } from './dsh-telemetry.js'
 export { HudEventStream, HudHttpApi } from './http-api.js'
+export { HudKeepaliveHealthStore } from './keepalive-health.js'
 export { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
 export type { MonotonicClock } from './rate-window.js'
 export { HUD_TELEMETRY_EVENT } from './types.js'
 export type {
   HudLevel,
+  HudKeepaliveAlert,
+  HudKeepaliveStatus,
   HudPublicConfig,
   HudSnapshotResponse,
   HudTelemetryEnvelope,
   ProviderFailure,
   TelemetryAdvisory,
   TelemetrySourceKey,
+  KeepaliveHealthPayload,
 } from './types.js'
+
+function diagnostic(error: unknown): string {
+  try {
+    return redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 512)
+  } catch {
+    return 'unknown error'
+  }
+}
 
 /** Mount rc2 telemetry providers, authenticated API/SSE, and the shared aggregator service. */
 export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
@@ -90,11 +108,38 @@ export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
   telemetry.register(new DshContextEstimatorProvider(ctx.agents))
   telemetry.register(new RateTelemetryProvider(window))
   const publicConfig = Object.freeze({ thresholds: config.thresholds, display: config.display })
-  const api = new HudHttpApi({ telemetry, auth, config: publicConfig })
+  const keepalive = new HudKeepaliveHealthStore()
+  const api = new HudHttpApi({
+    telemetry,
+    auth,
+    config: publicConfig,
+    keepalive,
+    onError: (error: unknown): void =>
+      ctx.logger.warn(`luban-hud: stream refresh failed: ${diagnostic(error)}`),
+  })
   const publishSnapshot = telemetry.subscribe((snapshot): void => {
     ctx.emit('luban.telemetry.snapshot', snapshot)
   })
   ctx.provide('lubanTelemetry', telemetry)
+
+  ctx.inject(['lubanTaskStore'], (taskContext): (() => Promise<void>) => {
+    const taskStore = taskContext.get('lubanTaskStore')
+    if (taskStore === undefined) {
+      throw new LubanError('E_UNAVAILABLE', 'lubanTaskStore injection became unavailable')
+    }
+    const alerts = new TaskboardHudAlertSink(taskStore)
+    const observe = telemetry.subscribe((snapshot): void => {
+      void alerts
+        .observe(snapshot, telemetry.advisory(snapshot))
+        .catch((error: unknown): void =>
+          ctx.logger.warn(`luban-hud: Taskboard alert failed: ${diagnostic(error)}`),
+        )
+    })
+    return async (): Promise<void> => {
+      observe()
+      await alerts.dispose()
+    }
+  })
 
   ctx.effect(() => {
     const unregisterRoute = ctx.webServer.register({
@@ -109,15 +154,20 @@ export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
     const unregisterEvent = ctx.on('session/event', (session, event): void =>
       collector.observe(session, event),
     )
+    const unregisterKeepalive = ctx.on('luban.keepalive.health', (payload): void =>
+      keepalive.record(payload),
+    )
     for (const agent of ctx.agents.list()) collector.adopt(agent.session)
     telemetry.start()
     return (): void => {
       unregisterRoute()
+      unregisterKeepalive()
       unregisterEvent()
       unregisterDisposed()
       unregisterCreated()
       publishSnapshot()
       api.dispose()
+      keepalive.dispose()
       telemetry.dispose()
     }
   }, 'luban-hud: providers, route, stream, and sampler lifecycle')

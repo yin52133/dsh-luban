@@ -9,6 +9,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：遥测聚合/用量/环境/速率/展示/阈值 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 遥测口径、SSE、降级与验证证据 |
 | v0.3 | 2026-08-30 | Codex | 增加会话定向新鲜采样，消除多 agent 缓存串扰 |
+| v0.4 | 2026-08-30 | Codex | 接入 M03 健康状态与 M02 critical 去重告警 |
 
 ## 1. 概述与目标
 
@@ -45,6 +46,9 @@ flowchart LR
     SNAP --> T{"ratio ≥ 阈值?"}
     T -- "≥70%/85%" --> N1["HUD 黄/橙提示"]
     T -- "≥95%" --> N2["红色提示 + 建议触发 M08 压缩"]
+    N2 --> TB["M02 活跃告警卡（连续 critical episode 去重）"]
+    K["M03 luban.keepalive.health"] --> KH["有界脱敏健康投影"]
+    KH --> W & C
 ```
 
 ## 4. 接口设计
@@ -93,7 +97,7 @@ export interface TelemetrySnapshot {
 
 ## 7. 依赖与边界
 
-- 下层：dsh 公开遥测点（实测确定；拿不到的字段由估算 Provider 兜底）；协作：M08（critical 提示触发压缩建议）。
+- 下层：dsh 公开遥测点（实测确定；拿不到的字段由估算 Provider 兜底）；协作：M03（健康事件）、可选 M02 `lubanTaskStore`（critical 告警）、M08（critical 提示触发压缩建议）。M07 只依赖 Core 契约和已登记 Cordis 事件，不 import 其他模块实现。
 - 复用档位：**C 档**——参考各类 coding-agent 状态栏的需求形态（ccusage/状态栏插件的字段口径），实现原创。
 - 平台属性：双端公用。
 
@@ -104,6 +108,10 @@ export interface TelemetrySnapshot {
 - `refreshSec` 下限 1 秒；Provider 并发采样有 timeout，历史保留上限 1440 分钟，SSE replay 固定 256 条。
 - Provider 任意异常仅以固定公共文案进入 API，内部日志先脱敏；非法/溢出 token usage 保持 `unknown/partial`，不伪装为 0。
 - REST/SSE 全部经 M01 认证；对外 SSE 只使用已登记的 `luban.telemetry.snapshot` 事件名和共享递增 ID。
+- M03 健康异常作为 `HudSnapshotResponse.keepalive` 可选扩展字段加入；旧响应/旧客户端仍可工作。
+  健康 detail 去控制字符、凭据脱敏、单条限长，异常集合上限 256；卸载后不再接受事件或推送。
+- M02 后置加载时通过可选 Cordis injection 自动接通。critical 告警只含比例元数据，不含 workspace、
+  模型或会话内容；同一连续 critical episode 串行查询并复用活跃卡，卸载竞态在 create 前复查。
 
 ## 9. checklist 映射
 
@@ -120,9 +128,15 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
   M08 因而不会把 initiator/running/newest 的全局选择结果误用于另一个刚进入 idle 的会话。
 - Web 使用官方 `shell.overlay` slot，并在页面隐藏时关闭 SSE；CLI 从环境读取 Cookie，输出单行去控制字符，HTTP 10 秒超时。
 - SSE 支持共享 ID、`Last-Event-ID`、256 条 replay 与断档 baseline；API/stream 在插件卸载竞态中 fail closed。
-- 本地 Prettier、严格类型、ESLint、构建、21 项 M07 测试、architecture、release metadata 与 pack dry-run 通过。
+- M03 异常/恢复会立即复用现有 SSE envelope 推送，Web 无论紧凑/完整模式均显示红色
+  `keepalive N down`，CLI 首行同步显示异常会话 id；字段缺失时保持旧 envelope 兼容。
+- 可选 `lubanTaskStore` 在服务后置出现时动态接通；critical episode 通过串行 active-tag 查询去重，
+  恢复后才开启下一 episode，TaskStore 失败只写脱敏诊断且不影响遥测。
+- 本地 Prettier、严格类型、ESLint、构建、27 项 M07 测试通过；其中真实 Cordis mount 覆盖
+  keepalive 事件、后置 TaskStore、认证响应、客户端行为，另有卸载竞态与并发去重单测。
 
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu DSH profile 核对 workspace/model/reasoning 切换、Web 常驻 HUD、CLI 首行与页面隐藏重连。
 - 仍需用真实 Provider/账单流水验证 TPM/RPM 口径，并在真实长会话复核 M08 的会话定向采样与压缩质量。
+- 仍需在真实掉线长任务中核对 M03 巡检到 HUD/Taskboard 的端到端可见时延。

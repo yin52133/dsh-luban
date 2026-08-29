@@ -17,7 +17,7 @@ const STYLE = `
 .luban-hud{position:fixed;right:14px;bottom:12px;z-index:80;pointer-events:auto;max-width:min(94vw,920px);font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;color:#e2e8f0}
 .luban-hud__bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:7px 10px;border:1px solid #475569;border-radius:8px;background:rgba(15,23,42,.96);box-shadow:0 7px 22px rgba(0,0,0,.35);cursor:pointer;color:inherit;font:inherit;text-align:left}
 .luban-hud__bar:hover{border-color:#94a3b8}.luban-hud__level{width:8px;height:8px;border-radius:50%;background:#64748b;flex:none}.luban-hud--normal .luban-hud__level{background:#22c55e}.luban-hud--warn .luban-hud__level{background:#eab308}.luban-hud--danger .luban-hud__level{background:#f97316}.luban-hud--critical .luban-hud__level{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.22)}
-.luban-hud__item{white-space:nowrap}.luban-hud__label{color:#94a3b8}.luban-hud__error{color:#fca5a5}.luban-hud__hint{color:#fde68a}.luban-hud__toggle{color:#64748b;margin-left:2px}
+.luban-hud__item{white-space:nowrap}.luban-hud__label{color:#94a3b8}.luban-hud__error,.luban-hud__health{color:#fca5a5}.luban-hud__hint{color:#fde68a}.luban-hud__toggle{color:#64748b;margin-left:2px}
 @media(max-width:680px){.luban-hud{left:8px;right:8px;bottom:8px}.luban-hud__bar{gap:7px}.luban-hud__item--secondary{display:none}}
 `
 
@@ -48,6 +48,63 @@ function text(value: string): string {
 
 function has(fields: ReadonlySet<HudDisplayField>, field: HudDisplayField): boolean {
   return fields.has(field)
+}
+
+export interface KeepaliveIndicator {
+  readonly count: number
+  readonly label: string
+  readonly title: string
+}
+
+interface PublicKeepaliveAlert {
+  readonly sessionId: string
+  readonly detail?: string
+}
+
+function publicClientText(value: string, maximumLength: number): string {
+  return value
+    .replace(/[\p{Cc}\u2028\u2029]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, maximumLength)
+}
+
+function publicKeepaliveAlert(input: unknown): PublicKeepaliveAlert | null {
+  if (typeof input !== 'object' || input === null) return null
+  const record = input as Readonly<Record<string, unknown>>
+  if (typeof record.sessionId !== 'string') return null
+  const sessionId = publicClientText(record.sessionId, 160)
+  if (sessionId === '' || (record.detail !== undefined && typeof record.detail !== 'string')) {
+    return null
+  }
+  const detail =
+    typeof record.detail === 'string' ? publicClientText(record.detail, 256) : undefined
+  return {
+    sessionId,
+    ...(detail === undefined || detail === '' ? {} : { detail }),
+  }
+}
+
+/** Reduce the optional M03 response field to bounded text consumed by the Web status bar. */
+export function keepaliveIndicator(input: unknown): KeepaliveIndicator | null {
+  if (typeof input !== 'object' || input === null) return null
+  const value = input as Readonly<Record<string, unknown>>
+  if (value.healthy !== false || !Array.isArray(value.alerts)) return null
+  const alerts = value.alerts
+    .slice(0, 8)
+    .map(publicKeepaliveAlert)
+    .filter((alert): alert is PublicKeepaliveAlert => alert !== null)
+  if (alerts.length === 0) return null
+  return {
+    count: value.alerts.length,
+    label: `keepalive ${String(value.alerts.length)} down`,
+    title: alerts
+      .map((alert): string =>
+        alert.detail === undefined ? alert.sessionId : `${alert.sessionId}: ${alert.detail}`,
+      )
+      .join('; ')
+      .slice(0, 512),
+  }
 }
 
 /** Persistent rc2 shell overlay; closing the SSE while hidden prevents browser timer leaks. */
@@ -131,13 +188,15 @@ export function HudStatusBar(): ReactNode {
   }
 
   const { snapshot, advisory } = envelope
+  const keepalive = keepaliveIndicator(envelope.keepalive)
   const compact = compactOverride ?? envelope.config.display.compact
-  const title = `${advisory.message}; click to ${compact ? 'expand' : 'compact'}`
+  const title = `${advisory.message}${keepalive === null ? '' : `; ${keepalive.title}`}; click to ${compact ? 'expand' : 'compact'}`
   return (
     <aside
       className={`luban-hud luban-hud--${advisory.level}`}
       aria-live="polite"
       data-level={advisory.level}
+      data-keepalive={keepalive === null ? 'healthy' : 'unhealthy'}
     >
       <style>{STYLE}</style>
       <button
@@ -187,6 +246,11 @@ export function HudStatusBar(): ReactNode {
         {advisory.compactionSuggested ? (
           <span className="luban-hud__hint">compact recommended</span>
         ) : null}
+        {keepalive === null ? null : (
+          <span className="luban-hud__health" title={keepalive.title} role="alert">
+            {keepalive.label}
+          </span>
+        )}
         {envelope.failures.length > 0 || error !== '' ? (
           <span className="luban-hud__error" title={error || envelope.failures[0]?.message}>
             partial
