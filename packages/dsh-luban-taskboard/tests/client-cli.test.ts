@@ -1,6 +1,13 @@
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import type { AuthService, Clock } from '@luban/core'
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DefaultAgentClaimService } from '../src/claim-service.js'
 import { run } from '../src/cli.js'
 import {
   apply as applyClient,
@@ -14,6 +21,10 @@ import {
   type TaskStatus,
   type UiTask,
 } from '../src/client/index.js'
+import { TaskboardHttpApi } from '../src/http-api.js'
+import { createLedgerStore } from '../src/ledger.js'
+import { DefaultNightScheduler } from '../src/night-scheduler.js'
+import { JsonTaskStore } from '../src/task-store.js'
 
 const doingTask: UiTask = Object.freeze({
   id: 'T-1',
@@ -152,6 +163,135 @@ describe('taskctl', (): void => {
     ])
     expect(calls.map(({ url }) => url).join('\n')).not.toContain('session=secret')
   })
+
+  it('completes the mutation lifecycle against a real loopback API', async (): Promise<void> => {
+    const directory = await mkdtemp(join(tmpdir(), 'luban-taskctl-loopback-'))
+    const clock: Clock = { now: (): number => Date.UTC(2026, 7, 30, 12) }
+    const store = new JsonTaskStore(createLedgerStore(join(directory, 'ledger.json'), clock), clock)
+    const claims = new DefaultAgentClaimService(store, 'ubuntu', true)
+    const scheduler = new DefaultNightScheduler({
+      store,
+      claims,
+      config: {
+        enabled: false,
+        window: '23:30-06:30',
+        dailyQuota: 1,
+        hostScopeWhitelist: ['ubuntu'],
+        tagWhitelist: ['auto-ok'],
+        model: { provider: '', id: '' },
+        toolAllowlist: [],
+        circuitBreaker: { maxConsecutiveFailures: 1 },
+      },
+      hostScope: 'ubuntu',
+      clock,
+    })
+    const auth = {
+      middleware(): ReturnType<AuthService['middleware']> {
+        return (request) =>
+          Promise.resolve(
+            request.cookie === 'session=ok'
+              ? { allowed: true, status: 200, user: 'cli-user' }
+              : { allowed: false, status: 401 },
+          )
+      },
+    } as AuthService
+    const api = new TaskboardHttpApi({ store, claims, scheduler, auth })
+    const server = createServer((request, response): void => {
+      void api.handler(request, response)
+    })
+    await new Promise<void>((resolve, reject): void => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address() as AddressInfo
+    vi.stubEnv('LUBAN_URL', `http://127.0.0.1:${String(address.port)}`)
+    vi.stubEnv('LUBAN_SESSION_COOKIE', 'session=ok')
+    vi.stubEnv('LUBAN_CSRF_TOKEN', 'csrf-loopback')
+
+    try {
+      const created = (await run([
+        'add',
+        '--title',
+        'Loopback task',
+        '--hostScope',
+        'ubuntu',
+        '--priority',
+        'P1',
+        '--workspace',
+        '/workspace',
+        '--acceptance',
+        'Lifecycle reaches done',
+        '--tag',
+        'auto-ok',
+      ])) as { readonly task: { readonly id: string; readonly version: number } }
+      const taskId = created.task.id
+      const updated = (await run([
+        'update',
+        '--id',
+        taskId,
+        '--version',
+        String(created.task.version),
+        '--title',
+        'Loopback task updated',
+      ])) as { readonly task: { readonly version: number } }
+      const todo = (await run([
+        'transition',
+        '--id',
+        taskId,
+        '--version',
+        String(updated.task.version),
+        '--to',
+        'todo',
+      ])) as { readonly task: { readonly version: number } }
+      const claimed = (await run([
+        'claim',
+        '--session',
+        'cli-session',
+        '--workspace',
+        '/workspace',
+        '--tag',
+        'auto-ok',
+      ])) as { readonly task: { readonly id: string; readonly version: number } }
+      expect(claimed.task.id).toBe(taskId)
+      const review = (await run([
+        'transition',
+        '--id',
+        taskId,
+        '--version',
+        String(claimed.task.version),
+        '--to',
+        'review',
+      ])) as { readonly task: { readonly version: number } }
+      await run([
+        'done',
+        '--id',
+        taskId,
+        '--version',
+        String(review.task.version),
+        '--note',
+        'Accepted over loopback',
+      ])
+
+      await expect(run(['list', '--status', 'done'])).resolves.toMatchObject({
+        tasks: [
+          {
+            id: taskId,
+            title: 'Loopback task updated',
+            status: 'done',
+            claim: null,
+          },
+        ],
+      })
+      expect(todo.task.version).toBeLessThan(claimed.task.version)
+    } finally {
+      api.dispose()
+      await scheduler.dispose()
+      await new Promise<void>((resolve, reject): void => {
+        server.close((error): void => (error === undefined ? resolve() : reject(error)))
+      })
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
 
 describe('Taskboard client entry', (): void => {
