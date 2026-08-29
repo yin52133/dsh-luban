@@ -1,0 +1,131 @@
+import type { Context } from '@deepseek-ai/cordis'
+import type { KeepaliveEvent, KeepaliveService, TaskStore } from '@luban/core'
+import { LubanError } from '@luban/core'
+import { TaskboardKeepaliveAlertSink } from './alerts.js'
+import { NodeCommandRunner, type CommandRunner } from './command-runner.js'
+import {
+  Config as ConfigSchema,
+  type Config as KeepaliveConfig,
+  parseConfig,
+  resolveUserPath,
+} from './config.js'
+import { KeepaliveLedgerStore } from './ledger.js'
+import { ManagedKeepaliveService } from './service.js'
+import { TmuxKeepaliveAdapter } from './tmux-adapter.js'
+import { WindowsTaskKeepaliveAdapter } from './windows-adapter.js'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    lubanKeepalive: KeepaliveService
+    lubanTaskStore: TaskStore
+  }
+
+  interface Events {
+    'luban.keepalive.health'(payload: {
+      readonly sessionId: string
+      readonly alive: boolean
+      readonly detail?: string
+    }): void
+  }
+}
+
+export const name = 'luban-keepalive'
+export const inject: readonly string[] = []
+export const Config = ConfigSchema
+export type Config = KeepaliveConfig
+
+export { TaskboardKeepaliveAlertSink } from './alerts.js'
+export type { KeepaliveAlertSink } from './alerts.js'
+export { assertSuccess, NodeCommandRunner } from './command-runner.js'
+export type { CommandOptions, CommandResult, CommandRunner } from './command-runner.js'
+export { parseConfig, resolveUserPath } from './config.js'
+export type { KeepaliveStrategy } from './config.js'
+export { emptyLedger, keepaliveLedgerCodec, KeepaliveLedgerStore } from './ledger.js'
+export type { KeepaliveLedger, KeepaliveRecord } from './ledger.js'
+export { ManagedKeepaliveService } from './service.js'
+export type { ManagedKeepaliveOptions } from './service.js'
+export { managedSessionId, posixCommand, windowsCommand } from './session-id.js'
+export { TmuxKeepaliveAdapter } from './tmux-adapter.js'
+export type { TmuxAdapterOptions } from './tmux-adapter.js'
+export { WindowsTaskKeepaliveAdapter } from './windows-adapter.js'
+export type { WindowsAdapterOptions } from './windows-adapter.js'
+
+export interface AdapterFactoryOptions {
+  readonly platform: NodeJS.Platform
+  readonly config: KeepaliveConfig
+  readonly runner: CommandRunner
+  readonly signal: AbortSignal
+}
+
+export function createPlatformAdapter(
+  options: AdapterFactoryOptions,
+): TmuxKeepaliveAdapter | WindowsTaskKeepaliveAdapter {
+  const strategy =
+    options.config.strategy === 'auto'
+      ? options.platform === 'linux'
+        ? 'tmux'
+        : options.platform === 'win32'
+          ? 'service'
+          : 'unsupported'
+      : options.config.strategy
+  const common = {
+    runner: options.runner,
+    timeoutMs: options.config.commandTimeoutSec * 1_000,
+    signal: options.signal,
+  }
+  if (strategy === 'tmux' && options.platform === 'linux') return new TmuxKeepaliveAdapter(common)
+  if (strategy === 'service' && options.platform === 'win32') {
+    return new WindowsTaskKeepaliveAdapter(common)
+  }
+  throw new LubanError(
+    'E_PLATFORM_UNSUPPORTED',
+    `keepalive strategy ${strategy} is not supported on ${options.platform}`,
+  )
+}
+
+function publishCordisEvent(ctx: Context, event: KeepaliveEvent): void {
+  if (event.type !== 'health') return
+  for (const session of event.report.sessions) {
+    ctx.emit('luban.keepalive.health', {
+      sessionId: session.id,
+      alive: session.alive,
+      ...(session.detail === undefined ? {} : { detail: session.detail }),
+    })
+  }
+}
+
+/** Mount the platform HAL, durable recovery service, and health patrol. */
+export function apply(ctx: Context, input: Partial<KeepaliveConfig> = {}): void {
+  const config = parseConfig(input)
+  const controller = new AbortController()
+  const runner = new NodeCommandRunner()
+  const adapter = createPlatformAdapter({
+    platform: process.platform,
+    config,
+    runner,
+    signal: controller.signal,
+  })
+  const optionalTaskStore = config.alertToTaskboard ? ctx.get('lubanTaskStore') : undefined
+  const service = new ManagedKeepaliveService({
+    adapter,
+    ledger: new KeepaliveLedgerStore(resolveUserPath(config.ledgerFile)),
+    patrolIntervalMs: config.patrolIntervalSec * 1_000,
+    ...(optionalTaskStore === undefined
+      ? {}
+      : { alerts: new TaskboardKeepaliveAlertSink(optionalTaskStore) }),
+    onError: (error: unknown): void => ctx.logger.warn(error),
+    publish: (event): void => publishCordisEvent(ctx, event),
+  })
+
+  ctx.provide('lubanKeepalive', service)
+  ctx.effect(() => {
+    service.start()
+    if (config.bootRestore) {
+      void service.restore().catch((error: unknown): void => ctx.logger.warn(error))
+    }
+    return async (): Promise<void> => {
+      controller.abort()
+      await service.dispose()
+    }
+  }, 'luban-keepalive: boot recovery and patrol lifecycle')
+}

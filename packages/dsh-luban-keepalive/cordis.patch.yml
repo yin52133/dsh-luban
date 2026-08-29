@@ -1,0 +1,10 @@
+# Selects tmux on Linux and a native scheduled task on Windows.
+- insert:
+    - id: luban-keepalive
+      name: dsh-luban-keepalive
+      config:
+        strategy: auto
+        patrolIntervalSec: 60
+        ledgerFile: ~/.dsh/luban/keepalive/ledger.json
+        bootRestore: true
+        alertToTaskboard: true

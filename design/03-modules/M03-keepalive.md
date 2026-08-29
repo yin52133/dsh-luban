@@ -7,6 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                                    |
 | ---- | ---------- | ----- | ------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：tmux 托管/win 保活/重启恢复/巡检/断点 |
+| v0.2 | 2026-08-30 | Codex | 回填双平台 HAL、持久恢复与检查点实现验证 |
 
 ## 1. 概述与目标
 
@@ -105,5 +106,19 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
 
 ## 10. 开放问题
 
-- dsh headless 模式在 tmux 内的输出捕获方式（决定 M03-F005 的断点粒度）。
-- Windows 下 NSSM 是否引入：若 `schtasks` 满足需求则不新增依赖（P5.2 最小实现）。
+- 检查点由长任务执行器在里程碑边界显式保存，终端内容不进入保活账本；需在目标 Ubuntu 主机完成
+  SSH 断开、重启和真实 tmux attach 验收。
+- Windows 采用内置 `schtasks.exe`，不引入 NSSM；需在目标账户策略下完成注销、开机恢复与权限验收。
+
+## 11. 实现与验证记录
+
+- Linux HAL 以严格 `luban-*` 命名空间管理 tmux 创建、精确探测、附加、列表和销毁；
+  shell-command 经过 POSIX 单引号编码，宿主命令均使用参数数组、超时和取消信号。
+- Windows HAL 使用当前账户的 ONSTART Scheduled Task 与 `LIMITED` 权限，保留原始 DSH
+  `--patch` 参数；命令行按 `CommandLineToArgvW` 规则编码，不经过 Node shell。
+- 原子账本记录 session spec、归属和里程碑检查点；启动时只恢复账本拥有的缺失会话，
+  账本损坏时仅报告孤儿而不删除或重建。
+- 巡检发布 `luban.keepalive.health`，可选 `lubanTaskStore` 告警去重；有限任务可通过
+  `release()` 销毁会话并清除账本，供 M09 worker 完成后收口。
+- 本地 Prettier、ESLint、严格类型检查、构建、12 项测试、发布元数据与 npm pack 白名单审计通过；
+  外部 tmux/schtasks 边界均使用 fake runner，未创建真实系统会话或计划任务。
