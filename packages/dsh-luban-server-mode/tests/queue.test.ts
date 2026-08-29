@@ -34,13 +34,31 @@ class FakeProbe implements ResourceProbe {
 class FakeExecutor implements BuildExecutor {
   public current = 0
   public maximum = 0
+  readonly #concurrencyBarrier: number | undefined
+  readonly #barrierWaiters: (() => void)[] = []
+  #barrierOpen = false
+
+  public constructor(concurrencyBarrier?: number) {
+    this.#concurrencyBarrier = concurrencyBarrier
+  }
 
   public async execute(request: BuildExecutionRequest, signal: AbortSignal): Promise<WorkerResult> {
     this.current += 1
     this.maximum = Math.max(this.maximum, this.current)
-    await new Promise<void>((resolve): void => {
-      setTimeout(resolve, 25)
-    })
+    if (this.#concurrencyBarrier !== undefined && !this.#barrierOpen) {
+      if (this.current >= this.#concurrencyBarrier) {
+        this.#barrierOpen = true
+        for (const resolve of this.#barrierWaiters.splice(0)) resolve()
+      } else {
+        await new Promise<void>((resolve): void => {
+          this.#barrierWaiters.push(resolve)
+        })
+      }
+    } else {
+      await new Promise<void>((resolve): void => {
+        setTimeout(resolve, 25)
+      })
+    }
     this.current -= 1
     if (signal.aborted) throw new Error('cancelled')
     if (request.job.params.mode === 'fail') {
@@ -93,6 +111,7 @@ async function fixture(
     readonly maxConcurrent?: number
     readonly retainRuns?: number
     readonly failArtifactDiscovery?: boolean
+    readonly concurrencyBarrier?: number
   } = {},
 ): Promise<QueueFixture> {
   const directory = join(tmpdir(), `luban-queue-${randomUUID()}`)
@@ -103,7 +122,7 @@ async function fixture(
     ? new FailingArtifactManager(join(directory, 'artifacts'))
     : new ArtifactManager(join(directory, 'artifacts'))
   const probe = new FakeProbe()
-  const executor = new FakeExecutor()
+  const executor = new FakeExecutor(options.concurrencyBarrier)
   const alerts = new CapturingAlerts()
   const store = new BuildLedgerStore(join(directory, 'ledger.json'))
   let timestamp = 1_788_048_000_000
@@ -137,7 +156,10 @@ afterEach(async (): Promise<void> => {
 
 describe('BuildQueue', (): void => {
   it('persists jobs, honors concurrency, registers artifacts, and captures failed logs', async (): Promise<void> => {
-    const { alerts, executor, queue, workspace } = await fixture({ maxConcurrent: 2 })
+    const { alerts, executor, queue, workspace } = await fixture({
+      maxConcurrent: 2,
+      concurrencyBarrier: 2,
+    })
     await Promise.all([
       queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } }),
       queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } }),
