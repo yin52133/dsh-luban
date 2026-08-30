@@ -1,11 +1,11 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { asSessionId } from '@luban/core'
 import { describe, expect, it, vi } from 'vitest'
 import { DshImageSessionInjector, imagePrompt } from '../src/dsh-injection.js'
-import type { StoredImage } from '../src/types.js'
+import type { ImageQueueReceipt, StoredImage } from '../src/types.js'
 
 const IMAGE: StoredImage = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -67,6 +67,84 @@ describe('DSH rc2 image injection', () => {
     }
     expect(message.source).toEqual({ kind: 'plugin', plugin: 'dsh-luban-image-paste' })
     expect(message.content[0]?.text).toContain(IMAGE.relPath)
+  })
+
+  it('checks cancellation and inbox guards at the final queue boundary', async () => {
+    const workspace = await realpath(process.cwd())
+    const followup = vi.fn()
+    const live = {
+      id: 'session-guarded',
+      inbox: { hasPending: false },
+      session: { header: { cwd: workspace } },
+      followup,
+    }
+    const registry = {
+      get: () => live,
+      roots: () => [live],
+    } as unknown as AgentRegistry
+    const injector = new DshImageSessionInjector(registry, workspace)
+    const controller = new AbortController()
+    const abortedReceipt = { queued: false }
+
+    await expect(
+      injector.inject(asSessionId('session-guarded'), IMAGE, 'path', {
+        signal: controller.signal,
+        queueReceipt: abortedReceipt,
+        onPreparedMessage: (): void => controller.abort(new Error('acceptance cancelled')),
+      }),
+    ).rejects.toThrow('acceptance cancelled')
+    expect(followup).not.toHaveBeenCalled()
+    expect(abortedReceipt).toEqual({ queued: false })
+
+    live.inbox.hasPending = true
+    const guardedReceipt = { queued: false }
+    await expect(
+      injector.inject(asSessionId('session-guarded'), IMAGE, 'path', {
+        queueReceipt: guardedReceipt,
+        onBeforeQueueMessage: (): void => {
+          if (live.inbox.hasPending) throw new Error('inbox is not empty')
+        },
+      }),
+    ).rejects.toThrow('inbox is not empty')
+    expect(followup).not.toHaveBeenCalled()
+    expect(guardedReceipt).toEqual({ queued: false })
+
+    live.inbox.hasPending = false
+    const committedReceipt: ImageQueueReceipt = { queued: false }
+    await injector.inject(asSessionId('session-guarded'), IMAGE, 'path', {
+      queueReceipt: committedReceipt,
+      onBeforeQueueMessage: (): void => {
+        if (live.inbox.hasPending) throw new Error('inbox is not empty')
+      },
+    })
+    expect(followup).toHaveBeenCalledOnce()
+    expect(committedReceipt.queued).toBe(true)
+    expect(committedReceipt.messageId).toEqual(expect.any(String))
+  })
+
+  it('rejects a same-id live agent replacement when the caller binds an expected agent', async () => {
+    const workspace = await realpath(process.cwd())
+    const expected = {
+      id: 'session-replaced',
+      session: { header: { cwd: workspace } },
+      followup: vi.fn(),
+    }
+    const replacement = {
+      id: 'session-replaced',
+      session: { header: { cwd: workspace } },
+      followup: vi.fn(),
+    }
+    const registry = {
+      get: () => replacement,
+      roots: () => [replacement],
+    } as unknown as AgentRegistry
+    const injector = new DshImageSessionInjector(registry, workspace, expected as unknown as Agent)
+
+    await expect(
+      injector.inject(asSessionId('session-replaced'), IMAGE, 'path'),
+    ).rejects.toMatchObject({ code: 'E_UNAVAILABLE', retriable: true })
+    expect(expected.followup).not.toHaveBeenCalled()
+    expect(replacement.followup).not.toHaveBeenCalled()
   })
 
   it('allows a runtime root with durable fork lineage', async () => {

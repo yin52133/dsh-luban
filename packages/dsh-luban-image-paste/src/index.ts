@@ -8,12 +8,14 @@ import { DynamicSharpProcessor } from './compressor.js'
 import { Config as ConfigSchema, type Config as ImagePasteConfig, parseConfig } from './config.js'
 import { DshImageSessionInjector } from './dsh-injection.js'
 import { ImagePasteHttpApi } from './http-api.js'
+import { MountedVisualAcceptanceService } from './live-visual-acceptance.js'
 import { AttachmentRepository } from './repository.js'
 import { FileImageIngestService } from './service.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     lubanImageIngest: ImageIngestService
+    lubanImageVisualAcceptance: MountedVisualAcceptanceService
   }
 }
 
@@ -29,12 +31,36 @@ export type { SharpModuleLoader } from './compressor.js'
 export { parseConfig } from './config.js'
 export { DshImageSessionInjector, imagePrompt } from './dsh-injection.js'
 export { ImagePasteHttpApi } from './http-api.js'
+export {
+  MountedVisualAcceptanceService,
+  assessVisualObservation,
+  findVisualNonceLeaks,
+  isOwnedVisualAcceptanceRoot,
+  removeVisualAcceptanceRoot,
+  runSimulatedVisualAcceptance,
+  visualAcceptanceInstruction,
+} from './live-visual-acceptance.js'
+export type {
+  MountedVisualAcceptanceOptions,
+  SimulatedVisualAcceptanceOptions,
+  VisualAcceptanceCheck,
+  VisualAcceptanceEvidence,
+  VisualAcceptanceStatus,
+  VisualObservationAssessment,
+  VisualTurnObservation,
+} from './live-visual-acceptance.js'
 export { assertMimeMatches, detectImage, normalizeDeclaredMime } from './image-format.js'
 export { AttachmentRepository } from './repository.js'
 export type { AttachmentRepositoryOptions, StoreImageInput } from './repository.js'
 export { FileImageIngestService } from './service.js'
 export type { FileImageIngestServiceOptions, IngestOptions } from './service.js'
 export type * from './types.js'
+export {
+  renderVisualNoncePng,
+  validateVisualNoncePng,
+  visualNonceFromRandomBytes,
+} from './visual-nonce-png.js'
+export type { ValidatedNoncePng } from './visual-nonce-png.js'
 
 /** Enforce the M01 topology: the authenticated sidecar is the only network listener. */
 export function assertLoopbackWebServer(host: string): void {
@@ -69,6 +95,10 @@ export async function apply(ctx: Context, input: Partial<ImagePasteConfig> = {})
   })
   const api = new ImagePasteHttpApi(service, auth)
   ctx.provide('lubanImageIngest', service)
+  ctx.provide(
+    'lubanImageVisualAcceptance',
+    new MountedVisualAcceptanceService(ctx, repository.workspaceRoot),
+  )
   ctx.effect(() => {
     const unregister = ctx.webServer.register({
       kind: 'prefix',

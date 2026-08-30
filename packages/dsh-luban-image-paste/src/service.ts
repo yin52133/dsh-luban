@@ -5,6 +5,7 @@ import { assertMimeMatches, detectImage } from './image-format.js'
 import type { AttachmentRepository } from './repository.js'
 import type {
   ClipboardAdapter,
+  ImageInjectionOptions,
   ImageProcessor,
   ImageSource,
   InjectStyle,
@@ -115,12 +116,13 @@ export class FileImageIngestService implements ImageIngestService {
     sessionId: SessionId,
     id: string,
     style: InjectStyle = this.#config.injectStyle,
+    options?: ImageInjectionOptions,
   ): Promise<StoredImage> {
     return this.#injections.run(`${id}\0${sessionId}`, async (): Promise<StoredImage> => {
       const { image } = await this.#repository.content(id)
       const added = await this.#repository.addReference(id, sessionId)
       try {
-        await this.#injector.inject(sessionId, image, style)
+        await this.#injector.inject(sessionId, image, style, options)
       } catch (error: unknown) {
         if (added) {
           try {

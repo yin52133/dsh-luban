@@ -6,7 +6,12 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId as DshSessionId } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@luban/core'
 import { LubanError } from '@luban/core'
-import type { InjectStyle, SessionImageInjector, StoredImage } from './types.js'
+import type {
+  ImageInjectionOptions,
+  InjectStyle,
+  SessionImageInjector,
+  StoredImage,
+} from './types.js'
 
 function markdownTarget(path: string): string {
   return path
@@ -17,9 +22,23 @@ function markdownTarget(path: string): string {
     .join('/')
 }
 
-export function imagePrompt(image: StoredImage, style: InjectStyle): string {
+function extraInstruction(options: ImageInjectionOptions | undefined): string | undefined {
+  const instruction = options?.instruction?.trim()
+  if (instruction === undefined || instruction === '') return undefined
+  if (instruction.length > 1_000 || /[\0\r]/u.test(instruction)) {
+    throw new LubanError('E_INVALID_INPUT', 'image instruction is invalid')
+  }
+  return instruction
+}
+
+export function imagePrompt(
+  image: StoredImage,
+  style: InjectStyle,
+  options?: ImageInjectionOptions,
+): string {
   const heading = '[Luban image attachment]'
   const checksum = `SHA-256: ${image.sha256}`
+  const instruction = extraInstruction(options)
   if (style === 'markdown') {
     return [
       heading,
@@ -27,6 +46,7 @@ export function imagePrompt(image: StoredImage, style: InjectStyle): string {
       `Workspace-relative path: ${image.relPath}`,
       checksum,
       'Read the workspace-relative file when inspecting the image.',
+      ...(instruction === undefined ? [] : [instruction]),
     ].join('\n')
   }
   return [
@@ -35,6 +55,7 @@ export function imagePrompt(image: StoredImage, style: InjectStyle): string {
     `Workspace-relative path: ${image.relPath}`,
     checksum,
     'Read this file when inspecting the image.',
+    ...(instruction === undefined ? [] : [instruction]),
   ].join('\n')
 }
 
@@ -59,27 +80,44 @@ function isTopLevelRoot(agents: AgentRegistry, agent: Agent): boolean {
 export class DshImageSessionInjector implements SessionImageInjector {
   readonly #agents: AgentRegistry
   readonly #workspaceRoot: string
+  readonly #expectedAgent: Agent | undefined
 
-  public constructor(agents: AgentRegistry, workspaceRoot: string) {
+  public constructor(agents: AgentRegistry, workspaceRoot: string, expectedAgent?: Agent) {
     this.#agents = agents
     this.#workspaceRoot = workspaceRoot
+    this.#expectedAgent = expectedAgent
   }
 
-  public async inject(sessionId: SessionId, image: StoredImage, style: InjectStyle): Promise<void> {
+  public async inject(
+    sessionId: SessionId,
+    image: StoredImage,
+    style: InjectStyle,
+    options?: ImageInjectionOptions,
+  ): Promise<void> {
     if (sessionId.trim() === '' || sessionId.length > 512) {
       throw new LubanError('E_INVALID_INPUT', 'sessionId is invalid')
     }
     const id = DshSessionId(sessionId)
     const message = createUserMessage({
-      content: [{ type: 'text', text: imagePrompt(image, style) }],
+      content: [{ type: 'text', text: imagePrompt(image, style, options) }],
       source: { kind: 'plugin', plugin: 'dsh-luban-image-paste' },
     })
+    options?.onPreparedMessage?.(message.id)
     const live = this.#agents.get(id)
     if (live === undefined) {
       throw new LubanError(
         'E_UNAVAILABLE',
         `DSH session ${sessionId} is not live; safe cold resume is unavailable`,
         { retriable: true },
+      )
+    }
+    if (this.#expectedAgent !== undefined && live !== this.#expectedAgent) {
+      throw new LubanError(
+        'E_UNAVAILABLE',
+        `DSH session ${sessionId} changed live agent identity`,
+        {
+          retriable: true,
+        },
       )
     }
     if (!isTopLevelRoot(this.#agents, live)) {
@@ -118,6 +156,12 @@ export class DshImageSessionInjector implements SessionImageInjector {
         `DSH session ${sessionId} is no longer a top-level agent root`,
       )
     }
+    options?.signal?.throwIfAborted()
+    options?.onBeforeQueueMessage?.(message.id)
     live.followup(message)
+    if (options?.queueReceipt !== undefined) {
+      options.queueReceipt.queued = true
+      options.queueReceipt.messageId = message.id
+    }
   }
 }

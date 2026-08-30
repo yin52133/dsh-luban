@@ -38,6 +38,7 @@ describe('Cordis lifecycle', () => {
       await fiber
 
       expect(context.get('lubanImageIngest')).toBeDefined()
+      expect(context.get('lubanImageVisualAcceptance')).toBeDefined()
       expect(fiber.getEffects().map((effect) => effect.label)).toContain(
         'luban-image-paste: route and cleanup lifecycle',
       )
@@ -53,6 +54,7 @@ describe('Cordis lifecycle', () => {
 
       await fiber.dispose()
       expect(context.get('lubanImageIngest')).toBeUndefined()
+      expect(context.get('lubanImageVisualAcceptance')).toBeUndefined()
       expect(fiber.getEffects()).toEqual([])
 
       const unregister = context.webServer.register({

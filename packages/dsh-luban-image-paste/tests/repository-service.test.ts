@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { asSessionId } from '@luban/core'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AttachmentRepository } from '../src/repository.js'
 import { FileImageIngestService } from '../src/service.js'
 import type { Config } from '../src/config.js'
@@ -228,6 +228,38 @@ describe('attachment repository and ingest service', () => {
     )
     const refreshed = await repository.get(image.id)
     expect(refreshed?.referencedBy).toEqual([])
+  })
+
+  it('preserves the queue receipt and reference when post-queue metadata refresh fails', async () => {
+    const injector: SessionImageInjector = {
+      inject(_sessionId, _image, _style, options): Promise<void> {
+        if (options?.queueReceipt !== undefined) {
+          options.queueReceipt.queued = true
+          options.queueReceipt.messageId = 'queued-message'
+        }
+        return Promise.resolve()
+      },
+    }
+    const ingest = service(injector)
+    const image = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      source: 'paste',
+    })
+    const sessionId = asSessionId('post-queue-refresh-failure')
+    const originalGet = repository.get.bind(repository)
+    let getCalls = 0
+    const get = vi.spyOn(repository, 'get').mockImplementation(async (id) => {
+      getCalls += 1
+      if (getCalls === 2) throw new Error('metadata refresh failed after queue commit')
+      return originalGet(id)
+    })
+    const queueReceipt = { queued: false }
+
+    await expect(ingest.injectById(sessionId, image.id, 'path', { queueReceipt })).rejects.toThrow(
+      'metadata refresh failed after queue commit',
+    )
+    expect(queueReceipt).toEqual({ queued: true, messageId: 'queued-message' })
+    get.mockRestore()
+    expect((await repository.get(image.id))?.referencedBy).toEqual([sessionId])
   })
 
   it('serializes same-session injection so a failed rollback cannot erase a success', async () => {

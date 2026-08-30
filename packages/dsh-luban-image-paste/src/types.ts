@@ -34,7 +34,29 @@ export interface ClipboardAdapter {
 }
 
 export interface SessionImageInjector {
-  inject(sessionId: SessionId, image: StoredImage, style: InjectStyle): Promise<void>
+  inject(
+    sessionId: SessionId,
+    image: StoredImage,
+    style: InjectStyle,
+    options?: ImageInjectionOptions,
+  ): Promise<void>
+}
+
+export interface ImageInjectionOptions {
+  readonly instruction?: string
+  /** Called synchronously after message creation and before it enters the live Agent inbox. */
+  readonly onPreparedMessage?: (messageId: string) => void
+  /** Called at the final synchronous boundary immediately before followup. */
+  readonly onBeforeQueueMessage?: (messageId: string) => void
+  /** Caller-owned receipt updated synchronously after followup commits the message. */
+  readonly queueReceipt?: ImageQueueReceipt
+  /** Optional caller-owned cancellation checked at the final synchronous followup boundary. */
+  readonly signal?: AbortSignal
+}
+
+export interface ImageQueueReceipt {
+  queued: boolean
+  messageId?: string
 }
 
 export interface ImageProcessingResult {
