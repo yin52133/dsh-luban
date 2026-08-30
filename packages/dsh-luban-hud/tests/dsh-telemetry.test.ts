@@ -7,7 +7,8 @@ import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TokenMeter, type ContextPressureProjection } from '@deepseek-ai/dsh-token-meter'
-import { asSessionId, type TelemetrySnapshot } from 'dsh-luban-core'
+import type { AccountId, AccountSessionRegistry, TelemetrySnapshot } from 'dsh-luban-core'
+import { asAccountId, asSessionId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import {
@@ -397,6 +398,67 @@ describe('rc2 DSH telemetry providers', (): void => {
     expect(target.workspace.name).toBe('target')
   })
 
+  it('selects only sessions owned by the requested account and hides unowned history', async (): Promise<void> => {
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    const aliceSession = session('hud-account-alice', resolve('workspace-root', 'alice'))
+    const bobSession = session('hud-account-bob', resolve('workspace-root', 'bob'))
+    const legacySession = session('hud-account-legacy', resolve('workspace-root', 'legacy'))
+    for (const [value, model] of [
+      [aliceSession, 'alice-model'],
+      [bobSession, 'bob-model'],
+      [legacySession, 'legacy-model'],
+    ] as const) {
+      value.append('request/context', { provider: 'deepseek', model, contextWindow: 1_000 })
+      appendAssistant(value, { inputTokens: 10, outputTokens: 1 })
+    }
+    const owners = new Map<string, AccountId>([
+      [String(aliceSession.id), alice],
+      [String(bobSession.id), bob],
+    ])
+    const accounts: AccountSessionRegistry = {
+      bind: (): Promise<void> => Promise.resolve(),
+      ownerOf: (sessionId): Promise<AccountId | null> =>
+        Promise.resolve(owners.get(String(sessionId)) ?? null),
+    }
+    const legacyAgent = agentFor(legacySession)
+    const agents = [agentFor(aliceSession), legacyAgent, agentFor(bobSession)]
+    const lookupByAccount: AgentLookup = {
+      currentInitiator: (): Agent => legacyAgent,
+      get: (id): Agent | undefined => agents.find((agent): boolean => agent.id === id),
+      list: (): Agent[] => agents,
+    }
+    const aggregator = new DefaultTelemetryAggregator({
+      refreshMs: 1_000,
+      providerTimeoutMs: 100,
+      accountScoped: true,
+      resolveSessionAccount: (sessionId) => accounts.ownerOf(sessionId),
+    })
+    aggregator.register(
+      new DshSessionTelemetryProvider(
+        lookupByAccount,
+        resolve('workspace-root'),
+        undefined,
+        accounts,
+      ),
+    )
+    aggregator.register(new DshContextEstimatorProvider(lookupByAccount, undefined, accounts))
+
+    expect((await aggregator.envelopeForAccount(alice)).snapshot).toMatchObject({
+      accountId: alice,
+      workspace: { name: 'alice' },
+      model: { name: 'alice-model' },
+    })
+    expect((await aggregator.envelopeForAccount(bob)).snapshot.workspace.name).toBe('bob')
+    expect(
+      (await aggregator.snapshotForAccount(alice, asSessionId(String(bobSession.id)))).workspace
+        .name,
+    ).toBe('unknown')
+    expect(
+      (await aggregator.snapshotFor(asSessionId(String(legacySession.id)))).workspace.name,
+    ).toBe('unknown')
+  })
+
   it('falls back to a content estimate while retaining the official context maximum', async (): Promise<void> => {
     const value = session('hud-estimate', resolve('workspace-root'))
     value.append('request/context', {
@@ -521,6 +583,34 @@ describe('rc2 DSH telemetry providers', (): void => {
     expect(rateLedger.observe).toHaveBeenCalledTimes(2)
     expect(rateLedger.observe).toHaveBeenNthCalledWith(1, value, historical)
     expect(rateLedger.observe).toHaveBeenNthCalledWith(2, value, live)
+  })
+
+  it('partitions rate windows and ledger delivery by resolved account', (): void => {
+    const monotonic = new ManualClock()
+    const window = new SlidingRateWindow(monotonic)
+    const rateLedger = { observe: vi.fn(), observeForAccount: vi.fn() }
+    const collector = new DshRateCollector({
+      window,
+      clock: { now: (): number => Date.now() },
+      monotonicClock: monotonic,
+      rateLedger,
+    })
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    const aliceSession = session('hud-rate-alice', resolve('workspace-root'))
+    const bobSession = session('hud-rate-bob', resolve('workspace-root'))
+    const aliceEvent = appendAssistant(aliceSession, { inputTokens: 8, outputTokens: 2 })
+    const bobEvent = appendAssistant(bobSession, { inputTokens: 15, outputTokens: 5 })
+
+    collector.adoptForAccount(alice, aliceSession)
+    collector.adoptForAccount(bob, bobSession)
+
+    expect(collector.windowForAccount(alice).snapshot()).toMatchObject({ tpm1m: 10, rpm1m: 1 })
+    expect(collector.windowForAccount(bob).snapshot()).toMatchObject({ tpm1m: 20, rpm1m: 1 })
+    expect(window.snapshot()).toMatchObject({ tpm1m: 0, rpm1m: 0 })
+    expect(rateLedger.observe).not.toHaveBeenCalled()
+    expect(rateLedger.observeForAccount).toHaveBeenNthCalledWith(1, alice, aliceSession, aliceEvent)
+    expect(rateLedger.observeForAccount).toHaveBeenNthCalledWith(2, bob, bobSession, bobEvent)
   })
 
   it('counts a stable assistant message only once when a fork preserves history identity', (): void => {

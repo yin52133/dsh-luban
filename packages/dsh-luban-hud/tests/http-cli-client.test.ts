@@ -7,9 +7,10 @@ import { AgentRegistry, Inbox, type Agent } from '@deepseek-ai/dsh-agent'
 import { Context, type Context as ClientContext } from '@deepseek-ai/cordis'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
-import type { AuthService } from 'dsh-luban-core'
+import type { AccountId, AuthMiddlewareRequest, AuthService } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DefaultTelemetryAggregator } from '../src/aggregator.js'
+import { DefaultTelemetryAggregator, type AccountTelemetryProvider } from '../src/aggregator.js'
 import { runCli } from '../src/cli.js'
 import { apply as applyClient, keepaliveIndicator } from '../src/client/index.js'
 import { DshSessionTelemetryProvider } from '../src/dsh-telemetry.js'
@@ -77,15 +78,56 @@ function request(
 }
 
 function auth(): AuthService {
+  const accountId = asAccountId('owner')
   return {
-    middleware: () => (input) =>
+    middleware: () => (input: AuthMiddlewareRequest) =>
       Promise.resolve(
         input.cookie === 'luban_session=ok'
-          ? { allowed: true, status: 200, user: 'owner' }
+          ? {
+              allowed: true,
+              status: 200,
+              user: 'owner',
+              account: { accountId, username: 'owner', role: 'operator' },
+            }
           : { allowed: false, status: 401 },
       ),
-  } as AuthService
+    accountSessions: {
+      bind: (): Promise<void> => Promise.resolve(),
+      ownerOf: (): Promise<AccountId> => Promise.resolve(accountId),
+    },
+  } as unknown as AuthService
 }
+
+function accountAuth(): AuthService {
+  return {
+    middleware: () => (input: AuthMiddlewareRequest) => {
+      const username =
+        input.cookie === 'luban_session=alice'
+          ? 'alice'
+          : input.cookie === 'luban_session=bob'
+            ? 'bob'
+            : undefined
+      if (username === undefined) {
+        return Promise.resolve({ allowed: false, status: 401 })
+      }
+      const accountId = asAccountId(username)
+      return Promise.resolve({
+        allowed: true,
+        status: 200,
+        user: username,
+        account: { accountId, username, role: 'operator' },
+      })
+    },
+    accountSessions: {
+      bind: (): Promise<void> => Promise.resolve(),
+      ownerOf: (): Promise<null> => Promise.resolve(null),
+    },
+  } as unknown as AuthService
+}
+
+const OWNER_ACCOUNT = asAccountId('owner')
+const ALICE_ACCOUNT = asAccountId('alice')
+const BOB_ACCOUNT = asAccountId('bob')
 
 function telemetrySession(idValue: string, cwd: string): Session {
   const id = SessionId(idValue)
@@ -161,9 +203,10 @@ const publicConfig = {
   },
 }
 
-function streamEnvelope(at: number): HudSnapshotResponse {
+function streamEnvelope(at: number, accountId: AccountId = OWNER_ACCOUNT): HudSnapshotResponse {
   return {
     snapshot: {
+      accountId,
       context: { used: at, max: 100, ratio: at / 100 },
       workspace: { name: 'firmware' },
       model: { name: 'deepseek-chat', thinkingDepth: 'high' },
@@ -202,6 +245,95 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
       keepalive: { healthy: true, alerts: [] },
     })
     api.dispose()
+  })
+
+  it('isolates authenticated Alice/Bob snapshot, history, live SSE, and ignores account spoofing', async (): Promise<void> => {
+    let monotonicNow = 0
+    const workspaces = new Map<AccountId, string>([
+      [ALICE_ACCOUNT, 'alice/private'],
+      [BOB_ACCOUNT, 'bob/private'],
+    ])
+    const scoped: AccountTelemetryProvider = {
+      id: 'account-fixture',
+      capabilities: (): readonly ['workspace'] => ['workspace'],
+      sample: (): Promise<Partial<HudSnapshotResponse['snapshot']>> =>
+        Promise.resolve({ workspace: { name: 'legacy/private' } }),
+      sampleForAccount: (accountId: AccountId): Promise<Partial<HudSnapshotResponse['snapshot']>> =>
+        Promise.resolve({
+          accountId,
+          workspace: { name: workspaces.get(accountId) ?? 'unknown' },
+        }),
+    }
+    const telemetry = new DefaultTelemetryAggregator({
+      refreshMs: 1_000,
+      providerTimeoutMs: 100,
+      monotonicClock: { now: (): number => monotonicNow },
+    })
+    telemetry.register(scoped)
+    telemetry.register({
+      id: 'legacy-only',
+      capabilities: (): readonly ['model'] => ['model'],
+      sample: (): Promise<Partial<HudSnapshotResponse['snapshot']>> =>
+        Promise.resolve({ model: { name: 'legacy-secret', thinkingDepth: 'high' } }),
+    })
+    const api = new HudHttpApi({ telemetry, auth: accountAuth(), config: publicConfig })
+
+    const aliceSnapshot = new MockResponse()
+    await api.handler(
+      request('/luban-hud/snapshot?accountId=bob', 'luban_session=alice'),
+      aliceSnapshot as unknown as ServerResponse,
+    )
+    const aliceEnvelope = JSON.parse(aliceSnapshot.body) as HudSnapshotResponse
+    expect(aliceEnvelope.snapshot).toMatchObject({
+      accountId: ALICE_ACCOUNT,
+      workspace: { name: 'alice/private' },
+      model: { name: 'unknown' },
+    })
+    expect(JSON.stringify(aliceEnvelope)).not.toContain('bob/private')
+    expect(JSON.stringify(aliceEnvelope)).not.toContain('legacy-secret')
+
+    const bobSnapshot = new MockResponse()
+    await api.handler(
+      request('/luban-hud/snapshot', 'luban_session=bob'),
+      bobSnapshot as unknown as ServerResponse,
+    )
+    expect((JSON.parse(bobSnapshot.body) as HudSnapshotResponse).snapshot).toMatchObject({
+      accountId: BOB_ACCOUNT,
+      workspace: { name: 'bob/private' },
+    })
+
+    const aliceRequest = request('/luban-hud/events', 'luban_session=alice')
+    const bobRequest = request('/luban-hud/events', 'luban_session=bob')
+    const aliceStream = new MockResponse()
+    const bobStream = new MockResponse()
+    await api.handler(aliceRequest, aliceStream as unknown as ServerResponse)
+    await api.handler(bobRequest, bobStream as unknown as ServerResponse)
+    aliceStream.body = ''
+    bobStream.body = ''
+    workspaces.set(ALICE_ACCOUNT, 'alice/next')
+    monotonicNow = 1_001
+    await telemetry.envelopeForAccount(ALICE_ACCOUNT)
+    expect(aliceStream.body).toContain('alice/next')
+    expect(bobStream.body).toBe('')
+
+    const aliceHistory = new MockResponse()
+    await api.handler(
+      request('/luban-hud/history?accountId=bob', 'luban_session=alice'),
+      aliceHistory as unknown as ServerResponse,
+    )
+    const history = JSON.parse(aliceHistory.body) as {
+      snapshots: HudSnapshotResponse['snapshot'][]
+    }
+    expect(history.snapshots).toHaveLength(2)
+    expect(
+      history.snapshots.every((snapshot): boolean => snapshot.accountId === ALICE_ACCOUNT),
+    ).toBe(true)
+    expect(JSON.stringify(history)).not.toContain('bob/private')
+
+    aliceRequest.emit('close')
+    bobRequest.emit('close')
+    api.dispose()
+    telemetry.dispose()
   })
 
   it('authenticates and validates mounted rate capture requests', async (): Promise<void> => {
@@ -254,7 +386,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     const allowed = new MockResponse()
     await api.handler(
       request(
-        '/luban-hud/rate-capture?startUtc=2026-08-30T12%3A00%3A00.000Z&endUtc=2026-08-30T12%3A05%3A00.000Z&challenge=capture_challenge_0123456789abcdef',
+        '/luban-hud/rate-capture?startUtc=2026-08-30T12%3A00%3A00.000Z&endUtc=2026-08-30T12%3A05%3A00.000Z&challenge=capture_challenge_0123456789abcdef&accountId=bob',
         'luban_session=ok',
       ),
       allowed as unknown as ServerResponse,
@@ -266,6 +398,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
         endUtc: '2026-08-30T12:05:00.000Z',
       },
       'capture_challenge_0123456789abcdef',
+      OWNER_ACCOUNT,
     )
     expect(JSON.parse(allowed.body)).toMatchObject({
       schemaVersion: HUD_RATE_CAPTURE_SCHEMA,
@@ -373,8 +506,16 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
       providerTimeoutMs: 100,
       monotonicClock: { now: (): number => monotonicNow },
     })
-    telemetry.register(new DshSessionTelemetryProvider(context.agents, workspaceRoot))
-    const api = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig })
+    const authService = auth()
+    telemetry.register(
+      new DshSessionTelemetryProvider(
+        context.agents,
+        workspaceRoot,
+        undefined,
+        authService.accountSessions,
+      ),
+    )
+    const api = new HudHttpApi({ telemetry, auth: authService, config: publicConfig })
     const server = createServer((request, response): void => {
       void api.handler(request, response)
     })
@@ -436,20 +577,44 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     const secondRequest = request('/luban-hud/events')
     const first = new MockResponse()
     const second = new MockResponse()
-    stream.connect(firstRequest, first as unknown as ServerResponse, streamEnvelope(0))
-    stream.connect(secondRequest, second as unknown as ServerResponse, streamEnvelope(0))
+    stream.connect(
+      OWNER_ACCOUNT,
+      firstRequest,
+      first as unknown as ServerResponse,
+      streamEnvelope(0),
+    )
+    const bobRequest = request('/luban-hud/events')
+    const bob = new MockResponse()
+    stream.connect(
+      BOB_ACCOUNT,
+      bobRequest,
+      bob as unknown as ServerResponse,
+      streamEnvelope(0, BOB_ACCOUNT),
+    )
+    stream.connect(
+      OWNER_ACCOUNT,
+      secondRequest,
+      second as unknown as ServerResponse,
+      streamEnvelope(0),
+    )
     expect(first.body).toContain(`id: 0\nevent: ${HUD_TELEMETRY_EVENT}\n`)
     expect(second.body).toContain(`id: 0\nevent: ${HUD_TELEMETRY_EVENT}\n`)
 
     first.body = ''
     second.body = ''
-    stream.publish(streamEnvelope(1))
+    bob.body = ''
+    stream.publish(OWNER_ACCOUNT, streamEnvelope(1))
     expect(first.body).toContain(`id: 1\nevent: ${HUD_TELEMETRY_EVENT}\n`)
     expect(second.body).toContain(`id: 1\nevent: ${HUD_TELEMETRY_EVENT}\n`)
-    stream.publish(streamEnvelope(2))
+    expect(bob.body).toBe('')
+    stream.publish(BOB_ACCOUNT, streamEnvelope(1, BOB_ACCOUNT))
+    expect(bob.body).toContain(`id: 1\nevent: ${HUD_TELEMETRY_EVENT}\n`)
+    expect(first.body).not.toContain('"accountId":"bob"')
+    stream.publish(OWNER_ACCOUNT, streamEnvelope(2))
 
     const replay = new MockResponse()
     stream.connect(
+      OWNER_ACCOUNT,
       request('/luban-hud/events', undefined, { 'last-event-id': '1' }),
       replay as unknown as ServerResponse,
       streamEnvelope(2),
@@ -459,9 +624,13 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
 
     firstRequest.emit('close')
     secondRequest.emit('close')
-    for (let at = 3; at <= 259; at += 1) stream.publish(streamEnvelope(at))
+    bobRequest.emit('close')
+    for (let at = 3; at <= 259; at += 1) {
+      stream.publish(OWNER_ACCOUNT, streamEnvelope(at))
+    }
     const gap = new MockResponse()
     stream.connect(
+      OWNER_ACCOUNT,
       request('/luban-hud/events', undefined, { 'last-event-id': '1' }),
       gap as unknown as ServerResponse,
       streamEnvelope(999),
@@ -472,6 +641,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     stream.dispose()
     expect((): void =>
       stream.connect(
+        OWNER_ACCOUNT,
         request('/luban-hud/events'),
         new MockResponse() as unknown as ServerResponse,
         streamEnvelope(999),
@@ -488,7 +658,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     await api.handler(streamRequest, response as unknown as ServerResponse)
     expect(response.body).toContain('"keepalive":{"healthy":true,"alerts":[]}')
 
-    keepalive.record({
+    keepalive.recordForAccount(OWNER_ACCOUNT, {
       sessionId: 'luban-worker',
       alive: false,
       detail: 'lost token=not-public',
@@ -503,7 +673,13 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
 
   it('fails closed when plugin disposal races with asynchronous authentication', async (): Promise<void> => {
     let finishAuthentication:
-      ((decision: { allowed: true; status: 200; user: string }) => void) | undefined
+      | ((decision: {
+          allowed: true
+          status: 200
+          user: string
+          account: { accountId: AccountId; username: string; role: 'operator' }
+        }) => void)
+      | undefined
     let authenticationStarted: (() => void) | undefined
     const started = new Promise<void>((resolve): void => {
       authenticationStarted = resolve
@@ -527,7 +703,12 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     await started
     api.dispose()
     if (finishAuthentication === undefined) throw new Error('authentication did not start')
-    finishAuthentication({ allowed: true, status: 200, user: 'owner' })
+    finishAuthentication({
+      allowed: true,
+      status: 200,
+      user: 'owner',
+      account: { accountId: OWNER_ACCOUNT, username: 'owner', role: 'operator' },
+    })
     await pending
 
     expect(response.statusCode).toBe(503)

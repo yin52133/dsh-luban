@@ -5,10 +5,11 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
-import type { AuthService, Task, TaskCreateInput, TaskStore } from 'dsh-luban-core'
-import { asSessionId, asTaskId } from 'dsh-luban-core'
+import type { AccountId, AuthService, Task, TaskCreateInput, TaskStore } from 'dsh-luban-core'
+import { asAccountId, asSessionId, asTaskId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import * as plugin from '../src/index.js'
+import type { AccountTelemetryProvider } from '../src/aggregator.js'
 import { keepaliveIndicator } from '../src/client/index.js'
 import type { HudSnapshotResponse } from '../src/types.js'
 import {
@@ -24,13 +25,25 @@ const hudPlugin = {
 }
 
 function authentication(): AuthService {
+  const accountId = asAccountId('tester')
   return {
-    middleware: () => () => Promise.resolve({ allowed: true, status: 200, user: 'tester' }),
+    middleware: () => () =>
+      Promise.resolve({
+        allowed: true,
+        status: 200,
+        user: 'tester',
+        account: { accountId, username: 'tester', role: 'operator' },
+      }),
+    accountSessions: {
+      bind: (): Promise<void> => Promise.resolve(),
+      ownerOf: (): Promise<typeof accountId> => Promise.resolve(accountId),
+    },
   } as unknown as AuthService
 }
 
 function alertTask(input: TaskCreateInput): Task {
   return {
+    ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
     id: asTaskId('hud-cordis-alert'),
     title: input.title,
     description: input.description ?? '',
@@ -217,24 +230,25 @@ describe('HUD Cordis integration', (): void => {
       })
       try {
         await taskStoreFiber
-        const unregisterProvider = context.lubanTelemetry.register({
+        const accountProvider: AccountTelemetryProvider = {
           id: 'critical-cordis-provider',
           capabilities: (): readonly ['context'] => ['context'],
           sample: () => Promise.resolve({ context: { used: 96, max: 100, ratio: 0.96 } }),
-        })
+          sampleForAccount: (accountId: AccountId) =>
+            Promise.resolve({ accountId, context: { used: 96, max: 100, ratio: 0.96 } }),
+        }
+        const unregisterProvider = context.lubanTelemetry.register(accountProvider)
 
         context.emit('luban.keepalive.health', {
           sessionId: 'luban-build',
           alive: false,
           detail: 'probe failed password=should-not-leak',
         })
-        await context.lubanTelemetry.snapshot()
-        await vi.waitFor((): void => expect(create).toHaveBeenCalledOnce())
-
         const response = await fetch(
           `http://127.0.0.1:${String(context.webServer.port)}/luban-hud/snapshot`,
         )
         expect(response.status).toBe(200)
+        await vi.waitFor((): void => expect(create).toHaveBeenCalledOnce())
         const envelope = (await response.json()) as HudSnapshotResponse
         expect(envelope.advisory.level).toBe('critical')
         expect(envelope.keepalive).toEqual({

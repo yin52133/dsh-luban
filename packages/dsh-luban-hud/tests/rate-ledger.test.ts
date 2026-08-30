@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { createAssistantMessage, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ProviderRequestIdentityAdapter, ProviderRequestIdentityQuery } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { describe, expect, it } from 'vitest'
 import { HUD_RATE_CAPTURE_SCHEMA, HudRateLedger } from '../src/rate-ledger.js'
 import { HUD_RATE_EXPORT_SCHEMA } from '../src/rate-reconcile.js'
@@ -125,6 +126,63 @@ function assistantEvent(options: {
 }
 
 describe('mounted HUD rate ledger', (): void => {
+  it('filters captures by authenticated account and excludes legacy records', async (): Promise<void> => {
+    const clock = new ManualLedgerClock(START)
+    const rateLedger = ledger(clock)
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    rateLedger.observeForAccount(
+      alice,
+      session('alice-session'),
+      assistantEvent({ seq: 0, time: START, usage: { inputTokens: 8, outputTokens: 2 } }),
+    )
+    rateLedger.observeForAccount(
+      bob,
+      session('bob-session'),
+      assistantEvent({ seq: 1, time: START, usage: { inputTokens: 18, outputTokens: 2 } }),
+    )
+    rateLedger.observe(
+      session('legacy-session'),
+      assistantEvent({ seq: 2, time: START, usage: { inputTokens: 998, outputTokens: 2 } }),
+    )
+    clock.advance(300_000)
+
+    const aliceCapture = await rateLedger.capture(FIVE_MINUTE_WINDOW, CHALLENGE, alice)
+    const bobCapture = await rateLedger.capture(FIVE_MINUTE_WINDOW, CHALLENGE, bob)
+    expect(aliceCapture.export.records).toHaveLength(1)
+    expect(aliceCapture.export.records[0]?.usage.inputTokens).toBe(8)
+    expect(aliceCapture.captures[0]?.sessionId).toBe('alice-session')
+    expect(bobCapture.export.records).toHaveLength(1)
+    expect(bobCapture.export.records[0]?.usage.inputTokens).toBe(18)
+    expect(JSON.stringify(aliceCapture)).not.toContain('bob-session')
+    expect(JSON.stringify(aliceCapture)).not.toContain('legacy-session')
+  })
+
+  it('contains malformed event coverage failures within the owning account', async (): Promise<void> => {
+    const clock = new ManualLedgerClock(START)
+    const rateLedger = ledger(clock)
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    rateLedger.observeForAccount(
+      alice,
+      session('alice-valid'),
+      assistantEvent({ seq: 0, time: START, usage: { inputTokens: 8, outputTokens: 2 } }),
+    )
+    rateLedger.observeForAccount(
+      bob,
+      session('bob-invalid'),
+      assistantEvent({ seq: -1, time: START, usage: { inputTokens: 18, outputTokens: 2 } }),
+    )
+    clock.advance(300_000)
+
+    await expect(rateLedger.capture(FIVE_MINUTE_WINDOW, CHALLENGE, alice)).resolves.toMatchObject({
+      captures: [{ sessionId: 'alice-valid' }],
+    })
+    await expect(rateLedger.capture(FIVE_MINUTE_WINDOW, CHALLENGE, bob)).rejects.toThrow(
+      'Rate capture coverage is unavailable',
+    )
+  })
+
   it('captures durable assistant usage in exact complete half-open UTC windows once', async () => {
     const clock = new ManualLedgerClock(START)
     const rateLedger = ledger(clock)
@@ -393,6 +451,43 @@ describe('mounted HUD rate ledger', (): void => {
     release()
 
     await expect(pending).rejects.toThrow('changed during provider request identity attestation')
+  })
+
+  it('does not invalidate Alice capture when Bob records during attestation', async (): Promise<void> => {
+    const clock = new ManualLedgerClock(Date.parse(ONE_MINUTE_WINDOW.startUtc))
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    let release: (() => void) | undefined
+    const delayedAdapter: ProviderRequestIdentityAdapter = {
+      attest(query): Promise<unknown> {
+        return new Promise<unknown>((resolve): void => {
+          release = (): void =>
+            resolve(providerRequestAttestation(query, 'provider-request-account-scoped'))
+        })
+      },
+    }
+    const rateLedger = ledger(clock, undefined, delayedAdapter)
+    clock.advance(30_000)
+    rateLedger.observeForAccount(
+      alice,
+      session('alice-attestation'),
+      assistantEvent({ seq: 0, time: clock.wall, usage: { inputTokens: 1, outputTokens: 1 } }),
+    )
+    clock.advance(30_000)
+
+    const pending = rateLedger.capture(ONE_MINUTE_WINDOW, CHALLENGE, alice)
+    await Promise.resolve()
+    rateLedger.observeForAccount(
+      bob,
+      session('bob-concurrent'),
+      assistantEvent({ seq: 0, time: clock.wall, usage: { inputTokens: 2, outputTokens: 2 } }),
+    )
+    if (release === undefined) throw new Error('delayed adapter was not invoked')
+    release()
+
+    await expect(pending).resolves.toMatchObject({
+      captures: [{ sessionId: 'alice-attestation' }],
+    })
   })
 
   it('rejects response identities that cannot be passed exactly to an adapter', async () => {

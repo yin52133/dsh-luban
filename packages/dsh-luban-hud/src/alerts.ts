@@ -1,4 +1,4 @@
-import type { TaskStore, TelemetrySnapshot } from 'dsh-luban-core'
+import type { AccountId, TaskStore, TelemetrySnapshot } from 'dsh-luban-core'
 import type { TelemetryAdvisory } from './types.js'
 
 const ACTIVE_STATUSES = ['backlog', 'todo', 'doing', 'review'] as const
@@ -15,10 +15,15 @@ function ratioDescription(snapshot: TelemetrySnapshot): string {
 /** Creates at most one active Taskboard card per continuous critical HUD episode. */
 export class TaskboardHudAlertSink {
   readonly #store: TaskStore
-  #pending: Promise<void> = Promise.resolve()
-  #critical = false
-  #episode = 0
-  #reportedEpisode = 0
+  readonly #states = new Map<
+    AccountId,
+    {
+      pending: Promise<void>
+      critical: boolean
+      episode: number
+      reportedEpisode: number
+    }
+  >()
   #disposed = false
 
   public constructor(store: TaskStore) {
@@ -26,22 +31,35 @@ export class TaskboardHudAlertSink {
   }
 
   public observe(snapshot: TelemetrySnapshot, advisory: TelemetryAdvisory): Promise<void> {
-    if (this.#disposed) return Promise.resolve()
+    const accountId = snapshot.accountId
+    if (this.#disposed || accountId === undefined) return Promise.resolve()
+    const state = this.#states.get(accountId) ?? {
+      pending: Promise.resolve(),
+      critical: false,
+      episode: 0,
+      reportedEpisode: 0,
+    }
+    this.#states.set(accountId, state)
     if (advisory.level !== 'critical') {
-      this.#critical = false
+      state.critical = false
       return Promise.resolve()
     }
-    if (!this.#critical) {
-      this.#critical = true
-      this.#episode += 1
+    if (!state.critical) {
+      state.critical = true
+      state.episode += 1
     }
-    const episode = this.#episode
-    const operation = this.#pending.then(async (): Promise<void> => {
-      if (!this.#isCurrent(episode) || this.#reportedEpisode === episode) return
-      const existing = await this.#store.query({ statuses: ACTIVE_STATUSES, tags: [ALERT_TAG] })
-      if (!this.#isCurrent(episode)) return
+    const episode = state.episode
+    const operation = state.pending.then(async (): Promise<void> => {
+      if (!this.#isCurrent(state, episode) || state.reportedEpisode === episode) return
+      const existing = await this.#store.query({
+        accountId,
+        statuses: ACTIVE_STATUSES,
+        tags: [ALERT_TAG],
+      })
+      if (!this.#isCurrent(state, episode)) return
       if (existing.length === 0) {
         await this.#store.create({
+          accountId,
           title: 'HUD context usage is critical',
           description: ratioDescription(snapshot),
           status: 'todo',
@@ -51,20 +69,24 @@ export class TaskboardHudAlertSink {
           tags: ['hud', 'telemetry', ALERT_TAG],
         })
       }
-      if (this.#isCurrent(episode)) this.#reportedEpisode = episode
+      if (this.#isCurrent(state, episode)) state.reportedEpisode = episode
     })
-    this.#pending = operation.catch((): void => undefined)
+    state.pending = operation.catch((): void => undefined)
     return operation
   }
 
   public async dispose(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
-    this.#critical = false
-    await this.#pending
+    for (const state of this.#states.values()) state.critical = false
+    await Promise.all([...this.#states.values()].map(async (state): Promise<void> => state.pending))
+    this.#states.clear()
   }
 
-  #isCurrent(episode: number): boolean {
-    return !this.#disposed && this.#critical && this.#episode === episode
+  #isCurrent(
+    state: { readonly critical: boolean; readonly episode: number },
+    episode: number,
+  ): boolean {
+    return !this.#disposed && state.critical && state.episode === episode
   }
 }

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService } from 'dsh-luban-core'
+import type { AccountContext, AccountId, AuthService } from 'dsh-luban-core'
 import { LubanError, isLubanError, modulePrefix } from 'dsh-luban-core'
 import type { DefaultTelemetryAggregator } from './aggregator.js'
 import { HudKeepaliveHealthStore } from './keepalive-health.js'
@@ -10,6 +10,7 @@ import type { HudPublicConfig, HudSnapshotResponse, HudTelemetryEnvelope } from 
 const PREFIX = modulePrefix('hud')
 
 interface StreamClient {
+  readonly accountId: AccountId
   readonly response: ServerResponse
   readonly close: () => void
 }
@@ -48,7 +49,7 @@ function sourceIp(request: IncomingMessage): string {
   return request.socket.remoteAddress ?? 'unknown'
 }
 
-async function requireAuth(request: IncomingMessage, auth: AuthService): Promise<void> {
+async function requireAuth(request: IncomingMessage, auth: AuthService): Promise<AccountContext> {
   const decision = await auth.middleware()({
     path: request.url ?? PREFIX,
     method: request.method ?? 'GET',
@@ -56,43 +57,48 @@ async function requireAuth(request: IncomingMessage, auth: AuthService): Promise
     cookie: request.headers.cookie,
     sourceIp: sourceIp(request),
   })
-  if (!decision.allowed || decision.user === undefined) {
+  if (!decision.allowed || decision.account === undefined) {
     throw new LubanError('E_AUTH_REQUIRED', 'Authentication is required')
   }
+  return decision.account
 }
 
 /** One bounded SSE fan-out for immutable HUD envelopes. */
 export class HudEventStream {
-  readonly #clients = new Set<StreamClient>()
-  readonly #events: HudStreamFrame[] = []
+  readonly #clients = new Map<AccountId, Set<StreamClient>>()
+  readonly #events = new Map<AccountId, HudStreamFrame[]>()
+  readonly #sequences = new Map<AccountId, number>()
   #heartbeat: ReturnType<typeof setInterval> | undefined
-  #sequence = 0
   #disposed = false
 
   #startHeartbeat(): void {
     if (this.#heartbeat !== undefined) return
     this.#heartbeat = setInterval((): void => {
-      for (const client of [...this.#clients]) {
-        if (client.response.destroyed) client.close()
-        else if (!this.#writeRaw(client.response, ': keepalive\n\n')) client.close()
+      for (const clients of this.#clients.values()) {
+        for (const client of [...clients]) {
+          if (client.response.destroyed) client.close()
+          else if (!this.#writeRaw(client.response, ': keepalive\n\n')) client.close()
+        }
       }
     }, 15_000)
     this.#heartbeat.unref()
   }
 
   public connect(
+    accountId: AccountId,
     request: IncomingMessage,
     response: ServerResponse,
     baseline: HudSnapshotResponse,
   ): void {
     this.#assertAvailable()
+    const events = this.#events.get(accountId) ?? []
+    const sequence = this.#sequences.get(accountId) ?? 0
     const requested = this.#lastEventId(request)
-    const oldest = this.#events.at(0)?.id ?? this.#sequence
-    const needsBaseline =
-      requested === undefined || requested < oldest - 1 || requested > this.#sequence
+    const oldest = events.at(0)?.id ?? sequence
+    const needsBaseline = requested === undefined || requested < oldest - 1 || requested > sequence
     const pending: readonly HudStreamFrame[] = needsBaseline
-      ? [{ id: this.#sequence, envelope: baseline }]
-      : this.#events.filter((frame): boolean => frame.id > requested)
+      ? [{ id: sequence, envelope: baseline }]
+      : events.filter((frame): boolean => frame.id > requested)
     response.statusCode = 200
     securityHeaders(response)
     response.setHeader('content-type', 'text/event-stream; charset=utf-8')
@@ -100,12 +106,16 @@ export class HudEventStream {
     response.setHeader('x-accel-buffering', 'no')
     response.flushHeaders()
     let closed = false
+    const clients = this.#clients.get(accountId) ?? new Set<StreamClient>()
+    this.#clients.set(accountId, clients)
     const client: StreamClient = {
+      accountId,
       response,
       close: (): void => {
         if (closed) return
         closed = true
-        this.#clients.delete(client)
+        clients.delete(client)
+        if (clients.size === 0) this.#clients.delete(accountId)
         if (!response.destroyed && !response.writableEnded) {
           try {
             response.end()
@@ -116,7 +126,7 @@ export class HudEventStream {
         this.#stopHeartbeatWhenIdle()
       },
     }
-    this.#clients.add(client)
+    clients.add(client)
     request.once('close', client.close)
     response.once('error', client.close)
     this.#startHeartbeat()
@@ -128,12 +138,16 @@ export class HudEventStream {
     }
   }
 
-  public publish(envelope: HudSnapshotResponse): void {
+  public publish(accountId: AccountId, envelope: HudSnapshotResponse): void {
     if (this.#disposed) return
-    const frame: HudStreamFrame = { id: ++this.#sequence, envelope }
-    this.#events.push(frame)
-    if (this.#events.length > REPLAY_LIMIT) this.#events.shift()
-    for (const client of [...this.#clients]) {
+    const sequence = (this.#sequences.get(accountId) ?? 0) + 1
+    this.#sequences.set(accountId, sequence)
+    const frame: HudStreamFrame = { id: sequence, envelope }
+    const events = this.#events.get(accountId) ?? []
+    events.push(frame)
+    this.#events.set(accountId, events)
+    if (events.length > REPLAY_LIMIT) events.shift()
+    for (const client of [...(this.#clients.get(accountId) ?? [])]) {
       if (client.response.destroyed) client.close()
       else if (!this.#write(client.response, frame)) client.close()
     }
@@ -142,7 +156,12 @@ export class HudEventStream {
   public dispose(): void {
     if (this.#disposed) return
     this.#disposed = true
-    for (const client of [...this.#clients]) client.close()
+    for (const clients of this.#clients.values()) {
+      for (const client of [...clients]) client.close()
+    }
+    this.#clients.clear()
+    this.#events.clear()
+    this.#sequences.clear()
     if (this.#heartbeat !== undefined) clearInterval(this.#heartbeat)
     this.#heartbeat = undefined
   }
@@ -212,8 +231,12 @@ export class HudHttpApi {
     this.#ownsKeepalive = options.keepalive === undefined
     this.#rateCapture = options.rateCapture
     this.#onError = options.onError ?? ((): void => undefined)
-    this.#unsubscribeTelemetry = this.#telemetry.subscribe((): void => this.#publishLatest())
-    this.#unsubscribeKeepalive = this.#keepalive.subscribe((): void => this.#publishLatest())
+    this.#unsubscribeTelemetry = this.#telemetry.subscribeAccounts((accountId): void =>
+      this.#publishLatest(accountId),
+    )
+    this.#unsubscribeKeepalive = this.#keepalive.subscribe((accountId): void => {
+      if (accountId !== undefined) this.#publishLatest(accountId)
+    })
   }
 
   public readonly handler = async (
@@ -221,7 +244,7 @@ export class HudHttpApi {
     response: ServerResponse,
   ): Promise<void> => {
     try {
-      await requireAuth(request, this.#auth)
+      const account = await requireAuth(request, this.#auth)
       this.#assertAvailable()
       if (request.method !== 'GET') {
         response.setHeader('allow', 'GET')
@@ -230,13 +253,15 @@ export class HudHttpApi {
       }
       const url = new URL(request.url ?? PREFIX, 'http://127.0.0.1')
       if (url.pathname === `${PREFIX}/snapshot`) {
-        const envelope = await this.#telemetry.envelope()
+        const envelope = await this.#telemetry.envelopeForAccount(account.accountId)
         this.#assertAvailable()
-        sendJson(response, 200, this.#response(envelope))
+        sendJson(response, 200, this.#response(account.accountId, envelope))
         return
       }
       if (url.pathname === `${PREFIX}/history`) {
-        sendJson(response, 200, { snapshots: this.#telemetry.history() })
+        sendJson(response, 200, {
+          snapshots: this.#telemetry.historyForAccount(account.accountId),
+        })
         return
       }
       if (url.pathname === `${PREFIX}/rate-capture`) {
@@ -249,15 +274,24 @@ export class HudHttpApi {
         if (startUtc === null || endUtc === null || challenge === null) {
           throw new LubanError('E_INVALID_INPUT', 'Rate capture query is incomplete')
         }
-        const capture = await this.#rateCapture.capture({ startUtc, endUtc }, challenge)
+        const capture = await this.#rateCapture.capture(
+          { startUtc, endUtc },
+          challenge,
+          account.accountId,
+        )
         this.#assertAvailable()
         sendJson(response, 200, capture)
         return
       }
       if (url.pathname === `${PREFIX}/events`) {
-        const envelope = await this.#telemetry.envelope()
+        const envelope = await this.#telemetry.envelopeForAccount(account.accountId)
         this.#assertAvailable()
-        this.#stream.connect(request, response, this.#response(envelope))
+        this.#stream.connect(
+          account.accountId,
+          request,
+          response,
+          this.#response(account.accountId, envelope),
+        )
         return
       }
       throw new LubanError('E_NOT_FOUND', 'HUD endpoint not found')
@@ -283,20 +317,22 @@ export class HudHttpApi {
     if (this.#ownsKeepalive) this.#keepalive.dispose()
   }
 
-  #response(envelope: HudTelemetryEnvelope): HudSnapshotResponse {
+  #response(accountId: AccountId, envelope: HudTelemetryEnvelope): HudSnapshotResponse {
     return Object.freeze({
       ...envelope,
       config: this.#config,
-      keepalive: this.#keepalive.snapshot(),
+      keepalive: this.#keepalive.snapshot(accountId),
     })
   }
 
-  #publishLatest(): void {
+  #publishLatest(accountId: AccountId): void {
     if (this.#disposed) return
     void this.#telemetry
-      .envelope()
+      .envelopeForAccount(accountId)
       .then((envelope): void => {
-        if (!this.#disposed) this.#stream.publish(this.#response(envelope))
+        if (!this.#disposed) {
+          this.#stream.publish(accountId, this.#response(accountId, envelope))
+        }
       })
       .catch((error: unknown): void => {
         try {

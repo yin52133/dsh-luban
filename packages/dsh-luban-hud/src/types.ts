@@ -1,9 +1,10 @@
-import type { TelemetrySnapshot } from 'dsh-luban-core'
+import type { AccountId, TelemetrySnapshot } from 'dsh-luban-core'
 import type { HudDisplayField, HudThresholds } from './config.js'
 
 export const HUD_TELEMETRY_EVENT = 'luban.telemetry.snapshot' as const
 
 export interface KeepaliveHealthPayload {
+  readonly accountId?: AccountId
   readonly sessionId: string
   readonly alive: boolean
   readonly detail?: string

@@ -14,6 +14,12 @@ An authenticated, always-visible DSH telemetry HUD backed by concurrent, pluggab
 
 One-hour history is an in-memory, time-bounded ring. Telemetry contains metadata only and never session text. Browser SSE is closed while the page is hidden.
 
+Authenticated snapshots, history, rate captures, keepalive status, Taskboard alerts, and SSE
+live/replay channels are partitioned by the M01 account context. Session-derived data is included
+only after `lubanAuth.accountSessions.ownerOf(sessionId)` returns the same account; legacy sessions
+without an owner remain hidden and are not implicitly claimed. Request query parameters cannot
+select or override an account.
+
 ## Installation
 
 Install after the rc2 agent/Web runtime and `dsh-luban-auth`, then apply the bundled patch:

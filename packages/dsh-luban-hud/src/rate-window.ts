@@ -1,4 +1,4 @@
-import type { TelemetryProvider, TelemetrySnapshot } from 'dsh-luban-core'
+import type { AccountId, TelemetryProvider, TelemetrySnapshot } from 'dsh-luban-core'
 
 export interface MonotonicClock {
   now(): number
@@ -96,9 +96,14 @@ export class SlidingRateWindow {
 export class RateTelemetryProvider implements TelemetryProvider {
   public readonly id = 'dsh-rates'
   readonly #window: SlidingRateWindow
+  readonly #windowForAccount: ((accountId: AccountId) => SlidingRateWindow | undefined) | undefined
 
-  public constructor(window: SlidingRateWindow) {
+  public constructor(
+    window: SlidingRateWindow,
+    windowForAccount?: (accountId: AccountId) => SlidingRateWindow | undefined,
+  ) {
     this.#window = window
+    this.#windowForAccount = windowForAccount
   }
 
   public capabilities(): readonly ['rates'] {
@@ -107,5 +112,10 @@ export class RateTelemetryProvider implements TelemetryProvider {
 
   public sample(): Promise<Partial<TelemetrySnapshot>> {
     return Promise.resolve({ rates: this.#window.snapshot() })
+  }
+
+  public sampleForAccount(accountId: AccountId): Promise<Partial<TelemetrySnapshot>> {
+    const window = this.#windowForAccount?.(accountId)
+    return Promise.resolve(window === undefined ? {} : { accountId, rates: window.snapshot() })
   }
 }

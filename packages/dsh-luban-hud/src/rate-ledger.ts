@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type { Clock, ProviderRequestIdentityAdapter } from 'dsh-luban-core'
+import type { AccountId, Clock, ProviderRequestIdentityAdapter } from 'dsh-luban-core'
 import { LubanError, systemClock } from 'dsh-luban-core'
 import {
   attestHudProviderRequest,
@@ -73,8 +73,15 @@ export interface HudRateLedgerOptions {
 type HudRateEventMetadata = Omit<HudRateCaptureMetadata, 'providerRequest'>
 
 interface CapturedRecord {
+  readonly accountId?: AccountId
   readonly record: RateLedgerRecord
   readonly metadata: HudRateEventMetadata
+}
+
+interface RateScopeState {
+  coverageStart: number | null
+  coverageInvalid: boolean
+  revision: number
 }
 
 function sha256(value: string): string {
@@ -180,6 +187,7 @@ function sameUsage(left: ReconciledTokenUsage, right: ReconciledTokenUsage): boo
 
 function sameCapturedRequest(left: CapturedRecord, right: CapturedRecord): boolean {
   return (
+    left.accountId === right.accountId &&
     left.record.occurredAt === right.record.occurredAt &&
     sameUsage(left.record.usage, right.record.usage) &&
     left.metadata.eventSeq === right.metadata.eventSeq &&
@@ -294,11 +302,11 @@ export class HudRateLedger {
     (() => ProviderRequestIdentityAdapter | undefined) | undefined
   readonly #records = new Map<string, CapturedRecord>()
   readonly #conflictTimes = new Map<string, Set<number>>()
-  #coverageStart: number | null
+  readonly #scopeStates = new Map<string, RateScopeState>()
+  readonly #initialCoverageStart: number | null
   #lastWallClock: number | null
   #lastMonotonicClock: number | null
-  #coverageInvalid = false
-  #revision = 0
+  #clockCoverageInvalid = false
 
   public constructor(options: HudRateLedgerOptions) {
     this.#runtimeArtifact = parseHudRuntimeArtifactIdentity(options.runtimeArtifact)
@@ -320,14 +328,23 @@ export class HudRateLedger {
     const wallClock = this.#clock.now()
     const monotonicClock = this.#monotonicClock.now()
     const valid = validEpoch(wallClock) && validElapsed(monotonicClock)
-    this.#coverageStart = valid ? wallClock : null
+    this.#initialCoverageStart = valid ? wallClock : null
     this.#lastWallClock = valid ? wallClock : null
     this.#lastMonotonicClock = valid ? monotonicClock : null
-    this.#coverageInvalid = !valid
+    this.#clockCoverageInvalid = !valid
   }
 
   public observe(session: Session, event: SessionEvent): void {
+    this.#observe(session, event)
+  }
+
+  public observeForAccount(accountId: AccountId, session: Session, event: SessionEvent): void {
+    this.#observe(session, event, accountId)
+  }
+
+  #observe(session: Session, event: SessionEvent, accountId?: AccountId): void {
     if (event.type !== 'assistant/message') return
+    const state = this.#scopeState(accountId)
     const now = this.#sampleClock()
     if (now === null) return
     if (
@@ -340,15 +357,15 @@ export class HudRateLedger {
       !Number.isSafeInteger(event.data.step) ||
       event.data.step < 0
     ) {
-      this.#markCoverageInvalid()
+      this.#markCoverageInvalid(accountId)
       return
     }
     if (event.time > now) {
-      this.#markCoverageInvalid()
+      this.#markCoverageInvalid(accountId)
       return
     }
-    if (this.#coverageStart !== null && event.time < this.#coverageStart) {
-      this.#prune(now)
+    if (state.coverageStart !== null && event.time < state.coverageStart) {
+      this.#prune(now, accountId)
       return
     }
     const occurredAt = new Date(event.time)
@@ -363,11 +380,12 @@ export class HudRateLedger {
       provider === undefined ||
       model === undefined
     ) {
-      this.#markCoverageInvalid()
+      this.#markCoverageInvalid(accountId)
       return
     }
     const id = messageId
     const captured: CapturedRecord = Object.freeze({
+      ...(accountId === undefined ? {} : { accountId }),
       record: Object.freeze({
         id,
         occurredAt: occurredAt.toISOString(),
@@ -385,37 +403,47 @@ export class HudRateLedger {
         model,
       }),
     })
-    const existing = this.#records.get(id)
+    const recordKey = this.#recordKey(id, accountId)
+    const existing = this.#records.get(recordKey)
     if (existing !== undefined) {
-      if (!sameCapturedRequest(existing, captured)) this.#recordConflict(id, existing, captured)
-      this.#prune(now)
+      if (!sameCapturedRequest(existing, captured)) {
+        this.#recordConflict(recordKey, existing, captured)
+      }
+      this.#prune(now, accountId)
       return
     }
-    this.#records.set(id, captured)
-    this.#revision += 1
-    this.#prune(now)
+    this.#records.set(recordKey, captured)
+    state.revision += 1
+    this.#prune(now, accountId)
   }
 
-  public async capture(windowValue: RateWindowUtc, challenge: string): Promise<HudRateCapture> {
+  public async capture(
+    windowValue: RateWindowUtc,
+    challenge: string,
+    accountId?: AccountId,
+  ): Promise<HudRateCapture> {
     if (!CHALLENGE.test(challenge)) {
       throw new LubanError('E_INVALID_INPUT', 'Rate capture challenge is invalid')
     }
     const window = captureWindow(windowValue)
+    const state = this.#scopeState(accountId)
     const now = this.#sampleClock()
     if (now === null) throw coverageError('Rate capture clock coverage is unavailable')
     if (Date.parse(window.endUtc) > now) {
       throw new LubanError('E_INVALID_INPUT', 'Rate capture window cannot end in the future')
     }
-    this.#prune(now)
+    this.#prune(now, accountId)
     const start = Date.parse(window.startUtc)
     const end = Date.parse(window.endUtc)
-    if (this.#coverageInvalid) {
+    if (this.#clockCoverageInvalid || state.coverageInvalid) {
       throw coverageError('Rate capture coverage is unavailable')
     }
-    if (this.#coverageStart === null || start < this.#coverageStart) {
+    if (state.coverageStart === null || start < state.coverageStart) {
       throw coverageError('Rate capture window is outside complete mounted coverage')
     }
-    for (const timestamps of this.#conflictTimes.values()) {
+    const scopePrefix = this.#scopePrefix(accountId)
+    for (const [key, timestamps] of this.#conflictTimes) {
+      if (!key.startsWith(scopePrefix)) continue
       for (const occurredAt of timestamps) {
         if (occurredAt >= start && occurredAt < end) {
           throw coverageError('Rate capture window contains a conflicting message identity')
@@ -423,7 +451,9 @@ export class HudRateLedger {
       }
     }
     const selected = [...this.#records.values()]
-      .filter(({ record }): boolean => {
+      .filter((captured): boolean => {
+        if (captured.accountId !== accountId) return false
+        const { record } = captured
         const occurredAt = Date.parse(record.occurredAt)
         return occurredAt >= start && occurredAt < end
       })
@@ -440,14 +470,14 @@ export class HudRateLedger {
     if (adapter === undefined) {
       throw coverageError('Provider request identity adapter is unavailable')
     }
-    const snapshotRevision = this.#revision
+    const snapshotRevision = state.revision
     const identities = await attestCapturedRecords(
       selected,
       adapter,
       challenge,
       AbortSignal.timeout(PROVIDER_IDENTITY_TIMEOUT_MS),
     )
-    if (this.#revision !== snapshotRevision || this.#sampleClock() === null) {
+    if (state.revision !== snapshotRevision || this.#sampleClock() === null) {
       throw coverageError('Rate capture changed during provider request identity attestation')
     }
     const firstIdentity = identities.at(0)
@@ -481,7 +511,7 @@ export class HudRateLedger {
       )
     }
     const exportedAt = new Date(now).toISOString()
-    const coverageStartUtc = new Date(this.#coverageStart).toISOString()
+    const coverageStartUtc = new Date(state.coverageStart).toISOString()
     return Object.freeze({
       schemaVersion: HUD_RATE_CAPTURE_SCHEMA,
       source: Object.freeze({
@@ -508,7 +538,7 @@ export class HudRateLedger {
     const wallClock = this.#clock.now()
     const monotonicClock = this.#monotonicClock.now()
     if (!validEpoch(wallClock) || !validElapsed(monotonicClock)) {
-      this.#markCoverageInvalid()
+      this.#markClockCoverageInvalid()
       return null
     }
     if (this.#lastWallClock !== null && this.#lastMonotonicClock !== null) {
@@ -519,7 +549,10 @@ export class HudRateLedger {
         monotonicDelta < 0 ||
         Math.abs(wallDelta - monotonicDelta) > MAX_CLOCK_DRIFT_MS
       ) {
-        this.#markCoverageInvalid()
+        this.#markClockCoverageInvalid()
+        this.#lastWallClock = wallClock
+        this.#lastMonotonicClock = monotonicClock
+        return null
       }
     }
     this.#lastWallClock = wallClock
@@ -527,10 +560,17 @@ export class HudRateLedger {
     return wallClock
   }
 
-  #markCoverageInvalid(): void {
-    if (this.#coverageInvalid) return
-    this.#coverageInvalid = true
-    this.#revision += 1
+  #markCoverageInvalid(accountId?: AccountId): void {
+    const state = this.#scopeState(accountId)
+    if (state.coverageInvalid) return
+    state.coverageInvalid = true
+    state.revision += 1
+  }
+
+  #markClockCoverageInvalid(): void {
+    if (this.#clockCoverageInvalid) return
+    this.#clockCoverageInvalid = true
+    for (const state of this.#scopeStates.values()) state.revision += 1
   }
 
   #recordConflict(id: string, left: CapturedRecord, right: CapturedRecord): void {
@@ -539,24 +579,27 @@ export class HudRateLedger {
     timestamps.add(Date.parse(left.record.occurredAt))
     timestamps.add(Date.parse(right.record.occurredAt))
     this.#conflictTimes.set(id, timestamps)
-    if (timestamps.size !== previousSize) this.#revision += 1
+    if (timestamps.size !== previousSize) this.#scopeState(left.accountId).revision += 1
   }
 
-  #prune(now: number): void {
+  #prune(now: number, accountId?: AccountId): void {
     const cutoff = now - CAPTURE_RETENTION_MS
+    const state = this.#scopeState(accountId)
+    const scopePrefix = this.#scopePrefix(accountId)
     let changed = false
-    if (this.#coverageStart !== null) {
-      const coverageStart = Math.max(this.#coverageStart, cutoff)
-      if (coverageStart !== this.#coverageStart) changed = true
-      this.#coverageStart = coverageStart
+    if (state.coverageStart !== null) {
+      const coverageStart = Math.max(state.coverageStart, cutoff)
+      if (coverageStart !== state.coverageStart) changed = true
+      state.coverageStart = coverageStart
     }
     for (const [id, captured] of this.#records) {
-      if (Date.parse(captured.record.occurredAt) < cutoff) {
+      if (captured.accountId === accountId && Date.parse(captured.record.occurredAt) < cutoff) {
         this.#records.delete(id)
         changed = true
       }
     }
     for (const [id, timestamps] of this.#conflictTimes) {
+      if (!id.startsWith(scopePrefix)) continue
       for (const timestamp of timestamps) {
         if (timestamp < cutoff) {
           timestamps.delete(timestamp)
@@ -568,23 +611,47 @@ export class HudRateLedger {
         changed = true
       }
     }
-    if (this.#records.size <= this.#maxRecords) {
-      if (changed) this.#revision += 1
+    const scopedRecords = [...this.#records.entries()].filter(
+      ([, captured]): boolean => captured.accountId === accountId,
+    )
+    if (scopedRecords.length <= this.#maxRecords) {
+      if (changed) state.revision += 1
       return
     }
-    const oldest = [...this.#records.entries()].sort(
+    const oldest = scopedRecords.sort(
       (left, right): number =>
         Date.parse(left[1].record.occurredAt) - Date.parse(right[1].record.occurredAt),
     )
-    const evicted = oldest.slice(0, this.#records.size - this.#maxRecords)
-    let evictionWatermark = this.#coverageStart ?? cutoff
+    const evicted = oldest.slice(0, scopedRecords.length - this.#maxRecords)
+    let evictionWatermark = state.coverageStart ?? cutoff
     for (const [id, captured] of evicted) {
       this.#records.delete(id)
       changed = true
       evictionWatermark = Math.max(evictionWatermark, Date.parse(captured.record.occurredAt) + 1)
     }
-    if (evictionWatermark !== this.#coverageStart) changed = true
-    this.#coverageStart = evictionWatermark
-    if (changed) this.#revision += 1
+    if (evictionWatermark !== state.coverageStart) changed = true
+    state.coverageStart = evictionWatermark
+    if (changed) state.revision += 1
+  }
+
+  #scopeState(accountId?: AccountId): RateScopeState {
+    const key = this.#scopePrefix(accountId)
+    const existing = this.#scopeStates.get(key)
+    if (existing !== undefined) return existing
+    const created: RateScopeState = {
+      coverageStart: this.#initialCoverageStart,
+      coverageInvalid: false,
+      revision: 0,
+    }
+    this.#scopeStates.set(key, created)
+    return created
+  }
+
+  #scopePrefix(accountId?: AccountId): string {
+    return `${accountId === undefined ? 'legacy' : String(accountId)}\u0000`
+  }
+
+  #recordKey(id: string, accountId?: AccountId): string {
+    return `${this.#scopePrefix(accountId)}${id}`
   }
 }

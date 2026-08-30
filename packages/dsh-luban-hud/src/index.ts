@@ -3,13 +3,14 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-session'
 import type {
+  AccountId,
   AuthService,
   ProviderRequestIdentityAdapter,
   TaskStore,
   TelemetryAggregator,
   TelemetrySnapshot,
 } from 'dsh-luban-core'
-import { LubanError, modulePrefix, redactSecrets, systemClock } from 'dsh-luban-core'
+import { asSessionId, LubanError, modulePrefix, redactSecrets, systemClock } from 'dsh-luban-core'
 import { DefaultTelemetryAggregator } from './aggregator.js'
 import { TaskboardHudAlertSink } from './alerts.js'
 import {
@@ -52,7 +53,7 @@ export const Config = ConfigSchema
 export type Config = HudConfig
 
 export { DefaultTelemetryAggregator } from './aggregator.js'
-export type { TelemetryAggregatorOptions } from './aggregator.js'
+export type { AccountTelemetryProvider, TelemetryAggregatorOptions } from './aggregator.js'
 export { TaskboardHudAlertSink } from './alerts.js'
 export {
   HUD_BUILD_PROVENANCE_SCHEMA,
@@ -165,6 +166,36 @@ export function apply(
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth')
   if (auth === undefined) throw new LubanError('E_UNAVAILABLE', 'lubanAuth is required')
+  const sessionOwners = new Map<string, AccountId>()
+  const ownerLookups = new Map<string, Promise<AccountId | null>>()
+  const resolveSessionAccount = (
+    sessionId: ReturnType<typeof asSessionId>,
+  ): Promise<AccountId | null> => {
+    const key = String(sessionId)
+    const cached = sessionOwners.get(key)
+    if (cached !== undefined) return Promise.resolve(cached)
+    const existing = ownerLookups.get(key)
+    if (existing !== undefined) return existing
+    const lookup = auth.accountSessions
+      .ownerOf(sessionId)
+      .then((accountId): AccountId | null => {
+        if (accountId !== null) sessionOwners.set(key, accountId)
+        return accountId
+      })
+      .finally((): void => void ownerLookups.delete(key))
+    ownerLookups.set(key, lookup)
+    return lookup
+  }
+  const accountSessions = Object.freeze({
+    bind: async (
+      accountId: AccountId,
+      sessionId: ReturnType<typeof asSessionId>,
+    ): Promise<void> => {
+      await auth.accountSessions.bind(accountId, sessionId)
+      sessionOwners.set(String(sessionId), accountId)
+    },
+    ownerOf: resolveSessionAccount,
+  })
   const window = new SlidingRateWindow(systemMonotonicClock)
   const rateLedger = new HudRateLedger({
     runtimeArtifact,
@@ -186,6 +217,8 @@ export function apply(
     historyEnabled: config.history.enabled,
     historyRetentionMs: config.history.retainMinutes * 60_000,
     thresholds: config.thresholds,
+    accountScoped: true,
+    resolveSessionAccount,
     onError: (error: unknown): void => {
       const message = redactSecrets(error instanceof Error ? error.message : String(error)).slice(
         0,
@@ -205,9 +238,15 @@ export function apply(
     }
     return service as SessionProjectionReader
   }
-  telemetry.register(new DshSessionTelemetryProvider(ctx.agents, process.cwd(), resolveProjections))
-  telemetry.register(new DshContextEstimatorProvider(ctx.agents, resolveProjections))
-  telemetry.register(new RateTelemetryProvider(window))
+  telemetry.register(
+    new DshSessionTelemetryProvider(ctx.agents, process.cwd(), resolveProjections, accountSessions),
+  )
+  telemetry.register(
+    new DshContextEstimatorProvider(ctx.agents, resolveProjections, accountSessions),
+  )
+  telemetry.register(
+    new RateTelemetryProvider(window, (accountId) => collector.windowForAccount(accountId)),
+  )
   const publicConfig = Object.freeze({ thresholds: config.thresholds, display: config.display })
   const keepalive = new HudKeepaliveHealthStore()
   const api = new HudHttpApi({
@@ -219,7 +258,7 @@ export function apply(
     onError: (error: unknown): void =>
       ctx.logger.warn(`luban-hud: stream refresh failed: ${diagnostic(error)}`),
   })
-  const publishSnapshot = telemetry.subscribe((snapshot): void => {
+  const publishSnapshot = telemetry.subscribeAccounts((_accountId, snapshot): void => {
     ctx.emit('luban.telemetry.snapshot', snapshot)
   })
   ctx.provide('lubanTelemetry', telemetry)
@@ -230,7 +269,7 @@ export function apply(
       throw new LubanError('E_UNAVAILABLE', 'lubanTaskStore injection became unavailable')
     }
     const alerts = new TaskboardHudAlertSink(taskStore)
-    const observe = telemetry.subscribe((snapshot): void => {
+    const observe = telemetry.subscribeAccounts((_accountId, snapshot): void => {
       void alerts
         .observe(snapshot, telemetry.advisory(snapshot))
         .catch((error: unknown): void =>
@@ -244,29 +283,61 @@ export function apply(
   })
 
   ctx.effect(() => {
+    let acceptingEvents = true
+    const pendingOwnership = new Set<Promise<void>>()
+    const withSessionOwner = (
+      sessionId: string,
+      operation: (accountId: AccountId) => void,
+    ): void => {
+      const pending = resolveSessionAccount(asSessionId(sessionId))
+        .then((accountId): void => {
+          if (acceptingEvents && accountId !== null) operation(accountId)
+        })
+        .catch((error: unknown): void =>
+          ctx.logger.warn(`luban-hud: account lookup failed: ${diagnostic(error)}`),
+        )
+        .finally((): void => void pendingOwnership.delete(pending))
+      pendingOwnership.add(pending)
+    }
     const unregisterRoute = ctx.webServer.register({
       kind: 'prefix',
       path: modulePrefix('hud'),
       handler: api.handler,
     })
-    const unregisterCreated = ctx.on('session/created', (session): void => collector.adopt(session))
+    const unregisterCreated = ctx.on('session/created', (session): void =>
+      withSessionOwner(String(session.id), (accountId): void =>
+        collector.adoptForAccount(accountId, session),
+      ),
+    )
     const unregisterDisposed = ctx.on('session/disposed', (session): void =>
-      collector.dispose(session),
+      withSessionOwner(String(session.id), (accountId): void =>
+        collector.disposeForAccount(accountId, session),
+      ),
     )
     const unregisterEvent = ctx.on('session/event', (session, event): void =>
-      collector.observe(session, event),
+      withSessionOwner(String(session.id), (accountId): void =>
+        collector.observeForAccount(accountId, session, event),
+      ),
     )
     const unregisterKeepalive = ctx.on('luban.keepalive.health', (payload): void =>
-      keepalive.record(payload),
+      withSessionOwner(payload.sessionId, (accountId): void =>
+        keepalive.recordForAccount(accountId, payload),
+      ),
     )
-    for (const agent of ctx.agents.list()) collector.adopt(agent.session)
+    for (const agent of ctx.agents.list()) {
+      withSessionOwner(String(agent.session.id), (accountId): void =>
+        collector.adoptForAccount(accountId, agent.session),
+      )
+    }
     telemetry.start()
-    return (): void => {
+    return async (): Promise<void> => {
+      acceptingEvents = false
       unregisterRoute()
       unregisterKeepalive()
       unregisterEvent()
       unregisterDisposed()
       unregisterCreated()
+      await Promise.allSettled([...pendingOwnership])
       publishSnapshot()
       api.dispose()
       keepalive.dispose()

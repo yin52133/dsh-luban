@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   Clock,
   SessionId,
   TelemetryAggregator,
@@ -26,6 +27,15 @@ interface RegisteredProvider {
   readonly capabilities: ReadonlySet<TelemetryField>
 }
 
+/** HUD-local extension until the shared telemetry contract grows account-aware sampling. */
+export interface AccountTelemetryProvider extends TelemetryProvider {
+  sampleForAccount(accountId: AccountId): Promise<Partial<TelemetrySnapshot>>
+  sampleForOwnedSession?(
+    accountId: AccountId,
+    sessionId: SessionId,
+  ): Promise<Partial<TelemetrySnapshot>>
+}
+
 interface HistoryEntry {
   readonly at: number
   readonly snapshot: TelemetrySnapshot
@@ -39,6 +49,8 @@ export interface TelemetryAggregatorOptions {
   readonly thresholds?: HudThresholds
   readonly clock?: Clock
   readonly monotonicClock?: MonotonicClock
+  readonly accountScoped?: boolean
+  readonly resolveSessionAccount?: (sessionId: SessionId) => Promise<AccountId | null>
   readonly onError?: (error: unknown) => void
 }
 
@@ -70,8 +82,9 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== ''
 }
 
-function unknownSnapshot(at: number): TelemetrySnapshot {
+function unknownSnapshot(at: number, accountId?: AccountId): TelemetrySnapshot {
   return Object.freeze({
+    ...(accountId === undefined ? {} : { accountId }),
     context: Object.freeze({ used: 'unknown', max: 'unknown', ratio: 'unknown' }),
     workspace: Object.freeze({ name: 'unknown' }),
     model: Object.freeze({ name: 'unknown', thinkingDepth: 'unknown' }),
@@ -87,6 +100,7 @@ function unknownSnapshot(at: number): TelemetrySnapshot {
 
 function freezeSnapshot(snapshot: TelemetrySnapshot): TelemetrySnapshot {
   return Object.freeze({
+    ...(snapshot.accountId === undefined ? {} : { accountId: snapshot.accountId }),
     context: Object.freeze({ ...snapshot.context }),
     workspace: Object.freeze({ ...snapshot.workspace }),
     model: Object.freeze({ ...snapshot.model }),
@@ -157,15 +171,26 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
   readonly #providers = new Map<string, RegisteredProvider>()
   readonly #listeners = new Set<(snapshot: TelemetrySnapshot) => void>()
   readonly #advisoryListeners = new Set<(advisory: TelemetryAdvisory) => void>()
+  readonly #accountListeners = new Map<AccountId, Set<(snapshot: TelemetrySnapshot) => void>>()
+  readonly #accountObservers = new Set<
+    (accountId: AccountId, snapshot: TelemetrySnapshot) => void
+  >()
   readonly #clock: Clock
   readonly #monotonicClock: MonotonicClock
   readonly #refreshMs: number
   readonly #providerTimeoutMs: number
   readonly #historyRetentionMs: number
   readonly #historyEnabled: boolean
+  readonly #accountScoped: boolean
+  readonly #resolveSessionAccount: ((sessionId: SessionId) => Promise<AccountId | null>) | undefined
   readonly #thresholds: HudThresholds
   readonly #onError: (error: unknown) => void
   readonly #history: HistoryEntry[] = []
+  readonly #accountHistory = new Map<AccountId, HistoryEntry[]>()
+  readonly #activeAccounts = new Set<AccountId>()
+  readonly #accountEnvelopes = new Map<AccountId, HudTelemetryEnvelope>()
+  readonly #accountSampleAt = new Map<AccountId, number>()
+  readonly #accountInFlight = new Map<AccountId, Promise<HudTelemetryEnvelope>>()
   #lastEnvelope: HudTelemetryEnvelope | undefined
   #lastSampleAt = Number.NEGATIVE_INFINITY
   #inFlight: Promise<HudTelemetryEnvelope> | undefined
@@ -179,6 +204,8 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
     this.#providerTimeoutMs = options.providerTimeoutMs ?? 2_000
     this.#historyRetentionMs = options.historyRetentionMs ?? 3_600_000
     this.#historyEnabled = options.historyEnabled ?? true
+    this.#accountScoped = options.accountScoped ?? false
+    this.#resolveSessionAccount = options.resolveSessionAccount
     this.#thresholds = options.thresholds ?? DEFAULT_THRESHOLDS
     this.#onError = options.onError ?? ((): void => undefined)
     if (!Number.isFinite(this.#refreshMs) || this.#refreshMs < 1_000) {
@@ -218,6 +245,14 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
   }
 
   public snapshotFor(sessionId: SessionId): Promise<TelemetrySnapshot> {
+    if (this.#resolveSessionAccount !== undefined) {
+      return this.#resolveSessionAccount(sessionId).then(
+        (accountId): Promise<TelemetrySnapshot> => {
+          if (accountId === null) return Promise.resolve(unknownSnapshot(this.#clock.now()))
+          return this.snapshotForAccount(accountId, sessionId)
+        },
+      )
+    }
     return this.#sample(
       this.#monotonicClock.now(),
       this.#providerGeneration,
@@ -227,6 +262,17 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
   }
 
   public envelope(): Promise<HudTelemetryEnvelope> {
+    if (this.#accountScoped) {
+      const snapshot = unknownSnapshot(this.#clock.now())
+      return Promise.resolve(
+        Object.freeze({
+          snapshot,
+          advisory: advisoryFor(snapshot, this.#thresholds),
+          sources: Object.freeze({}),
+          failures: Object.freeze([]),
+        }),
+      )
+    }
     const now = this.#monotonicClock.now()
     if (this.#lastEnvelope !== undefined && now - this.#lastSampleAt < this.#refreshMs) {
       return Promise.resolve(this.#lastEnvelope)
@@ -239,9 +285,64 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
     return refresh
   }
 
+  /** Sample and cache only providers that explicitly support the authenticated account. */
+  public envelopeForAccount(accountId: AccountId): Promise<HudTelemetryEnvelope> {
+    this.#activeAccounts.add(accountId)
+    const now = this.#monotonicClock.now()
+    const cached = this.#accountEnvelopes.get(accountId)
+    const sampledAt = this.#accountSampleAt.get(accountId) ?? Number.NEGATIVE_INFINITY
+    if (cached !== undefined && now - sampledAt < this.#refreshMs) return Promise.resolve(cached)
+    const inFlight = this.#accountInFlight.get(accountId)
+    if (inFlight !== undefined) return inFlight
+    const refresh = this.#sample(now, this.#providerGeneration, undefined, true, accountId).finally(
+      (): void => {
+        if (this.#accountInFlight.get(accountId) === refresh)
+          this.#accountInFlight.delete(accountId)
+      },
+    )
+    this.#accountInFlight.set(accountId, refresh)
+    return refresh
+  }
+
+  /** Bypass account cache and verify the exact session through account-aware providers. */
+  public snapshotForAccount(
+    accountId: AccountId,
+    sessionId: SessionId,
+  ): Promise<TelemetrySnapshot> {
+    this.#activeAccounts.add(accountId)
+    return this.#sample(
+      this.#monotonicClock.now(),
+      this.#providerGeneration,
+      sessionId,
+      false,
+      accountId,
+    ).then((envelope): TelemetrySnapshot => envelope.snapshot)
+  }
+
   public subscribe(listener: (snapshot: TelemetrySnapshot) => void): Unsubscribe {
     this.#listeners.add(listener)
     return (): void => void this.#listeners.delete(listener)
+  }
+
+  public subscribeForAccount(
+    accountId: AccountId,
+    listener: (snapshot: TelemetrySnapshot) => void,
+  ): Unsubscribe {
+    this.#activeAccounts.add(accountId)
+    const listeners = this.#accountListeners.get(accountId) ?? new Set()
+    listeners.add(listener)
+    this.#accountListeners.set(accountId, listeners)
+    return (): void => {
+      listeners.delete(listener)
+      if (listeners.size === 0) this.#accountListeners.delete(accountId)
+    }
+  }
+
+  public subscribeAccounts(
+    listener: (accountId: AccountId, snapshot: TelemetrySnapshot) => void,
+  ): Unsubscribe {
+    this.#accountObservers.add(listener)
+    return (): void => void this.#accountObservers.delete(listener)
   }
 
   public subscribeAdvisory(listener: (advisory: TelemetryAdvisory) => void): Unsubscribe {
@@ -250,8 +351,15 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
   }
 
   public history(): readonly TelemetrySnapshot[] {
-    this.#pruneHistory(this.#monotonicClock.now())
+    this.#pruneHistory(this.#history, this.#monotonicClock.now())
     return Object.freeze(this.#history.map((entry): TelemetrySnapshot => entry.snapshot))
+  }
+
+  public historyForAccount(accountId: AccountId): readonly TelemetrySnapshot[] {
+    const history = this.#accountHistory.get(accountId)
+    if (history === undefined) return Object.freeze([])
+    this.#pruneHistory(history, this.#monotonicClock.now())
+    return Object.freeze(history.map((entry): TelemetrySnapshot => entry.snapshot))
   }
 
   public advisory(snapshot: TelemetrySnapshot): TelemetryAdvisory {
@@ -260,10 +368,19 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
 
   public start(): void {
     if (this.#timer !== undefined) return
-    void this.envelope().catch((error: unknown): void => this.#reportError(error))
+    if (!this.#accountScoped) {
+      void this.envelope().catch((error: unknown): void => this.#reportError(error))
+    }
     this.#timer = setInterval((): void => {
       this.#invalidate()
-      void this.envelope().catch((error: unknown): void => this.#reportError(error))
+      if (!this.#accountScoped) {
+        void this.envelope().catch((error: unknown): void => this.#reportError(error))
+      }
+      for (const accountId of this.#activeAccounts) {
+        void this.envelopeForAccount(accountId).catch((error: unknown): void =>
+          this.#reportError(error),
+        )
+      }
     }, this.#refreshMs)
     this.#timer.unref()
   }
@@ -273,6 +390,10 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
     this.#timer = undefined
     this.#listeners.clear()
     this.#advisoryListeners.clear()
+    this.#accountListeners.clear()
+    this.#accountObservers.clear()
+    this.#activeAccounts.clear()
+    this.#accountInFlight.clear()
     if (this.#providers.size > 0) {
       this.#providers.clear()
       this.#providersChanged()
@@ -284,27 +405,42 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
     providerGeneration: number,
     sessionId?: SessionId,
     publish = true,
+    accountId?: AccountId,
   ): Promise<HudTelemetryEnvelope> {
     const providers = [...this.#providers.values()]
     const results = await Promise.allSettled(
       providers.map(async ({ provider }): Promise<Partial<TelemetrySnapshot>> =>
         timeout(
-          Promise.resolve().then(() =>
-            sessionId === undefined || provider.sampleForSession === undefined
+          Promise.resolve().then(() => {
+            if (accountId !== undefined) {
+              const scoped = provider as Partial<AccountTelemetryProvider>
+              if (sessionId !== undefined) {
+                return scoped.sampleForOwnedSession?.(accountId, sessionId) ?? Promise.resolve({})
+              }
+              return scoped.sampleForAccount?.(accountId) ?? Promise.resolve({})
+            }
+            return sessionId === undefined || provider.sampleForSession === undefined
               ? provider.sample()
-              : provider.sampleForSession(sessionId),
-          ),
+              : provider.sampleForSession(sessionId)
+          }),
           this.#providerTimeoutMs,
           provider.id,
         ),
       ),
     )
     if (providerGeneration !== this.#providerGeneration) {
-      return this.#sample(this.#monotonicClock.now(), this.#providerGeneration, sessionId, publish)
+      return this.#sample(
+        this.#monotonicClock.now(),
+        this.#providerGeneration,
+        sessionId,
+        publish,
+        accountId,
+      )
     }
     const at = this.#clock.now()
-    const snapshot = unknownSnapshot(at)
+    const snapshot = unknownSnapshot(at, accountId)
     const mutable = {
+      ...(accountId === undefined ? {} : { accountId }),
       context: { ...snapshot.context },
       workspace: { ...snapshot.workspace },
       model: { ...snapshot.model },
@@ -429,7 +565,13 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
         .join('+')
     }
     if (providerGeneration !== this.#providerGeneration) {
-      return this.#sample(this.#monotonicClock.now(), this.#providerGeneration, sessionId, publish)
+      return this.#sample(
+        this.#monotonicClock.now(),
+        this.#providerGeneration,
+        sessionId,
+        publish,
+        accountId,
+      )
     }
 
     const finalSnapshot = freezeSnapshot(mutable)
@@ -441,17 +583,34 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
       failures: Object.freeze(failures),
     })
     if (!publish) return envelope
-    const previousLevel = this.#lastEnvelope?.advisory.level
-    this.#lastEnvelope = envelope
-    this.#lastSampleAt = monotonicAt
-    if (this.#historyEnabled) {
-      this.#history.push({ at: monotonicAt, snapshot: finalSnapshot })
-      this.#pruneHistory(monotonicAt)
-    }
-    for (const listener of [...this.#listeners]) this.#notify((): void => listener(finalSnapshot))
-    if (previousLevel !== advisory.level) {
-      for (const listener of [...this.#advisoryListeners]) {
-        this.#notify((): void => listener(advisory))
+    if (accountId === undefined) {
+      const previousLevel = this.#lastEnvelope?.advisory.level
+      this.#lastEnvelope = envelope
+      this.#lastSampleAt = monotonicAt
+      if (this.#historyEnabled) {
+        this.#history.push({ at: monotonicAt, snapshot: finalSnapshot })
+        this.#pruneHistory(this.#history, monotonicAt)
+      }
+      for (const listener of [...this.#listeners]) this.#notify((): void => listener(finalSnapshot))
+      if (previousLevel !== advisory.level) {
+        for (const listener of [...this.#advisoryListeners]) {
+          this.#notify((): void => listener(advisory))
+        }
+      }
+    } else {
+      this.#accountEnvelopes.set(accountId, envelope)
+      this.#accountSampleAt.set(accountId, monotonicAt)
+      if (this.#historyEnabled) {
+        const history = this.#accountHistory.get(accountId) ?? []
+        history.push({ at: monotonicAt, snapshot: finalSnapshot })
+        this.#accountHistory.set(accountId, history)
+        this.#pruneHistory(history, monotonicAt)
+      }
+      for (const listener of this.#accountListeners.get(accountId) ?? []) {
+        this.#notify((): void => listener(finalSnapshot))
+      }
+      for (const listener of [...this.#accountObservers]) {
+        this.#notify((): void => listener(accountId, finalSnapshot))
       }
     }
     return envelope
@@ -483,18 +642,19 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
     sources[sourceKey] = providerId
   }
 
-  #pruneHistory(now: number): void {
+  #pruneHistory(history: HistoryEntry[], now: number): void {
     let stale = 0
-    while (stale < this.#history.length) {
-      const entry = this.#history.at(stale)
+    while (stale < history.length) {
+      const entry = history.at(stale)
       if (entry === undefined || now - entry.at <= this.#historyRetentionMs) break
       stale += 1
     }
-    if (stale > 0) this.#history.splice(0, stale)
+    if (stale > 0) history.splice(0, stale)
   }
 
   #invalidate(): void {
     this.#lastSampleAt = Number.NEGATIVE_INFINITY
+    this.#accountSampleAt.clear()
   }
 
   #providersChanged(): void {

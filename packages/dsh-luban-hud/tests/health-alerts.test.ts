@@ -1,12 +1,13 @@
 import type { Task, TaskCreateInput, TaskStore, TelemetrySnapshot } from 'dsh-luban-core'
-import { asTaskId } from 'dsh-luban-core'
+import { asAccountId, asTaskId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { TaskboardHudAlertSink } from '../src/alerts.js'
 import { HudKeepaliveHealthStore } from '../src/keepalive-health.js'
 import type { TelemetryAdvisory } from '../src/types.js'
 
-function snapshot(ratio: number): TelemetrySnapshot {
+function snapshot(ratio: number, accountId = asAccountId('alice')): TelemetrySnapshot {
   return {
+    accountId,
     context: { used: ratio * 100, max: 100, ratio },
     workspace: { name: 'private/workspace' },
     model: { name: 'model', thinkingDepth: 'high' },
@@ -28,6 +29,7 @@ const normal: TelemetryAdvisory = {
 
 function task(input: TaskCreateInput, index: number): Task {
   return {
+    ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
     id: asTaskId(`hud-alert-${String(index)}`),
     title: input.title,
     description: input.description ?? '',
@@ -74,6 +76,20 @@ describe('HUD cross-module health and alerts', (): void => {
     health.record({ sessionId: 'luban-zeta forged', alive: true })
     expect(health.snapshot()).toEqual({ healthy: true, alerts: [] })
     expect(changed).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps Alice/Bob health projections separate and hides legacy alerts', (): void => {
+    const health = new HudKeepaliveHealthStore()
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    health.recordForAccount(alice, { sessionId: 'alice-worker', alive: false })
+    health.recordForAccount(bob, { sessionId: 'bob-worker', alive: false })
+    health.record({ sessionId: 'legacy-worker', alive: false })
+
+    expect(health.snapshot(alice).alerts).toEqual([{ sessionId: 'alice-worker' }])
+    expect(health.snapshot(bob).alerts).toEqual([{ sessionId: 'bob-worker' }])
+    expect(health.snapshot().alerts).toEqual([{ sessionId: 'legacy-worker' }])
+    health.dispose()
   })
 
   it('serializes a critical episode and creates one metadata-only active Taskboard alert', async (): Promise<void> => {
@@ -145,5 +161,43 @@ describe('HUD cross-module health and alerts', (): void => {
     expect(create).not.toHaveBeenCalled()
     await sink.observe(snapshot(0.99), critical)
     expect(query).toHaveBeenCalledOnce()
+  })
+
+  it('deduplicates critical episodes independently for Alice and Bob', async (): Promise<void> => {
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    const tasks: Task[] = []
+    const query = vi.fn((filter: Parameters<TaskStore['query']>[0]): Promise<readonly Task[]> =>
+      Promise.resolve(
+        tasks.filter((candidate): boolean => candidate.accountId === filter.accountId),
+      ),
+    )
+    const create = vi.fn((input: TaskCreateInput): Promise<Task> => {
+      const created = task(input, tasks.length + 1)
+      tasks.push(created)
+      return Promise.resolve(created)
+    })
+    const sink = new TaskboardHudAlertSink({ query, create } as unknown as TaskStore)
+
+    await Promise.all([
+      sink.observe(snapshot(0.96, alice), critical),
+      sink.observe(snapshot(0.97, bob), critical),
+    ])
+    await sink.observe(snapshot(0.99, alice), critical)
+    const ownedSnapshot = snapshot(0.99, alice)
+    const legacySnapshot: TelemetrySnapshot = {
+      context: ownedSnapshot.context,
+      workspace: ownedSnapshot.workspace,
+      model: ownedSnapshot.model,
+      rates: ownedSnapshot.rates,
+      at: ownedSnapshot.at,
+    }
+    await sink.observe(legacySnapshot, critical)
+
+    expect(tasks.map((candidate): unknown => candidate.accountId).sort()).toEqual([alice, bob])
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({ accountId: alice }))
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({ accountId: bob }))
+    await sink.dispose()
   })
 })

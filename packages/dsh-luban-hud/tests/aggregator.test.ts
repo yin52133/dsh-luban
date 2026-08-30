@@ -1,7 +1,7 @@
-import type { TelemetryProvider, TelemetrySnapshot } from 'dsh-luban-core'
-import { asSessionId } from 'dsh-luban-core'
+import type { AccountId, TelemetryProvider, TelemetrySnapshot } from 'dsh-luban-core'
+import { asAccountId, asSessionId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
-import { DefaultTelemetryAggregator } from '../src/aggregator.js'
+import { DefaultTelemetryAggregator, type AccountTelemetryProvider } from '../src/aggregator.js'
 import { parseConfig } from '../src/config.js'
 import type { MonotonicClock } from '../src/rate-window.js'
 
@@ -156,6 +156,62 @@ describe('DefaultTelemetryAggregator', (): void => {
     expect(sessionSample).toHaveBeenCalledExactlyOnceWith('target-session')
     expect(published).toHaveLength(1)
     expect(aggregator.history()).toHaveLength(1)
+  })
+
+  it('partitions account caches/history and ignores providers without an account sampling face', async (): Promise<void> => {
+    const monotonic = new ManualClock()
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    const scoped: AccountTelemetryProvider = {
+      id: 'account-workspace',
+      capabilities: (): readonly ['workspace'] => ['workspace'],
+      sample: (): Promise<Partial<TelemetrySnapshot>> =>
+        Promise.resolve({ workspace: { name: 'legacy-global' } }),
+      sampleForAccount: (accountId: AccountId): Promise<Partial<TelemetrySnapshot>> =>
+        Promise.resolve({ accountId, workspace: { name: `workspace:${String(accountId)}` } }),
+      sampleForOwnedSession: (
+        accountId: AccountId,
+        sessionId: ReturnType<typeof asSessionId>,
+      ): Promise<Partial<TelemetrySnapshot>> =>
+        Promise.resolve({
+          accountId,
+          workspace: { name: `${String(accountId)}:${String(sessionId)}` },
+        }),
+    }
+    const aggregator = new DefaultTelemetryAggregator({
+      monotonicClock: monotonic,
+      refreshMs: 1_000,
+      providerTimeoutMs: 100,
+      accountScoped: true,
+    })
+    aggregator.register(scoped)
+    aggregator.register(
+      provider('legacy-model', ['model'], (): Promise<Partial<TelemetrySnapshot>> =>
+        Promise.resolve({ model: { name: 'bob-secret', thinkingDepth: 'high' } }),
+      ),
+    )
+    const published: string[] = []
+    aggregator.subscribeAccounts((accountId, snapshot): void => {
+      published.push(`${accountId}:${snapshot.workspace.name}`)
+    })
+
+    const aliceEnvelope = await aggregator.envelopeForAccount(alice)
+    const bobEnvelope = await aggregator.envelopeForAccount(bob)
+    expect(aliceEnvelope.snapshot).toMatchObject({
+      accountId: alice,
+      workspace: { name: 'workspace:alice' },
+      model: { name: 'unknown' },
+    })
+    expect(bobEnvelope.snapshot.workspace.name).toBe('workspace:bob')
+    expect(aggregator.historyForAccount(alice)).toHaveLength(1)
+    expect(aggregator.historyForAccount(bob)).toHaveLength(1)
+    expect(aggregator.history()).toEqual([])
+    expect((await aggregator.snapshot()).workspace.name).toBe('unknown')
+    expect(published).toEqual(['alice:workspace:alice', 'bob:workspace:bob'])
+
+    const targeted = await aggregator.snapshotForAccount(alice, asSessionId('alice-session'))
+    expect(targeted.workspace.name).toBe('alice:alice-session')
+    expect(aggregator.historyForAccount(alice)).toHaveLength(1)
   })
 
   it('times out a hung provider without suppressing healthy fields', async (): Promise<void> => {

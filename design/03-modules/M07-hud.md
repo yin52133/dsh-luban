@@ -18,6 +18,7 @@
 | v0.10 | 2026-08-30 | Codex | 接入 provider request-ID adapter，按真实请求身份导出与对账 |
 | v0.11 | 2026-08-30 | Codex | 补齐挂载式双端验收与 provider 流水边界 |
 | v0.12 | 2026-08-30 | Codex | 收口为真实 provider/账单与双平台功能验收 |
+| v0.13 | 2026-08-30 | Codex | HUD 快照、历史、速率、SSE 与告警按登录账号隔离 |
 
 ## 1. 概述与目标
 
@@ -76,6 +77,9 @@ export interface TelemetryAggregator {
   subscribe(listener: (s: TelemetrySnapshot) => void): Unsubscribe;
 }
 
+// HTTP/CLI/SSE 使用 accountId 定向 envelope/history/rate capture；session 定向采样先由
+// M01 accountSessions 解析持久 owner，未绑定的 legacy session 不进入任一账号视图。
+
 export interface TelemetrySnapshot {
   context: { used: number | 'unknown'; max: number | 'unknown'; ratio: number | 'unknown' };
   workspace: { name: string | 'unknown' };
@@ -115,14 +119,17 @@ export interface TelemetrySnapshot {
 - 采样器避免高频计时器泄漏（页面隐藏时暂停 web 端订阅）。
 - `refreshSec` 下限 1 秒；Provider 并发采样有 timeout，历史保留上限 1440 分钟，SSE replay 固定 256 条。
 - Provider 任意异常仅以固定公共文案进入 API，内部日志先脱敏；非法/溢出 token usage 保持 `unknown/partial`，不伪装为 0。
-- REST/SSE 全部经 M01 认证；对外 SSE 只使用已登记的 `luban.telemetry.snapshot` 事件名和共享递增 ID。
+- REST/SSE 全部经 M01 认证并只采用 middleware 返回的 `accountId`，query 不能覆盖；对外 SSE 的
+  live/replay、递增 ID、baseline、缓存和历史均按账号独立。未绑定的 legacy provider/session/event
+  默认不可见，不自动归入当前登录账号。
 - 速率 ledger 为精确 1min/5min 指标保留最近十五分钟、最多 10000 条 assistant 元数据，使五分钟
   窗口结束后仍能读取 provider 流水并完成对账；不记录会话正文或 replay state 原文。启动、保留期/
   容量淘汰或 wall/monotonic 时钟漂移导致覆盖不完整时返回明确错误。
 - M07 live runner 读取仓库外 provider export 的精确窗口，再通过已认证的 loopback HTTP 调用实际挂载的
   `/luban-hud/rate-capture`。认证 Cookie 仅从 `LUBAN_SESSION_COOKIE` 环境变量读取，不写入结果；请求采用
   10 秒 deadline 和 10 MiB 响应上限，并校验响应 schema、coverage 与窗口一致性。
-- M03 健康异常作为 `HudSnapshotResponse.keepalive` 可选扩展字段加入；旧响应/旧客户端仍可工作。
+- M03 健康异常作为 `HudSnapshotResponse.keepalive` 可选扩展字段加入；只投影与当前账号 session owner
+  一致的事件，旧响应/旧客户端仍可工作。
   健康 detail 去控制字符、凭据脱敏、单条限长，异常集合上限 256；卸载后不再接受事件或推送。
 - M02 后置加载时通过可选 Cordis injection 自动接通。critical 告警只含比例元数据，不含 workspace、
   模型或会话内容；同一连续 critical episode 串行查询并复用活跃卡，卸载竞态在 create 前复查。
@@ -154,6 +161,9 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 - fixture 与 simulated runner 只验证采集、窗口和误差算法；M07-F004 的现场验收必须使用真实 provider
   adapter、provider 账单流水以及 Windows/Ubuntu 上实际挂载的 HUD。
 - `DefaultTelemetryAggregator` 并发采样、按 Provider 注册顺序做字段级 first-wins 合并；generation 防止注册/卸载竞态提交陈旧结果。
+- account envelope、history、SSE、速率窗口/ledger、M03 健康告警和 M02 critical episode 都按
+  `accountId` 分区；DSH session 数据先经 `accountSessions.ownerOf()` 解析，Alice/Bob 的 snapshot、
+  replay、rate capture 与异常状态回归证明互不串线。
 - `snapshotFor(sessionId)` 对指定 live agent 重新采样，不读取或替换全局 HUD 缓存，也不向订阅者发布；
   M08 因而不会把 initiator/running/newest 的全局选择结果误用于另一个刚进入 idle 的会话。
 - Web 使用官方 `shell.overlay` slot，并在页面隐藏时关闭 SSE；CLI 从环境读取 Cookie，输出单行去控制字符，HTTP 10 秒超时。

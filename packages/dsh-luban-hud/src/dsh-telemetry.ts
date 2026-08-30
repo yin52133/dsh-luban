@@ -6,10 +6,16 @@ import {
   type Session,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
-import type { Clock, SessionId, TelemetryProvider, TelemetrySnapshot } from 'dsh-luban-core'
-import { systemClock } from 'dsh-luban-core'
-import type { MonotonicClock, SlidingRateWindow } from './rate-window.js'
-import { systemMonotonicClock } from './rate-window.js'
+import type {
+  AccountId,
+  AccountSessionRegistry,
+  Clock,
+  SessionId,
+  TelemetryProvider,
+  TelemetrySnapshot,
+} from 'dsh-luban-core'
+import { asSessionId, systemClock } from 'dsh-luban-core'
+import { SlidingRateWindow, systemMonotonicClock, type MonotonicClock } from './rate-window.js'
 
 const FIVE_MINUTES_MS = 300_000
 const CHARS_PER_TOKEN = 4
@@ -57,6 +63,59 @@ function telemetryAgentById(agents: AgentLookup, sessionId: SessionId): Agent | 
   } catch {
     return undefined
   }
+}
+
+async function accountOwner(
+  accounts: AccountSessionRegistry,
+  agent: Agent,
+): Promise<AccountId | null> {
+  try {
+    return await accounts.ownerOf(asSessionId(String(agent.session.id)))
+  } catch {
+    return null
+  }
+}
+
+/** Apply the normal HUD preference order only after excluding foreign and legacy sessions. */
+async function telemetryAgentForAccount(
+  agents: AgentLookup,
+  accounts: AccountSessionRegistry,
+  accountId: AccountId,
+): Promise<Agent | undefined> {
+  const candidates: Agent[] = []
+  try {
+    const initiating = agents.currentInitiator()
+    if (initiating !== undefined && agents.get(initiating.id) === initiating) {
+      candidates.push(initiating)
+    }
+  } catch {
+    // Teardown can invalidate the optional initiator; the registered list remains usable.
+  }
+  const registered = agents.list()
+  candidates.push(
+    ...registered.filter((agent): boolean => agent.status === 'running').reverse(),
+    ...registered.toReversed(),
+  )
+  const seen = new Set<string>()
+  for (const agent of candidates) {
+    if (seen.has(String(agent.id))) continue
+    seen.add(String(agent.id))
+    if ((await accountOwner(accounts, agent)) === accountId) return agent
+  }
+  return undefined
+}
+
+async function ownedTelemetryAgent(
+  agents: AgentLookup,
+  accounts: AccountSessionRegistry | undefined,
+  accountId: AccountId,
+  sessionId?: SessionId,
+): Promise<Agent | undefined> {
+  if (accounts === undefined) return undefined
+  if (sessionId === undefined) return telemetryAgentForAccount(agents, accounts, accountId)
+  const agent = telemetryAgentById(agents, sessionId)
+  if (agent === undefined) return undefined
+  return (await accountOwner(accounts, agent)) === accountId ? agent : undefined
 }
 
 function tokenCountTotal(values: readonly unknown[]): number | 'unknown' {
@@ -209,15 +268,18 @@ export class DshSessionTelemetryProvider implements TelemetryProvider {
   readonly #agents: AgentLookup
   readonly #workspaceRoot: string
   readonly #resolveProjections: SessionProjectionResolver | undefined
+  readonly #accounts: AccountSessionRegistry | undefined
 
   public constructor(
     agents: AgentLookup,
     workspaceRoot = process.cwd(),
     resolveProjections?: SessionProjectionResolver,
+    accounts?: AccountSessionRegistry,
   ) {
     this.#agents = agents
     this.#workspaceRoot = workspaceRoot
     this.#resolveProjections = resolveProjections
+    this.#accounts = accounts
   }
 
   public capabilities(): readonly ['context', 'workspace', 'model'] {
@@ -232,7 +294,27 @@ export class DshSessionTelemetryProvider implements TelemetryProvider {
     return this.#sampleAgent(telemetryAgentById(this.#agents, sessionId))
   }
 
-  #sampleAgent(agent: Agent | undefined): Promise<Partial<TelemetrySnapshot>> {
+  public async sampleForAccount(accountId: AccountId): Promise<Partial<TelemetrySnapshot>> {
+    return this.#sampleAgent(
+      await ownedTelemetryAgent(this.#agents, this.#accounts, accountId),
+      accountId,
+    )
+  }
+
+  public async sampleForOwnedSession(
+    accountId: AccountId,
+    sessionId: SessionId,
+  ): Promise<Partial<TelemetrySnapshot>> {
+    return this.#sampleAgent(
+      await ownedTelemetryAgent(this.#agents, this.#accounts, accountId, sessionId),
+      accountId,
+    )
+  }
+
+  #sampleAgent(
+    agent: Agent | undefined,
+    accountId?: AccountId,
+  ): Promise<Partial<TelemetrySnapshot>> {
     if (agent === undefined) return Promise.resolve({})
     const requestContext = agent.session.requestContext()
     const requestHeader = agent.session.requestHeader()
@@ -252,6 +334,7 @@ export class DshSessionTelemetryProvider implements TelemetryProvider {
     const model = requestHeader?.config.model ?? requestContext?.model ?? agent.options.model
     const reasoning = requestHeader?.config.reasoningEffort
     return Promise.resolve({
+      ...(accountId === undefined ? {} : { accountId }),
       context: { used, max, ratio },
       workspace: { name: displayWorkspace(agent.session.header.cwd, this.#workspaceRoot) },
       model: {
@@ -267,10 +350,16 @@ export class DshContextEstimatorProvider implements TelemetryProvider {
   public readonly id = 'dsh-token-estimator'
   readonly #agents: AgentLookup
   readonly #resolveProjections: SessionProjectionResolver | undefined
+  readonly #accounts: AccountSessionRegistry | undefined
 
-  public constructor(agents: AgentLookup, resolveProjections?: SessionProjectionResolver) {
+  public constructor(
+    agents: AgentLookup,
+    resolveProjections?: SessionProjectionResolver,
+    accounts?: AccountSessionRegistry,
+  ) {
     this.#agents = agents
     this.#resolveProjections = resolveProjections
+    this.#accounts = accounts
   }
 
   public capabilities(): readonly ['context'] {
@@ -285,13 +374,34 @@ export class DshContextEstimatorProvider implements TelemetryProvider {
     return this.#sampleAgent(telemetryAgentById(this.#agents, sessionId))
   }
 
-  #sampleAgent(agent: Agent | undefined): Promise<Partial<TelemetrySnapshot>> {
+  public async sampleForAccount(accountId: AccountId): Promise<Partial<TelemetrySnapshot>> {
+    return this.#sampleAgent(
+      await ownedTelemetryAgent(this.#agents, this.#accounts, accountId),
+      accountId,
+    )
+  }
+
+  public async sampleForOwnedSession(
+    accountId: AccountId,
+    sessionId: SessionId,
+  ): Promise<Partial<TelemetrySnapshot>> {
+    return this.#sampleAgent(
+      await ownedTelemetryAgent(this.#agents, this.#accounts, accountId, sessionId),
+      accountId,
+    )
+  }
+
+  #sampleAgent(
+    agent: Agent | undefined,
+    accountId?: AccountId,
+  ): Promise<Partial<TelemetrySnapshot>> {
     const hasOfficialProjection =
       agent !== undefined && projectedContext(agent.session, this.#resolveProjections) !== undefined
     return Promise.resolve(
       agent === undefined || hasOfficialProjection
         ? {}
         : {
+            ...(accountId === undefined ? {} : { accountId }),
             context: {
               used: estimateSessionTokens(agent.session),
               max: 'unknown',
@@ -304,11 +414,13 @@ export class DshContextEstimatorProvider implements TelemetryProvider {
 
 export interface HudRateEventSink {
   observe(session: Session, event: SessionEvent): void
+  observeForAccount?(accountId: AccountId, session: Session, event: SessionEvent): void
 }
 
 /** Replays recent rc2 assistant usage once, then ingests the live session/event feed by sequence. */
 export class DshRateCollector {
   readonly #window: SlidingRateWindow
+  readonly #accountWindows = new Map<AccountId, SlidingRateWindow>()
   readonly #clock: Clock
   readonly #monotonicClock: MonotonicClock
   readonly #rateLedger: HudRateEventSink | undefined
@@ -334,48 +446,76 @@ export class DshRateCollector {
     for (const event of session.events) this.#observe(session, event, false)
   }
 
+  public adoptForAccount(accountId: AccountId, session: Session): void {
+    for (const event of session.events) this.#observe(session, event, false, accountId)
+  }
+
   public observe(session: Session, event: SessionEvent): void {
     this.#observe(session, event, true)
   }
 
+  public observeForAccount(accountId: AccountId, session: Session, event: SessionEvent): void {
+    this.#observe(session, event, true, accountId)
+  }
+
   public dispose(session: Session): void {
-    const previous = this.#lastSequence.get(session.id)
+    this.#disposeSession(session)
+  }
+
+  public disposeForAccount(accountId: AccountId, session: Session): void {
+    this.#disposeSession(session, accountId)
+  }
+
+  public windowForAccount(accountId: AccountId): SlidingRateWindow {
+    const existing = this.#accountWindows.get(accountId)
+    if (existing !== undefined) return existing
+    const created = new SlidingRateWindow(this.#monotonicClock)
+    this.#accountWindows.set(accountId, created)
+    return created
+  }
+
+  #disposeSession(session: Session, accountId?: AccountId): void {
+    const key = this.#sessionKey(session.id, accountId)
+    const previous = this.#lastSequence.get(key)
     if (previous === undefined) return
-    this.#lastSequence.set(session.id, {
+    this.#lastSequence.set(key, {
       sequence: previous.sequence,
       touchedAt: this.#monotonicClock.now(),
     })
   }
 
-  #observe(session: Session, event: SessionEvent, live: boolean): void {
+  #observe(session: Session, event: SessionEvent, live: boolean, accountId?: AccountId): void {
     const now = this.#monotonicClock.now()
-    this.#pruneSessions(now, session.id)
-    const previous = this.#lastSequence.get(session.id)?.sequence ?? -1
+    const sessionKey = this.#sessionKey(session.id, accountId)
+    this.#pruneSessions(now, sessionKey)
+    const previous = this.#lastSequence.get(sessionKey)?.sequence ?? -1
     if (event.seq <= previous) return
-    this.#lastSequence.set(session.id, { sequence: event.seq, touchedAt: now })
+    this.#lastSequence.set(sessionKey, { sequence: event.seq, touchedAt: now })
     if (event.type !== 'assistant/message') return
-    this.#rateLedger?.observe(session, event)
+    if (accountId === undefined) this.#rateLedger?.observe(session, event)
+    else this.#rateLedger?.observeForAccount?.(accountId, session, event)
     const wallNow = this.#clock.now()
     this.#pruneMessages(wallNow)
-    const messageId = String(event.data.message.id)
+    const messageId = this.#messageKey(String(event.data.message.id), accountId)
     if (this.#seenMessages.has(messageId)) return
     this.#seenMessages.set(messageId, event.time)
     const tokens =
       event.data.usage === undefined ? ('unknown' as const) : tokenUsageTotal(event.data.usage)
+    const window = accountId === undefined ? this.#window : this.windowForAccount(accountId)
     if (live) {
-      this.#window.record(tokens, 1)
+      window.record(tokens, 1)
       return
     }
     const age = Math.max(0, wallNow - event.time)
     if (age > FIVE_MINUTES_MS) return
     const mapped = now - age
-    this.#window.record(tokens, 1, mapped)
+    window.record(tokens, 1, mapped)
   }
 
-  #pruneSessions(now: number, activeSessionId: string): void {
-    for (const [sessionId, state] of this.#lastSequence) {
-      if (sessionId !== activeSessionId && now - state.touchedAt > FIVE_MINUTES_MS) {
-        this.#lastSequence.delete(sessionId)
+  #pruneSessions(now: number, activeSessionKey: string): void {
+    for (const [sessionKey, state] of this.#lastSequence) {
+      if (sessionKey !== activeSessionKey && now - state.touchedAt > FIVE_MINUTES_MS) {
+        this.#lastSequence.delete(sessionKey)
       }
     }
   }
@@ -385,5 +525,13 @@ export class DshRateCollector {
     for (const [messageId, occurredAt] of this.#seenMessages) {
       if (occurredAt < cutoff) this.#seenMessages.delete(messageId)
     }
+  }
+
+  #sessionKey(sessionId: string, accountId?: AccountId): string {
+    return `${accountId === undefined ? 'legacy' : String(accountId)}\u0000${sessionId}`
+  }
+
+  #messageKey(messageId: string, accountId?: AccountId): string {
+    return `${accountId === undefined ? 'legacy' : String(accountId)}\u0000${messageId}`
   }
 }
