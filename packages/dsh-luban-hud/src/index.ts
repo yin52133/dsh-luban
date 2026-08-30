@@ -10,7 +10,7 @@ import type {
   TelemetryAggregator,
   TelemetrySnapshot,
 } from 'dsh-luban-core'
-import { asSessionId, LubanError, modulePrefix, redactSecrets, systemClock } from 'dsh-luban-core'
+import { asSessionId, LubanError, modulePrefix, systemClock } from 'dsh-luban-core'
 import { DefaultTelemetryAggregator } from './aggregator.js'
 import { TaskboardHudAlertSink } from './alerts.js'
 import {
@@ -128,9 +128,17 @@ export type {
   KeepaliveHealthPayload,
 } from './types.js'
 
+const DIAGNOSTIC_CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu
+
 function diagnostic(error: unknown): string {
   try {
-    return redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 512)
+    const value = error instanceof Error ? error.message : String(error)
+    const message = value
+      .replace(DIAGNOSTIC_CONTROL_CHARACTERS, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .slice(0, 512)
+    return message === '' ? 'unknown error' : message
   } catch {
     return 'unknown error'
   }
@@ -220,11 +228,7 @@ export function apply(
     accountScoped: true,
     resolveSessionAccount,
     onError: (error: unknown): void => {
-      const message = redactSecrets(error instanceof Error ? error.message : String(error)).slice(
-        0,
-        512,
-      )
-      ctx.logger.warn(`luban-hud: telemetry sampling failed: ${message}`)
+      ctx.logger.warn(`luban-hud: telemetry sampling failed: ${diagnostic(error)}`)
     },
   })
   const resolveProjections = (): SessionProjectionReader | undefined => {

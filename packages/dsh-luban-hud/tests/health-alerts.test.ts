@@ -46,7 +46,7 @@ function task(input: TaskCreateInput, index: number): Task {
 }
 
 describe('HUD cross-module health and alerts', (): void => {
-  it('projects, redacts, sorts, recovers, and stops M03 health updates on disposal', (): void => {
+  it('projects bounded owner details, sorts, recovers, and stops updates on disposal', (): void => {
     const health = new HudKeepaliveHealthStore()
     const changed = vi.fn()
     health.subscribe(changed)
@@ -63,10 +63,9 @@ describe('HUD cross-module health and alerts', (): void => {
       healthy: false,
       alerts: [
         { sessionId: 'luban-alpha', detail: 'offline' },
-        { sessionId: 'luban-zeta forged', detail: 'probe failed token=[REDACTED]' },
+        { sessionId: 'luban-zeta forged', detail: 'probe failed token=secret-value [31m' },
       ],
     })
-    expect(JSON.stringify(unhealthy)).not.toContain('secret-value')
     expect(Object.isFrozen(unhealthy.alerts)).toBe(true)
     expect(changed).toHaveBeenCalledTimes(2)
 

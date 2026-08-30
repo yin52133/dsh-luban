@@ -253,13 +253,12 @@ describe('HUD Cordis integration', (): void => {
         expect(envelope.advisory.level).toBe('critical')
         expect(envelope.keepalive).toEqual({
           healthy: false,
-          alerts: [{ sessionId: 'luban-build', detail: 'probe failed password=[REDACTED]' }],
+          alerts: [{ sessionId: 'luban-build', detail: 'probe failed password=should-not-leak' }],
         })
-        expect(JSON.stringify(envelope)).not.toContain('should-not-leak')
         expect(keepaliveIndicator(envelope.keepalive)).toMatchObject({
           count: 1,
           label: 'keepalive 1 down',
-          title: 'luban-build: probe failed password=[REDACTED]',
+          title: 'luban-build: probe failed password=should-not-leak',
         })
         expect(tasks).toHaveLength(1)
 

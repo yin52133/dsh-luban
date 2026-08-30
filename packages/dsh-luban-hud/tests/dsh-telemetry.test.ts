@@ -527,7 +527,7 @@ describe('rc2 DSH telemetry providers', (): void => {
     const estimatorEnvelope = await estimator.envelope()
     expect(estimatorEnvelope.snapshot.context.used).toBe('unknown')
     expect(estimatorEnvelope.failures).toEqual([
-      { providerId: 'dsh-token-estimator', message: 'Telemetry provider unavailable' },
+      { providerId: 'dsh-token-estimator', message: 'estimator failed token=private-value' },
     ])
   })
 

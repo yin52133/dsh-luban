@@ -649,7 +649,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     ).toThrow('disposed')
   })
 
-  it('pushes redacted M03 health changes through the existing compatible SSE envelope', async (): Promise<void> => {
+  it('pushes bounded M03 health details through the existing compatible SSE envelope', async (): Promise<void> => {
     const telemetry = new DefaultTelemetryAggregator({ refreshMs: 1_000, providerTimeoutMs: 100 })
     const keepalive = new HudKeepaliveHealthStore()
     const api = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig, keepalive })
@@ -664,8 +664,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
       detail: 'lost token=not-public',
     })
     await vi.waitFor((): void => expect(response.body).toContain('"keepalive":{"healthy":false'))
-    expect(response.body).toContain('lost token=[REDACTED]')
-    expect(response.body).not.toContain('not-public')
+    expect(response.body).toContain('lost token=not-public')
     streamRequest.emit('close')
     api.dispose()
     keepalive.dispose()

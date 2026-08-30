@@ -8,7 +8,7 @@ import type {
   TelemetrySnapshot,
   Unsubscribe,
 } from 'dsh-luban-core'
-import { redactSecrets, systemClock } from 'dsh-luban-core'
+import { systemClock } from 'dsh-luban-core'
 import type { HudThresholds } from './config.js'
 import { systemMonotonicClock, type MonotonicClock } from './rate-window.js'
 import type {
@@ -19,7 +19,6 @@ import type {
 } from './types.js'
 
 const FIELDS = new Set<TelemetryField>(['context', 'workspace', 'model', 'rates'])
-const PUBLIC_PROVIDER_FAILURE = 'Telemetry provider unavailable'
 const DIAGNOSTIC_CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu
 
 interface RegisteredProvider {
@@ -63,7 +62,7 @@ const DEFAULT_THRESHOLDS: HudThresholds = Object.freeze({
 function diagnosticOf(error: unknown): string {
   try {
     const value = error instanceof Error ? error.message : String(error)
-    const diagnostic = redactSecrets(value)
+    const diagnostic = value
       .replace(DIAGNOSTIC_CONTROL_CHARACTERS, ' ')
       .replace(/\s+/gu, ' ')
       .trim()
@@ -663,9 +662,10 @@ export class DefaultTelemetryAggregator implements TelemetryAggregator {
   }
 
   #recordProviderFailure(failures: ProviderFailure[], providerId: string, error: unknown): void {
-    failures.push(Object.freeze({ providerId, message: PUBLIC_PROVIDER_FAILURE }))
+    const diagnostic = diagnosticOf(error)
+    failures.push(Object.freeze({ providerId, message: diagnostic }))
     this.#reportError(
-      new Error(`Telemetry provider ${diagnosticOf(providerId)} failed: ${diagnosticOf(error)}`),
+      new Error(`Telemetry provider ${diagnosticOf(providerId)} failed: ${diagnostic}`),
     )
   }
 

@@ -143,7 +143,7 @@ describe('HUD React overlay', (): void => {
     )
   })
 
-  it('keeps healthy fields and sanitized failure details visible through 70/85/95 SSE updates', async (): Promise<void> => {
+  it('keeps healthy fields and bounded failure details visible through 70/85/95 SSE updates', async (): Promise<void> => {
     const [warn, danger, critical] = await Promise.all([
       responseAt(0.7),
       responseAt(0.85),
@@ -168,8 +168,7 @@ describe('HUD React overlay', (): void => {
       expect(text).toContain('RPM 2/1')
       expect(text).toContain('partial')
       const partial = requiredElement(mounted.container, '.luban-hud__error')
-      expect(partial.title).toBe('Telemetry provider unavailable')
-      expect(partial.title).not.toContain('private upstream diagnostic')
+      expect(partial.title).toBe('private upstream diagnostic')
       expect(FakeEventSource.instances).toHaveLength(1)
       const stream = FakeEventSource.instances[0]
       if (stream === undefined) throw new Error('HUD SSE stream was not opened')

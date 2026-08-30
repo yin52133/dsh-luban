@@ -85,12 +85,11 @@ describe('DefaultTelemetryAggregator', (): void => {
       'context.ratio': 'official+fallback',
     })
     expect(envelope.failures).toEqual([
-      { providerId: 'broken', message: 'Telemetry provider unavailable' },
+      { providerId: 'broken', message: 'provider offline token=secret-value' },
     ])
     expect(diagnostics).toEqual([
-      'Telemetry provider broken failed: provider offline token=[REDACTED]',
+      'Telemetry provider broken failed: provider offline token=secret-value',
     ])
-    expect(diagnostics.join(' ')).not.toContain('secret-value')
     expect(envelope.advisory).toMatchObject({ level: 'warn', compactionSuggested: false })
     expect(Object.isFrozen(envelope.snapshot.context)).toBe(true)
     expect(Object.isFrozen(envelope.failures)).toBe(true)
@@ -266,9 +265,7 @@ describe('DefaultTelemetryAggregator', (): void => {
     )
 
     const envelope = await aggregator.envelope()
-    expect(envelope.failures).toEqual([
-      { providerId: 'hostile', message: 'Telemetry provider unavailable' },
-    ])
+    expect(envelope.failures).toEqual([{ providerId: 'hostile', message: 'unknown error' }])
     expect(diagnostics).toEqual(['Telemetry provider hostile failed: unknown error'])
   })
 

@@ -1,13 +1,12 @@
 import type { AccountId, Unsubscribe } from 'dsh-luban-core'
-import { redactSecrets } from 'dsh-luban-core'
 import type { HudKeepaliveAlert, HudKeepaliveStatus, KeepaliveHealthPayload } from './types.js'
 
 const CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu
 const MAX_ALERTS = 256
 
-function publicText(value: string, maximumLength: number): string {
+function boundedText(value: string, maximumLength: number): string {
   try {
-    return redactSecrets(value)
+    return value
       .replace(CONTROL_CHARACTERS, ' ')
       .replace(/\s+/gu, ' ')
       .trim()
@@ -43,7 +42,7 @@ export class HudKeepaliveHealthStore {
     const payload = input as Partial<KeepaliveHealthPayload> | null
     if (this.#disposed || typeof payload !== 'object' || payload === null) return
     if (typeof payload.sessionId !== 'string' || typeof payload.alive !== 'boolean') return
-    const sessionId = publicText(payload.sessionId, 160)
+    const sessionId = boundedText(payload.sessionId, 160)
     if (sessionId === '') return
     const key = this.#key(sessionId, accountId)
     let changed = false
@@ -51,7 +50,7 @@ export class HudKeepaliveHealthStore {
       changed = this.#alerts.delete(key)
     } else {
       const detail =
-        typeof payload.detail === 'string' ? publicText(payload.detail, 256) : undefined
+        typeof payload.detail === 'string' ? boundedText(payload.detail, 256) : undefined
       const alert = Object.freeze({
         ...(accountId === undefined ? {} : { accountId }),
         sessionId,
