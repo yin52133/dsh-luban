@@ -11,6 +11,7 @@
 | v0.3 | 2026-08-30 | Codex | 接通异常健康事件到 M07 HUD 的脱敏实时投影 |
 | v0.4 | 2026-08-30 | Codex | 增加可恢复里程碑执行器与跳过已完成步骤验证 |
 | v0.5 | 2026-08-30 | Codex | 补齐卸载排空与 Windows 原生只读探针验证 |
+| v0.6 | 2026-08-30 | Codex | 固化 systemd 精确哨兵强制恢复语义并补 Cordis 生命周期验证 |
 
 ## 1. 概述与目标
 
@@ -100,6 +101,11 @@ runCheckpointedTask({
         alertToTaskboard: true    # 健康异常写入 M02 事件流
 ```
 
+`bootRestore` 是 profile 的普通配置。M09 生成的 Ubuntu systemd unit 可注入精确哨兵
+`LUBAN_BOOT_RESTORE=1`：即使 profile 配置为 `bootRestore: false`，也会强制执行启动恢复。
+只有字符串 `1` 具有该覆盖语义；`true`、`yes`、`01`、带空白的 `1` 等值均不生效。
+原配置为 `true` 时不会被其他环境值关闭。
+
 ## 7. 依赖与边界
 
 - 下层：HAL（tmux 命令行、Windows `schtasks`/服务控制、进程探针）；协作：M02（健康事件、断点来源任务）、M07（消费健康事件并展示）、M09（systemd 单元由其启动器注册）。
@@ -141,6 +147,8 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   排空在途巡检与告警 sink，返回后不再写入 TaskStore 或发布健康事件。
 - 真实 Cordis mount 测试覆盖 HUD 先加载、异常/恢复事件、认证 REST 投影、客户端提示与卸载；
   detail 中的凭据型文本不会进入响应。
+- 真实 Cordis 生命周期测试以 `bootRestore: false` 挂载插件，证明精确环境值
+  `LUBAN_BOOT_RESTORE=1` 仍会调用一次 `restore()`；其他类 truthy 文本不会取得强制恢复语义。
 - 本机 `schtasks.exe` 只读列表探针已通过且未创建计划任务；命令构造和写操作继续由 fake runner
-  隔离验证。本地 Prettier、ESLint、严格类型检查、构建、24 项测试、发布元数据与 npm pack
+  隔离验证。本地 Prettier、ESLint、严格类型检查、构建、27 项测试、发布元数据与 npm pack
   白名单审计通过；真实 tmux、注销与重启恢复仍需目标主机验收。

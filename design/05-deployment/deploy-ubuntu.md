@@ -7,6 +7,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：systemd 常驻、tmux 保活、网页访问链路 |
 | v0.2 | 2026-08-30 | Codex | 增加 M11 browser-use 的 uv 隔离环境要求 |
 | v0.3 | 2026-08-30 | Codex | 落地默认预览且拒绝覆盖的 ubuntu-server 生成脚本 |
+| v0.4 | 2026-08-30 | Codex | 修正 systemd 启动命令并明确强制恢复哨兵语义 |
 
 ## 1. 目标形态
 
@@ -14,7 +15,7 @@
 
 ```mermaid
 flowchart LR
-    U["systemd --user: dsh-luban.service<br/>+ loginctl enable-linger"] --> D["dsh web profile<br/>（ubuntu-server）"]
+    U["systemd --user: dsh-luban.service<br/>+ loginctl enable-linger"] --> D["dsh --profile ubuntu-server --no-open"]
     D --> C["dsh-luban M01-M08, M09, M11"]
     D --> T["tmux: luban-* 任务会话"]
     B["浏览器（同一局域网）"] -->|"账号密码（M01）"| D
@@ -34,18 +35,26 @@ flowchart LR
 ```ini
 # ~/.config/systemd/user/dsh-luban.service（设计样例）
 [Unit]
-Description=dsh-luban workbench (dsh web profile)
+Description=dsh-luban workbench (ubuntu-server profile)
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env dsh web --profile ubuntu-server
+ExecStart="/usr/bin/env" "dsh" "--profile" "ubuntu-server" "--no-open"
+Environment=LUBAN_BOOT_RESTORE=1
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=default.target
 ```
+
+`LUBAN_BOOT_RESTORE=1` 是部署层强制恢复哨兵：即使 profile 中配置
+`bootRestore: false`，M03 仍会在该 systemd 启动路径执行恢复。只有精确字符串 `1`
+生效，其他类 truthy 文本不取得覆盖语义。
 
 6. **linger**：`sudo loginctl enable-linger <user>`——不登录桌面也让 user 级服务开机自启（R02 关键）。
 7. **认证初始化**：首启引导建管理员；`config.port` 自定义（默认 42600）。

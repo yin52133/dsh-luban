@@ -40,6 +40,12 @@ Python environment is created by this package.
         alertToTaskboard: true
 ```
 
+`bootRestore` is the ordinary profile setting. The Ubuntu systemd launcher can force recovery by
+setting the exact `LUBAN_BOOT_RESTORE=1` sentinel, even when `bootRestore` is `false`. Only the
+literal string `1` enables that deployment override; values such as `true`, `yes`, `01`, or a
+space-padded `1` do not. A configured `bootRestore: true` remains enabled regardless of the
+environment value.
+
 `auto` selects tmux on Linux and Scheduled Tasks on Windows. Session ids are constrained to the
 shared `luban-*` namespace. All host commands run without a command shell, with deadlines and
 cancellation. tmux's required `shell-command` value is generated using strict POSIX quoting.
@@ -73,8 +79,8 @@ await ctx.lubanKeepalive.saveCheckpoint(session.id, {
 })
 ```
 
-On the next DSH boot the plugin recreates a missing ledger-owned session and emits a `restored`
-event with that checkpoint.
+When boot recovery is enabled by config or the exact systemd sentinel, the plugin recreates a
+missing ledger-owned session and emits a `restored` event with that checkpoint.
 
 For an in-process long-task executor, use `runCheckpointedTask()`. It validates that a restored
 checkpoint still belongs to the exact task and ordered step plan, resumes at `currentStep`, and

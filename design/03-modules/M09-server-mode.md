@@ -13,6 +13,7 @@ Ubuntu 编译服务器的 dsh 常驻与操作模式：systemd 托管启动、编
 | v0.5 | 2026-08-30 | Codex | 增加 workspace/collect/artifact junction 身份门禁 |
 | v0.6 | 2026-08-30 | Codex | 收口队列 drain、告警与启停并发生命周期 |
 | v0.7 | 2026-08-30 | Codex | 记录全工作区门禁通过与真实 Ubuntu 工具链阻塞边界 |
+| v0.8 | 2026-08-30 | Codex | 修正 systemd 启动参数并固化 M03 强制恢复哨兵 |
 
 ## 1. 概述与目标
 
@@ -25,7 +26,7 @@ Ubuntu 编译服务器的 dsh 常驻与操作模式：systemd 托管启动、编
 
 | 编号 | 功能 | 优先级 | 里程碑 | 验收口径 |
 | --- | --- | --- | --- | --- |
-| M09-F001 | systemd 启动器：安装/卸载 `dsh-luban.service`（user 级 unit），拉起 dsh web/headless profile + M03 保活，开机自启 | P0 | MS1 | `systemctl --user status dsh-luban` 正常；重启后自恢复 |
+| M09-F001 | systemd 启动器：安装/卸载 `dsh-luban.service`（user 级 unit），执行 `dsh --profile ubuntu-server --no-open` 并通过 M03 恢复，开机自启 | P0 | MS1 | `systemctl --user status dsh-luban` 正常；重启后自恢复 |
 | M09-F002 | 服务器命令集：构建队列（排队/并发上限）、常用编译命令模板、错误日志摘录进会话 | P3 | MS4 | 队列任务串行/受限并发，失败日志可一键入会话 |
 | M09-F003 | 资源看护：磁盘水位、负载、单构建超时；超限动作（暂停队列/告警到看板） | P3 | MS4 | 磁盘超阈值时队列暂停并告警 |
 | M09-F004 | 构建产物管理：产物目录规范、保留策略、经认证的下载链接 | P3 | MS4 | 产物可从网页下载且需登录 |
@@ -34,7 +35,7 @@ Ubuntu 编译服务器的 dsh 常驻与操作模式：systemd 托管启动、编
 
 ```mermaid
 flowchart TD
-    A["systemd --user 启动 dsh-luban.service"] --> B["拉起 dsh（web profile）+ M03 保活引导"]
+    A["systemd --user 启动 dsh-luban.service"] --> B["dsh --profile ubuntu-server --no-open<br/>LUBAN_BOOT_RESTORE=1 强制 M03 恢复"]
     B --> C["M01 认证就绪：LAN 浏览器可登录"]
     C --> D{"构建请求到达（CLI/看板/会话）"}
     D --> E["入队（并发上限 N=1 默认）"]
@@ -75,6 +76,10 @@ export interface ServerModeService {
         artifacts: { dir: "~/builds", retainRuns: 10 }
 ```
 
+生成的 user unit 以独立参数执行 `dsh --profile ubuntu-server --no-open`，并设置精确哨兵
+`LUBAN_BOOT_RESTORE=1`。该哨兵即使在 profile 中配置 `bootRestore: false` 也会强制 M03
+执行恢复；只有字符串 `1` 生效。
+
 ## 7. 依赖与边界
 
 - 下层：M03（构建跑在托管会话里）、M01（产物下载经认证）、HAL（linux 进程/systemctl/磁盘探测）。
@@ -83,7 +88,8 @@ export interface ServerModeService {
 
 ## 8. 非功能与安全
 
-- unit 使用 user 级（`systemctl --user`）+ `loginctl enable-linger`，避免 root；文档写明 linger 的意义。
+- unit 使用 user 级（`systemctl --user`）+ `loginctl enable-linger`，避免 root；启动参数以 argv
+  形式固定，并以精确 `LUBAN_BOOT_RESTORE=1` 哨兵触发 M03 开机恢复。
 - 构建命令模板禁止内嵌凭据（P6.1）；产物下载链接带认证与过期。
 
 ## 9. checklist 映射
@@ -97,8 +103,9 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
 
 ## 11. 实现与验证记录
 
-- `UserSystemdInstaller` 原子生成加固的 user unit，使用参数数组执行 `loginctl` 与
-  `systemctl --user`；安装需显式调用，非 Linux 平台不注册服务或路由。
+- `UserSystemdInstaller` 原子生成加固的 user unit，其 `ExecStart` 精确执行
+  `dsh --profile ubuntu-server --no-open` 并注入 `LUBAN_BOOT_RESTORE=1`；安装流程使用参数数组
+  执行 `loginctl` 与 `systemctl --user`，需显式调用，非 Linux 平台不注册服务或路由。
 - 原子 build ledger 与 FIFO queue 实现并发上限、重启恢复和稳定状态迁移；构建参数只能进入
   argv/cwd/collect，workspace 与产物源受根目录约束，Node 不启用 shell。
 - M03 托管的独立 worker 以私有 spec/result 文件交接，执行超时、日志尾部和文件数有界；超时或

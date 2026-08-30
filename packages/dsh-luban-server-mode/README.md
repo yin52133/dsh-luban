@@ -15,12 +15,14 @@ time-bounded, cancellable, and never run through a shell.
 The unit runs:
 
 ```text
-/usr/bin/env dsh web --profile ubuntu-server
+ExecStart="/usr/bin/env" "dsh" "--profile" "ubuntu-server" "--no-open"
 ```
 
-It sets `LUBAN_BOOT_RESTORE=1`, allowing M03 to reconstruct ledger-owned tmux work. User linger
-keeps the user service manager running before an interactive login; `loginctl enable-linger`
-must be authorized by local policy. The package intentionally avoids root services.
+It sets the exact `LUBAN_BOOT_RESTORE=1` sentinel, forcing M03 to reconstruct ledger-owned tmux
+work even when the profile config sets `bootRestore: false`. Only the literal string `1` activates
+this deployment override; other truthy-looking environment values do not. User linger keeps the
+user service manager running before an interactive login; `loginctl enable-linger` must be
+authorized by local policy. The package intentionally avoids root services.
 
 On Windows and macOS the plugin logs that it is disabled and registers no service or routes.
 

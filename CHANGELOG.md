@@ -8,6 +8,10 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 ### Changed
 
 - Standardized the canonical authentication entry at `/luban-auth/login`.
+- Corrected the Ubuntu user systemd launcher to run
+  `dsh --profile ubuntu-server --no-open` and made the exact
+  `LUBAN_BOOT_RESTORE=1` sentinel force M03 recovery even when profile config
+  disables boot restore.
 - Made night-task capacity reservation and terminal scheduler accounting a
   single crash-safe ledger transaction across concurrent schedulers and days.
 - Aligned HUD context usage with the DSH rc2 session projection and retained a
