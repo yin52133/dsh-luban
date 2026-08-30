@@ -1,5 +1,6 @@
 import type {
   AccountId,
+  AccountSessionRegistry,
   CleanupReport,
   ImageIngestService,
   IngestedImage,
@@ -21,6 +22,7 @@ import type {
 
 export interface FileImageIngestServiceOptions {
   readonly repository: AttachmentRepository
+  readonly accountSessions: AccountSessionRegistry
   readonly clipboard: ClipboardAdapter
   readonly injector: SessionImageInjector
   readonly processor: ImageProcessor
@@ -65,6 +67,7 @@ function requireAccountId(accountId: AccountId | undefined): AccountId {
 /** M06 service: validate, optionally resize, persist, reference, and expire attachments. */
 export class FileImageIngestService implements ImageIngestService {
   readonly #repository: AttachmentRepository
+  readonly #accountSessions: AccountSessionRegistry
   readonly #clipboard: ClipboardAdapter
   readonly #injector: SessionImageInjector
   readonly #processor: ImageProcessor
@@ -73,6 +76,7 @@ export class FileImageIngestService implements ImageIngestService {
 
   public constructor(options: FileImageIngestServiceOptions) {
     this.#repository = options.repository
+    this.#accountSessions = options.accountSessions
     this.#clipboard = options.clipboard
     this.#injector = options.injector
     this.#processor = options.processor
@@ -149,6 +153,7 @@ export class FileImageIngestService implements ImageIngestService {
     return this.#injections.run(
       `${accountId}\0${id}\0${sessionId}`,
       async (): Promise<StoredImage> => {
+        await this.#assertSessionOwner(accountId, sessionId)
         const { image } = await this.#repository.content(accountId, id)
         const added = await this.#repository.addReference(accountId, id, sessionId)
         try {
@@ -176,6 +181,17 @@ export class FileImageIngestService implements ImageIngestService {
         if (updated === null) throw new LubanError('E_IO', 'Injected image metadata disappeared')
         return updated
       },
+    )
+  }
+
+  async #assertSessionOwner(accountId: AccountId, sessionId: SessionId): Promise<void> {
+    const owner = await this.#accountSessions.ownerOf(sessionId)
+    if (owner === accountId) return
+    throw new LubanError(
+      'E_ACCOUNT_SCOPE_MISMATCH',
+      owner === null
+        ? `Session ${sessionId} has no M01 account owner`
+        : `Session ${sessionId} belongs to account ${owner}, not ${accountId}`,
     )
   }
 

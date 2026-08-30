@@ -95,8 +95,10 @@ describe('authenticated image HTTP API', () => {
       attachDir: '.luban/attachments',
       clock,
     })
+    const auth = authentication()
     service = new FileImageIngestService({
       repository,
+      accountSessions: auth.accountSessions,
       clipboard: emptyClipboard,
       injector,
       processor: passThroughProcessor,
@@ -125,7 +127,7 @@ describe('authenticated image HTTP API', () => {
         finishedAt: new Date(2).toISOString(),
       } as unknown as VisualAcceptanceEvidence),
     )
-    const api = new ImagePasteHttpApi(service, authentication(), { run: visualRun })
+    const api = new ImagePasteHttpApi(service, auth, { run: visualRun })
     server = createServer((request, response): void => {
       void api.handler(request, response)
     })

@@ -102,6 +102,7 @@ export async function apply(ctx: Context, input: Partial<ImagePasteConfig> = {})
   })
   const service = new FileImageIngestService({
     repository,
+    accountSessions: auth.accountSessions,
     clipboard: new SystemClipboardAdapter({
       timeoutMs: config.clipboardTimeoutMs,
       maxBytes: config.maxBytes,

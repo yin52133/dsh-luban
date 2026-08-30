@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { asAccountId, asSessionId } from 'dsh-luban-core'
+import type { AccountSessionRegistry } from 'dsh-luban-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AttachmentRepository } from '../src/repository.js'
 import { FileImageIngestService } from '../src/service.js'
@@ -18,6 +19,10 @@ import {
 
 const ACCOUNT = asAccountId('account-alice')
 const OTHER_ACCOUNT = asAccountId('account-bob')
+const ALICE_ACCOUNT_SESSIONS: AccountSessionRegistry = {
+  bind: () => Promise.resolve(),
+  ownerOf: () => Promise.resolve(ACCOUNT),
+}
 
 describe('attachment repository and ingest service', () => {
   let workspace = ''
@@ -43,9 +48,11 @@ describe('attachment repository and ingest service', () => {
     clipboard: ClipboardAdapter = emptyClipboard,
     processor: ImageProcessor = passThroughProcessor,
     config: Partial<Config> = {},
+    accountSessions: AccountSessionRegistry = ALICE_ACCOUNT_SESSIONS,
   ): FileImageIngestService {
     return new FileImageIngestService({
       repository,
+      accountSessions,
       injector,
       clipboard,
       processor,
@@ -57,6 +64,7 @@ describe('attachment repository and ingest service', () => {
     const config = Object.freeze(testConfig(workspace))
     const ingest = new FileImageIngestService({
       repository,
+      accountSessions: ALICE_ACCOUNT_SESSIONS,
       injector: new RecordingInjector(),
       clipboard: emptyClipboard,
       processor: passThroughProcessor,
@@ -278,6 +286,32 @@ describe('attachment repository and ingest service', () => {
     await expect(ingest.injectById(ACCOUNT, sessionId, other.id)).rejects.toMatchObject({
       code: 'E_IO',
     })
+  })
+
+  it('rejects public service injection into another account session', async () => {
+    const aliceSession = asSessionId('session-alice')
+    const bobSession = asSessionId('session-bob')
+    const accountSessions: AccountSessionRegistry = {
+      bind: () => Promise.resolve(),
+      ownerOf: (sessionId) =>
+        Promise.resolve(
+          sessionId === aliceSession ? ACCOUNT : sessionId === bobSession ? OTHER_ACCOUNT : null,
+        ),
+    }
+    const injector = new RecordingInjector()
+    const ingest = service(injector, emptyClipboard, passThroughProcessor, {}, accountSessions)
+    const image = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
+      source: 'paste',
+    })
+
+    await expect(ingest.inject(aliceSession, image, 'markdown')).resolves.toBeUndefined()
+    await expect(ingest.inject(bobSession, image, 'markdown')).rejects.toMatchObject({
+      code: 'E_ACCOUNT_SCOPE_MISMATCH',
+      message: `Session ${bobSession} belongs to account ${OTHER_ACCOUNT}, not ${ACCOUNT}`,
+    })
+    expect(injector.calls.map((call) => call.sessionId)).toEqual([aliceSession])
+    expect((await repository.get(ACCOUNT, image.id))?.referencedBy).toEqual([aliceSession])
   })
 
   it('rolls back a newly-added reference when DSH injection fails', async () => {
