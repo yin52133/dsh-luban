@@ -9,8 +9,10 @@ import {
   extractChangelogSection,
   isPublishable,
   loadPolicy,
-  npmInvocation,
+  packedManifestIssues,
   pathIsWithin,
+  pnpmInvocation,
+  readPackedManifest,
   readJson,
   REPOSITORY_ROOT,
   selectPackages,
@@ -43,9 +45,10 @@ function parseArgs(argv) {
 }
 
 function parsePackOutput(stdout) {
-  const start = stdout.indexOf('[')
-  if (start < 0) throw new Error(`npm pack returned no JSON: ${stdout.trim()}`)
-  return JSON.parse(stdout.slice(start))
+  const starts = [stdout.indexOf('{'), stdout.indexOf('[')].filter((value) => value >= 0)
+  if (starts.length === 0) throw new Error(`pnpm pack returned no JSON: ${stdout.trim()}`)
+  const parsed = JSON.parse(stdout.slice(Math.min(...starts)))
+  return Array.isArray(parsed) ? parsed : [parsed]
 }
 
 export function releasePlan(version, tag, packages, policy) {
@@ -91,23 +94,22 @@ export async function packArtifacts(options = {}) {
 
   const records = []
   for (const { directory, manifest } of packages) {
-    const invocation = npmInvocation([
-      'pack',
-      '--json',
-      '--ignore-scripts',
-      '--pack-destination',
-      output,
-    ])
+    const invocation = pnpmInvocation(['pack', '--json', '--pack-destination', output])
     const result = spawnSync(invocation.command, invocation.args, {
       cwd: directory,
       encoding: 'utf8',
       windowsHide: true,
     })
     if (result.status !== 0)
-      throw new Error(`${manifest.name}: npm pack failed: ${spawnDiagnostic(result)}`)
+      throw new Error(`${manifest.name}: pnpm pack failed: ${spawnDiagnostic(result)}`)
     const packed = parsePackOutput(result.stdout)[0]
     const filename = basename(packed.filename)
     const content = await readFile(join(output, filename))
+    const packedIssues = packedManifestIssues(
+      { name: manifest.name, version: manifest.version },
+      readPackedManifest(content),
+    )
+    if (packedIssues.length > 0) throw new Error(packedIssues.join('\n'))
     records.push({
       name: manifest.name,
       version: manifest.version,

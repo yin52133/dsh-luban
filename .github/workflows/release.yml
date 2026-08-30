@@ -56,12 +56,15 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+      - run: pnpm test:integration
       - run: uv lock --check --project tools/browser-bridge
       - run: uv run --project tools/browser-bridge --locked ruff check tools/browser-bridge/src tools/browser-bridge/tests
       - run: uv run --project tools/browser-bridge --locked ruff format --check tools/browser-bridge/src tools/browser-bridge/tests
       - run: uv run --project tools/browser-bridge --locked python -m unittest discover -s tools/browser-bridge/tests -v
       - run: uv run --project tools/browser-bridge --locked python -m compileall -q tools/browser-bridge/src tools/browser-bridge/tests
       - run: node scripts/validate-design.mjs
+      - run: pnpm validate:features
+      - run: pnpm check:architecture
       - run: node scripts/release/validate-release.mjs
       - run: node scripts/release/audit-packages.mjs --dry-run
       - run: node scripts/install-3rd-party.mjs --platform windows --profile win-debug --dry-run

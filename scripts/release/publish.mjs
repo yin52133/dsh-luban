@@ -6,7 +6,9 @@ import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   npmInvocation,
+  packedManifestIssues,
   pathIsWithin,
+  readPackedManifest,
   readJson,
   REPOSITORY_ROOT,
   sha256,
@@ -71,6 +73,8 @@ export async function verifyArtifactManifest(root, artifacts, expectedPackages) 
     const content = await readFile(resolve(artifacts, record.file))
     if (sha256(content) !== record.sha256)
       throw new Error(`${record.name}: artifact checksum mismatch`)
+    const packedIssues = packedManifestIssues(record, readPackedManifest(content))
+    if (packedIssues.length > 0) throw new Error(packedIssues.join('\n'))
   }
   if (new Set(names).size !== names.length) throw new Error('Artifact package names must be unique')
   if (expectedPackages !== undefined) {

@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer'
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, parse, resolve } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
+import { gzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 import { generatePlugin } from '../create-plugin.mjs'
 import {
@@ -13,7 +14,13 @@ import {
 } from '../install-3rd-party.mjs'
 import { auditPackedFiles } from '../release/audit-packages.mjs'
 import { gitleaksInvocation } from '../release/security-scan.mjs'
-import { extractChangelogSection, loadPolicy, sha256 } from '../release/lib.mjs'
+import {
+  extractChangelogSection,
+  loadPolicy,
+  packedManifestIssues,
+  readPackedManifest,
+  sha256,
+} from '../release/lib.mjs'
 import { releasePlan } from '../release/pack-artifacts.mjs'
 import { prepareMarketEntry } from '../release/prepare-market-entry.mjs'
 import { verifyArtifactManifest } from '../release/publish.mjs'
@@ -38,6 +45,16 @@ async function json(path, value) {
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value))
+}
+
+function packedManifestTarball(manifest) {
+  const payload = Buffer.from(JSON.stringify(manifest))
+  const header = Buffer.alloc(512)
+  header.write('package/package.json', 0, 'utf8')
+  header.write(`${payload.length.toString(8).padStart(11, '0')}\0`, 124, 'ascii')
+  header.write('0', 156, 'ascii')
+  const padding = Buffer.alloc(Math.ceil(payload.length / 512) * 512 - payload.length)
+  return gzipSync(Buffer.concat([header, payload, padding, Buffer.alloc(1024)]))
 }
 
 function registryFetcher(packages, mutate) {
@@ -621,12 +638,15 @@ describe('M12 release policy', () => {
       'pnpm typecheck',
       'pnpm build',
       'pnpm test',
+      'pnpm test:integration',
       'uv lock --check --project tools/browser-bridge',
       'uv run --project tools/browser-bridge --locked ruff check tools/browser-bridge/src tools/browser-bridge/tests',
       'uv run --project tools/browser-bridge --locked ruff format --check tools/browser-bridge/src tools/browser-bridge/tests',
       'uv run --project tools/browser-bridge --locked python -m unittest discover -s tools/browser-bridge/tests -v',
       'uv run --project tools/browser-bridge --locked python -m compileall -q tools/browser-bridge/src tools/browser-bridge/tests',
       'node scripts/validate-design.mjs',
+      'pnpm validate:features',
+      'pnpm check:architecture',
       'node scripts/release/validate-release.mjs',
       'node scripts/release/audit-packages.mjs --dry-run',
       'node scripts/install-3rd-party.mjs --platform windows --profile win-debug --dry-run',
@@ -723,7 +743,7 @@ describe('M12 release policy', () => {
     const artifacts = join(root, '.release-artifacts')
     await mkdir(artifacts)
     await json(join(root, 'package.json'), { name: 'fixture', version: '1.0.0', private: true })
-    const payload = Buffer.from('immutable tarball')
+    const payload = packedManifestTarball({ name: 'sample', version: '1.0.0' })
     await writeFile(join(artifacts, 'sample.tgz'), payload)
     await json(join(artifacts, 'release-manifest.json'), {
       schemaVersion: 1,
@@ -739,6 +759,26 @@ describe('M12 release policy', () => {
     )
     await writeFile(join(artifacts, 'sample.tgz'), 'changed')
     await expect(verifyArtifactManifest(root, artifacts)).rejects.toThrow(/checksum/)
+  })
+
+  it('reads the packed manifest and rejects unpublished workspace dependency ranges', () => {
+    const payload = packedManifestTarball({
+      name: 'sample',
+      version: '1.0.0',
+      dependencies: { 'dsh-luban-core': 'workspace:^' },
+    })
+    const manifest = readPackedManifest(payload)
+    expect(manifest.name).toBe('sample')
+    expect(packedManifestIssues({ name: 'sample', version: '1.0.0' }, manifest)).toContain(
+      'sample: packed dependencies.dsh-luban-core retains workspace:^',
+    )
+    expect(
+      packedManifestIssues(
+        { name: 'sample', version: '1.0.0' },
+        { ...manifest, dependencies: { 'dsh-luban-core': '^1.0.0' } },
+      ),
+    ).toEqual([])
+    expect(() => readPackedManifest(Buffer.from('not a tarball'))).toThrow(/gzip tarball/)
   })
 })
 

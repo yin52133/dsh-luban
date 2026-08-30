@@ -9,8 +9,8 @@ import {
   discoverPackages,
   isPublishable,
   loadPolicy,
-  npmInvocation,
   parseCommonArgs,
+  pnpmInvocation,
   REPOSITORY_ROOT,
   selectPackages,
   spawnDiagnostic,
@@ -50,9 +50,10 @@ export function auditPackedFiles(manifest, packedPaths, policy) {
 }
 
 function parsePackOutput(stdout) {
-  const start = stdout.indexOf('[')
-  if (start < 0) throw new Error(`npm pack returned no JSON: ${stdout.trim()}`)
-  return JSON.parse(stdout.slice(start))
+  const starts = [stdout.indexOf('{'), stdout.indexOf('[')].filter((value) => value >= 0)
+  if (starts.length === 0) throw new Error(`pnpm pack returned no JSON: ${stdout.trim()}`)
+  const parsed = JSON.parse(stdout.slice(Math.min(...starts)))
+  return Array.isArray(parsed) ? parsed : [parsed]
 }
 
 async function assertLazyClient(directory, manifest) {
@@ -100,14 +101,14 @@ export async function auditPackages(
     }
     if (staticOnly) continue
 
-    const invocation = npmInvocation(['pack', '--dry-run', '--json', '--ignore-scripts'])
+    const invocation = pnpmInvocation(['pack', '--dry-run', '--json'])
     const result = spawnSync(invocation.command, invocation.args, {
       cwd: directory,
       encoding: 'utf8',
       windowsHide: true,
     })
     if (result.status !== 0) {
-      issues.push(`${manifest.name}: npm pack --dry-run failed: ${spawnDiagnostic(result)}`)
+      issues.push(`${manifest.name}: pnpm pack --dry-run failed: ${spawnDiagnostic(result)}`)
       continue
     }
     const records = parsePackOutput(result.stdout)

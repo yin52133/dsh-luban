@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gunzipSync } from 'node:zlib'
 
 export const RELEASE_DIR = dirname(fileURLToPath(import.meta.url))
 export const REPOSITORY_ROOT = resolve(RELEASE_DIR, '..', '..')
@@ -68,6 +69,91 @@ export function npmInvocation(args) {
     throw new Error(`Unable to locate npm CLI next to Node.js: ${npmCli}`)
   }
   return { command: process.execPath, args: [npmCli, ...args] }
+}
+
+export function pnpmInvocation(args) {
+  if (process.platform !== 'win32') return { command: 'pnpm', args }
+  return {
+    command: process.env.ComSpec ?? 'cmd.exe',
+    args: ['/d', '/s', '/c', 'pnpm', ...args],
+  }
+}
+
+function tarString(archive, offset, length) {
+  const end = archive.indexOf(0, offset)
+  const boundedEnd = end < 0 || end > offset + length ? offset + length : end
+  return archive.subarray(offset, boundedEnd).toString('utf8').trim()
+}
+
+function tarSize(archive, offset) {
+  const value = tarString(archive, offset, 12).replace(/\s+$/u, '')
+  if (!/^[0-7]+$/u.test(value)) throw new Error('Packed tarball has an invalid entry size')
+  const size = Number.parseInt(value, 8)
+  if (!Number.isSafeInteger(size) || size < 0) {
+    throw new Error('Packed tarball entry size is outside the safe integer range')
+  }
+  return size
+}
+
+export function readPackedManifest(tarball) {
+  let archive
+  try {
+    archive = gunzipSync(tarball, { maxOutputLength: 64 * 1024 * 1024 })
+  } catch (error) {
+    throw new Error('Package artifact is not a bounded gzip tarball', { cause: error })
+  }
+
+  let manifest
+  for (let offset = 0; offset + 512 <= archive.length;) {
+    const header = archive.subarray(offset, offset + 512)
+    if (header.every((byte) => byte === 0)) break
+    const name = tarString(header, 0, 100)
+    const prefix = tarString(header, 345, 155)
+    const path = prefix === '' ? name : `${prefix}/${name}`
+    const size = tarSize(header, 124)
+    const contentStart = offset + 512
+    const contentEnd = contentStart + size
+    if (contentEnd > archive.length) throw new Error('Packed tarball entry exceeds its archive')
+    if (path === 'package/package.json') {
+      if (manifest !== undefined) throw new Error('Package artifact contains duplicate manifests')
+      try {
+        manifest = JSON.parse(archive.subarray(contentStart, contentEnd).toString('utf8'))
+      } catch (error) {
+        throw new Error('Package artifact manifest is invalid JSON', { cause: error })
+      }
+    }
+    offset = contentStart + Math.ceil(size / 512) * 512
+  }
+  if (manifest === undefined || manifest === null || typeof manifest !== 'object') {
+    throw new Error('Package artifact has no package/package.json object')
+  }
+  return manifest
+}
+
+export function packedManifestIssues(record, manifest) {
+  const issues = []
+  if (manifest.name !== record.name) {
+    issues.push(`${record.name}: packed manifest name is ${String(manifest.name)}`)
+  }
+  if (manifest.version !== record.version) {
+    issues.push(`${record.name}: packed manifest version is ${String(manifest.version)}`)
+  }
+  for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    const dependencies = manifest[section]
+    if (dependencies === undefined) continue
+    if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) {
+      issues.push(`${record.name}: packed ${section} must be an object`)
+      continue
+    }
+    for (const [name, range] of Object.entries(dependencies)) {
+      if (typeof range !== 'string' || range.trim() === '') {
+        issues.push(`${record.name}: packed ${section}.${name} must be a non-empty range`)
+      } else if (range.startsWith('workspace:')) {
+        issues.push(`${record.name}: packed ${section}.${name} retains ${range}`)
+      }
+    }
+  }
+  return issues
 }
 
 export function spawnDiagnostic(result) {
