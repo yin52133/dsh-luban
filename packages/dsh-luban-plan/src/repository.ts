@@ -218,6 +218,10 @@ function errorCode(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 function normalizedRelativeDirectory(value: string): string {
   const candidate = normalize(value)
   if (candidate === '.' || isAbsolute(candidate) || candidate.split(/[\\/]/u)[0] === '..') {
@@ -272,12 +276,14 @@ async function atomicTextWrite(
 /** Durable repository whose JSON index is the source of truth and Markdown is its review projection. */
 export class PlanRepository {
   readonly #store: AtomicJsonStore<PlanState>
+  readonly #stateFile: string
   readonly #plansDir: string
   readonly #clock: Clock
   readonly #workspaceFences = new Map<string, DirectoryFence>()
   readonly #documentFences = new Map<string, DirectoryFence>()
 
   public constructor(stateFile: string, plansDir: string, clock: Clock) {
+    this.#stateFile = stateFile
     this.#plansDir = normalizedRelativeDirectory(plansDir)
     this.#clock = clock
     this.#store = new AtomicJsonStore({
@@ -351,34 +357,78 @@ export class PlanRepository {
     mutate: (current: StoredPlan) => StoredPlan,
   ): Promise<StoredPlan> {
     let result: StoredPlan | undefined
-    await this.#store.update(async (state): Promise<PlanState> => {
-      const index = state.plans.findIndex((plan): boolean => plan.id === id)
-      const current = state.plans[index]
-      if (current === undefined) throw new LubanError('E_NOT_FOUND', `Plan ${id} was not found`)
-      if (current.version !== expectedVersion) {
-        throw new LubanError(
-          'E_VERSION_CONFLICT',
-          `Plan ${id} changed since version ${String(expectedVersion)}`,
-        )
-      }
-      const next = mutate(current)
-      if (
-        next.id !== current.id ||
-        next.accountId !== current.accountId ||
-        next.filePath !== current.filePath ||
-        next.workspace !== current.workspace
-      ) {
-        throw new LubanError('E_INVALID_INPUT', 'Plan identity and document location are immutable')
-      }
-      const plans = [...state.plans]
-      plans[index] = next
-      const path = await this.#documentPath(next, true, true)
-      await atomicTextWrite(path, renderPlanDocument(next), false, async (): Promise<void> => {
-        await this.#assertDocumentRoot(next.workspace, false)
+    let publishedDocument: { readonly path: string; readonly workspace: string } | undefined
+    try {
+      await this.#store.update(async (state): Promise<PlanState> => {
+        const index = state.plans.findIndex((plan): boolean => plan.id === id)
+        const current = state.plans[index]
+        if (current === undefined) throw new LubanError('E_NOT_FOUND', `Plan ${id} was not found`)
+        if (current.version !== expectedVersion) {
+          throw new LubanError(
+            'E_VERSION_CONFLICT',
+            `Plan ${id} changed since version ${String(expectedVersion)}`,
+          )
+        }
+        const next = mutate(current)
+        if (
+          next.id !== current.id ||
+          next.accountId !== current.accountId ||
+          next.filePath !== current.filePath ||
+          next.workspace !== current.workspace
+        ) {
+          throw new LubanError(
+            'E_INVALID_INPUT',
+            'Plan identity and document location are immutable',
+          )
+        }
+        const plans = [...state.plans]
+        plans[index] = next
+        const path = await this.#documentPath(next, true, true)
+        await atomicTextWrite(path, renderPlanDocument(next), false, async (): Promise<void> => {
+          await this.#assertDocumentRoot(next.workspace, false)
+        })
+        publishedDocument = { path, workspace: next.workspace }
+        result = next
+        return { ...state, plans }
       })
-      result = next
-      return { ...state, plans }
-    })
+    } catch (persistenceError: unknown) {
+      const document = publishedDocument
+      if (document !== undefined) {
+        try {
+          const rawState = await readFile(this.#stateFile, 'utf8')
+          const state = planStateCodec.decode(JSON.parse(rawState) as unknown)
+          const authoritative = state.plans.find((plan): boolean => plan.id === id)
+          if (authoritative === undefined) {
+            throw new LubanError('E_IO', `Plan ${id} is missing from its authoritative state`)
+          }
+          await atomicTextWrite(
+            document.path,
+            renderPlanDocument(authoritative),
+            false,
+            async (): Promise<void> => {
+              await this.#assertDocumentRoot(document.workspace, false)
+            },
+          )
+        } catch (reconciliationError: unknown) {
+          throw new LubanError(
+            'E_IO',
+            `Plan ${id} update failed and its document could not be reconciled`,
+            {
+              retriable: true,
+              cause: new AggregateError(
+                [persistenceError, reconciliationError],
+                `Plan ${id} persistence reconciliation failed`,
+              ),
+              details: {
+                persistenceError: errorMessage(persistenceError),
+                reconciliationError: errorMessage(reconciliationError),
+              },
+            },
+          )
+        }
+      }
+      throw persistenceError
+    }
     if (result === undefined) throw new LubanError('E_IO', 'Plan update did not produce a result')
     return result
   }
