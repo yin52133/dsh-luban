@@ -294,9 +294,22 @@ describe('M02 night task to M08 cadence integration', (): void => {
         ctx.provide('lubanTelemetry', telemetry)
       },
     })
+    const sessionQueryFiber = context.plugin({
+      name: 'night-context-integration-session-query',
+      apply(ctx: Context): void {
+        ctx.provide('sessionQuery', {
+          listSessions: (): Promise<readonly { header: { id: DshSessionId; cwd: string } }[]> => {
+            const sessionId = harness.createdSessionId()
+            return Promise.resolve(
+              sessionId === undefined ? [] : [{ header: { id: sessionId, cwd: directory } }],
+            )
+          },
+        })
+      },
+    })
 
     try {
-      await Promise.all([webFiber, agentsFiber, authFiber, telemetryFiber])
+      await Promise.all([webFiber, agentsFiber, authFiber, telemetryFiber, sessionQueryFiber])
       const contextFiber = context.plugin(contextPlugin, CONTEXT_CONFIG)
       try {
         await contextFiber
@@ -376,6 +389,7 @@ describe('M02 night task to M08 cadence integration', (): void => {
     } finally {
       unregisterCompaction()
       await Promise.allSettled([
+        sessionQueryFiber.dispose(),
         telemetryFiber.dispose(),
         authFiber.dispose(),
         agentsFiber.dispose(),
