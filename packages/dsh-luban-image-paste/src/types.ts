@@ -1,3 +1,4 @@
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { IngestedImage, SessionId } from 'dsh-luban-core'
 
 export type ImageSource = IngestedImage['source']
@@ -44,6 +45,8 @@ export interface SessionImageInjector {
 
 export interface ImageInjectionOptions {
   readonly instruction?: string
+  /** Require the registry lookup to resolve to this exact live Agent instance. */
+  readonly expectedAgent?: Agent
   /** Called synchronously after message creation and before it enters the live Agent inbox. */
   readonly onPreparedMessage?: (messageId: string) => void
   /** Called at the final synchronous boundary immediately before followup. */

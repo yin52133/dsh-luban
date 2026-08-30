@@ -111,7 +111,8 @@ export class DshImageSessionInjector implements SessionImageInjector {
         { retriable: true },
       )
     }
-    if (this.#expectedAgent !== undefined && live !== this.#expectedAgent) {
+    const expectedAgent = options?.expectedAgent ?? this.#expectedAgent
+    if (expectedAgent !== undefined && live !== expectedAgent) {
       throw new LubanError(
         'E_UNAVAILABLE',
         `DSH session ${sessionId} changed live agent identity`,

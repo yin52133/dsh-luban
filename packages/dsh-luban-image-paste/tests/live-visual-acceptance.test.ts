@@ -944,6 +944,7 @@ function productionEvidence(): VisualAcceptanceEvidence {
       'target-platform',
       'git-clean',
       'plugin-build-provenance',
+      'mounted-service-config',
       'live-agent-session',
       'png-valid',
       'production-image-landing',

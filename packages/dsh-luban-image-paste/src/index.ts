@@ -47,6 +47,7 @@ export {
   visualAcceptanceInstruction,
 } from './live-visual-acceptance.js'
 export type {
+  MountedVisualAcceptanceMount,
   MountedVisualAcceptanceOptions,
   SimulatedVisualAcceptanceOptions,
   GitIdentity,
@@ -82,7 +83,7 @@ export function assertLoopbackWebServer(host: string): void {
 
 /** Mount the workspace attachment service, authenticated API, and bounded TTL sweep. */
 export async function apply(ctx: Context, input: Partial<ImagePasteConfig> = {}): Promise<void> {
-  const config = parseConfig(input)
+  const config = Object.freeze(parseConfig(input))
   const auth = ctx.get('lubanAuth') as AuthService | undefined
   if (auth === undefined) throw new LubanError('E_UNAVAILABLE', 'lubanAuth is unavailable')
   assertLoopbackWebServer(ctx.webServer.host)
@@ -101,7 +102,11 @@ export async function apply(ctx: Context, input: Partial<ImagePasteConfig> = {})
     processor: new DynamicSharpProcessor(),
     config,
   })
-  const visualAcceptance = new MountedVisualAcceptanceService(ctx, repository.workspaceRoot)
+  const visualAcceptance = new MountedVisualAcceptanceService(ctx, {
+    repository,
+    service,
+    config,
+  })
   const api = new ImagePasteHttpApi(service, auth, visualAcceptance)
   ctx.provide('lubanImageIngest', service)
   ctx.provide('lubanImageVisualAcceptance', visualAcceptance)

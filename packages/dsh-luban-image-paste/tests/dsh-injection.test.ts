@@ -147,6 +147,33 @@ describe('DSH rc2 image injection', () => {
     expect(replacement.followup).not.toHaveBeenCalled()
   })
 
+  it('binds a single injection to the caller-selected live agent instance', async () => {
+    const workspace = await realpath(process.cwd())
+    const expected = {
+      id: 'session-call-bound',
+      session: { header: { cwd: workspace } },
+      followup: vi.fn(),
+    }
+    const replacement = {
+      id: 'session-call-bound',
+      session: { header: { cwd: workspace } },
+      followup: vi.fn(),
+    }
+    const registry = {
+      get: () => replacement,
+      roots: () => [replacement],
+    } as unknown as AgentRegistry
+    const injector = new DshImageSessionInjector(registry, workspace)
+
+    await expect(
+      injector.inject(asSessionId('session-call-bound'), IMAGE, 'path', {
+        expectedAgent: expected as unknown as Agent,
+      }),
+    ).rejects.toMatchObject({ code: 'E_UNAVAILABLE', retriable: true })
+    expect(expected.followup).not.toHaveBeenCalled()
+    expect(replacement.followup).not.toHaveBeenCalled()
+  })
+
   it('allows a runtime root with durable fork lineage', async () => {
     const workspace = await realpath(process.cwd())
     const followup = vi.fn()

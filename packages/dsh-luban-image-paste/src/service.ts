@@ -72,6 +72,11 @@ export class FileImageIngestService implements ImageIngestService {
     return this.#config.injectStyle
   }
 
+  /** Prove that an acceptance runner is using this service's exact mounted state. */
+  public matchesMount(repository: AttachmentRepository, config: Config): boolean {
+    return this.#repository === repository && this.#config === config
+  }
+
   public async fromBlob(blob: Blob, meta?: { readonly nameHint?: string }): Promise<IngestedImage> {
     return this.fromBlobWithSource(blob, {
       source: 'paste',

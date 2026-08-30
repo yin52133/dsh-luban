@@ -7,9 +7,10 @@ import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId as DshSessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { asSessionId, systemClock } from 'dsh-luban-core'
-import { DynamicSharpProcessor } from './compressor.js'
-import { DshImageSessionInjector, imagePrompt } from './dsh-injection.js'
+import { asSessionId } from 'dsh-luban-core'
+import type { Config } from './config.js'
+import { imagePrompt } from './dsh-injection.js'
+import { detectImage } from './image-format.js'
 import { AttachmentRepository } from './repository.js'
 import { FileImageIngestService } from './service.js'
 import type { StoredImage } from './types.js'
@@ -133,6 +134,12 @@ export interface MountedVisualAcceptanceOptions {
   readonly timeoutMs?: number
 }
 
+export interface MountedVisualAcceptanceMount {
+  readonly repository: AttachmentRepository
+  readonly service: FileImageIngestService
+  readonly config: Config
+}
+
 export interface VisualTurnObservation {
   readonly requestedSessionId: string
   readonly respondingSessionId: string
@@ -187,6 +194,24 @@ function isoNow(): string {
 
 function sha256(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function mountedConfigDigest(config: Config): string {
+  return sha256(
+    JSON.stringify({
+      workspaceRoot: config.workspaceRoot,
+      attachDir: config.attachDir,
+      maxBytes: config.maxBytes,
+      maxSidePx: config.maxSidePx,
+      compression: config.compression,
+      compressionQuality: config.compressionQuality,
+      retainDays: config.retainDays,
+      recentLimit: config.recentLimit,
+      cleanupIntervalMinutes: config.cleanupIntervalMinutes,
+      injectStyle: config.injectStyle,
+      clipboardTimeoutMs: config.clipboardTimeoutMs,
+    }),
+  )
 }
 
 function platformEvidence(): VisualAcceptanceEvidence['platform'] {
@@ -1170,12 +1195,14 @@ export class MountedVisualAcceptanceService {
   readonly #ctx: Context
   readonly #agents: AgentRegistry
   readonly #workspaceRoot: string
+  readonly #mount: MountedVisualAcceptanceMount | undefined
   #running = false
 
-  public constructor(ctx: Context, workspaceRoot: string) {
+  public constructor(ctx: Context, mount: MountedVisualAcceptanceMount | string) {
     this.#ctx = ctx
     this.#agents = ctx.agents
-    this.#workspaceRoot = workspaceRoot
+    this.#mount = typeof mount === 'string' ? undefined : mount
+    this.#workspaceRoot = typeof mount === 'string' ? mount : mount.repository.workspaceRoot
   }
 
   public async run(options: MountedVisualAcceptanceOptions): Promise<VisualAcceptanceEvidence> {
@@ -1226,8 +1253,9 @@ export class MountedVisualAcceptanceService {
     let png: Uint8Array | undefined
     let validation: ValidatedNoncePng | undefined
     let image: StoredImage | undefined
+    let landedImageEvidence: VisualAcceptanceEvidence['image'] | undefined
     let repository: AttachmentRepository | undefined
-    let acceptanceRoot: string | undefined
+    let mountedService: FileImageIngestService | undefined
     let agent: Agent | undefined
     let route: { readonly provider: string; readonly model: string } | undefined
     let git: GitIdentity | undefined
@@ -1250,6 +1278,41 @@ export class MountedVisualAcceptanceService {
       platform = await inspectVisualAcceptancePlatform()
       recordCheck(checks, 'target-platform', 'pass', platform.target)
       canonicalWorkspace = await realpath(this.#workspaceRoot)
+      const mount = this.#mount
+      if (mount === undefined) {
+        throw new VisualAcceptanceBlocked('production service/config mount is unavailable')
+      }
+      if (
+        Object.getPrototypeOf(mount.repository) !== AttachmentRepository.prototype ||
+        Object.getPrototypeOf(mount.service) !== FileImageIngestService.prototype ||
+        !Object.isFrozen(mount.config) ||
+        !mount.service.matchesMount(mount.repository, mount.config)
+      ) {
+        throw new VisualAcceptanceFailure('production service/config mount identity is invalid')
+      }
+      const canonicalConfigWorkspace = await realpath(mount.config.workspaceRoot)
+      const canonicalConfigAttachRoot = await realpath(
+        resolve(canonicalWorkspace, mount.config.attachDir),
+      )
+      if (
+        !samePath(canonicalWorkspace, canonicalConfigWorkspace) ||
+        !samePath(canonicalWorkspace, mount.repository.workspaceRoot) ||
+        !samePath(canonicalConfigAttachRoot, mount.repository.attachRoot) ||
+        this.#ctx.get('lubanImageIngest') !== mount.service ||
+        this.#ctx.get('lubanImageVisualAcceptance') !== this
+      ) {
+        throw new VisualAcceptanceFailure('production service/config is not the mounted capability')
+      }
+      repository = mount.repository
+      mountedService = mount.service
+      const productionRepository = mount.repository
+      const productionService = mount.service
+      recordCheck(
+        checks,
+        'mounted-service-config',
+        'pass',
+        `sha256=${mountedConfigDigest(mount.config)}`,
+      )
       git = inspectCleanVisualAcceptanceGit(canonicalWorkspace)
       recordCheck(checks, 'git-clean', 'pass', git.head)
       build = await inspectVisualAcceptanceBuild(canonicalWorkspace, git)
@@ -1311,44 +1374,9 @@ export class MountedVisualAcceptanceService {
             'strict PNG with pixels-only input nonce',
           )
 
-          const runRoot = await createVisualAcceptanceRoot(workspace, runId)
-          acceptanceRoot = runRoot
-          const attachDir = relative(workspace, runRoot).replaceAll('\\', '/')
-          const attachmentRepository = await AttachmentRepository.create({
-            workspaceRoot: workspace,
-            attachDir,
-            clock: systemClock,
-          })
-          repository = attachmentRepository
-          const service = new FileImageIngestService({
-            repository: attachmentRepository,
-            clipboard: {
-              capture: () =>
-                Promise.reject(new Error('live visual acceptance never reads clipboard')),
-            },
-            injector: new DshImageSessionInjector(
-              this.#agents,
-              attachmentRepository.workspaceRoot,
-              liveAgent,
-            ),
-            processor: new DynamicSharpProcessor(),
-            config: {
-              workspaceRoot: workspace,
-              attachDir,
-              maxBytes: 10 * 1024 * 1024,
-              maxSidePx: 2_048,
-              compression: false,
-              compressionQuality: 82,
-              retainDays: 1,
-              recentLimit: 1,
-              cleanupIntervalMinutes: 60,
-              injectStyle: 'path',
-              clipboardTimeoutMs: 10_000,
-            },
-          })
           const pngBuffer = new ArrayBuffer(renderedPng.byteLength)
           new Uint8Array(pngBuffer).set(renderedPng)
-          const ingestedImage = await service.fromBlobWithSource(
+          const ingestedImage = await productionService.fromBlobWithSource(
             new Blob([pngBuffer], { type: 'image/png' }),
             {
               source: 'paste',
@@ -1357,16 +1385,35 @@ export class MountedVisualAcceptanceService {
             },
           )
           image = ingestedImage
-          const stored = await service.content(ingestedImage.id)
-          const storedValidation = validateVisualNoncePng(stored.bytes)
+          const stored = await productionService.content(ingestedImage.id)
+          const storedSha256 = sha256(stored.bytes)
+          const sameRenderedBytes = storedSha256 === sha256(renderedPng)
+          if (sameRenderedBytes) validateVisualNoncePng(stored.bytes)
+          const storedWidth = stored.image.compression.width ?? validation.width
+          const storedHeight = stored.image.compression.height ?? validation.height
           requireCheck(
             checks,
             'production-image-landing',
-            ingestedImage.mime === 'image/png' && ingestedImage.sha256 === sha256(renderedPng),
-            `bytes=${String(storedValidation.bytes)}`,
+            stored.image.id === ingestedImage.id &&
+              stored.image.mime === 'image/png' &&
+              detectImage(stored.bytes).mime === 'image/png' &&
+              stored.image.bytes === stored.bytes.byteLength &&
+              stored.image.sha256 === storedSha256 &&
+              pathWithin(productionRepository.attachRoot, stored.image.absPath) &&
+              (sameRenderedBytes || stored.image.compression.status === 'compressed'),
+            `bytes=${String(stored.bytes.byteLength)}`,
           )
+          landedImageEvidence = {
+            mime: 'image/png',
+            valid: true,
+            width: storedWidth,
+            height: storedHeight,
+            bytes: stored.bytes.byteLength,
+            sha256: storedSha256,
+          }
 
-          const prompt = imagePrompt(ingestedImage, 'path', {
+          const injectStyle = productionService.defaultInjectStyle
+          const prompt = imagePrompt(ingestedImage, injectStyle, {
             instruction: ACCEPTANCE_INSTRUCTION,
           })
           const leaks = findVisualNonceLeaks(generatedNonce, {
@@ -1389,19 +1436,25 @@ export class MountedVisualAcceptanceService {
           turnTracker = tracker
           const queueReceipt = { queued: false }
           try {
-            await service.injectById(asSessionId(requestedSessionId), ingestedImage.id, 'path', {
-              instruction: ACCEPTANCE_INSTRUCTION,
-              signal,
-              onPreparedMessage: tracker.bind,
-              onBeforeQueueMessage: (): void => {
-                if (liveAgent.inbox.hasPending) {
-                  throw new VisualAcceptanceBlocked(
-                    'requested DSH agent inbox changed during visual setup',
-                  )
-                }
+            await productionService.injectById(
+              asSessionId(requestedSessionId),
+              ingestedImage.id,
+              injectStyle,
+              {
+                instruction: ACCEPTANCE_INSTRUCTION,
+                expectedAgent: liveAgent,
+                signal,
+                onPreparedMessage: tracker.bind,
+                onBeforeQueueMessage: (): void => {
+                  if (liveAgent.inbox.hasPending) {
+                    throw new VisualAcceptanceBlocked(
+                      'requested DSH agent inbox changed during visual setup',
+                    )
+                  }
+                },
+                queueReceipt,
               },
-              queueReceipt,
-            })
+            )
           } finally {
             execution.injected = queueReceipt.queued
           }
@@ -1520,22 +1573,22 @@ export class MountedVisualAcceptanceService {
           'fixture retained; unrelated agent inbox work was not cancelled',
         )
       }
-      if (acceptanceRoot !== undefined && (!execution.injected || execution.turnSettled)) {
+      if (
+        repository !== undefined &&
+        mountedService !== undefined &&
+        image !== undefined &&
+        (!execution.injected || execution.turnSettled)
+      ) {
         try {
-          if (repository !== undefined && image !== undefined) {
-            await repository.removeReference(image.id, asSessionId(requestedSessionId))
-          }
-          await removeVisualAcceptanceRoot(
-            canonicalWorkspace ?? this.#workspaceRoot,
-            acceptanceRoot,
-          )
+          await repository.removeReference(image.id, asSessionId(requestedSessionId))
+          await mountedService.delete(image.id)
           cleanup = 'pass'
-          recordCheck(checks, 'cleanup', 'pass', 'owned acceptance root removed')
+          recordCheck(checks, 'cleanup', 'pass', 'mounted attachment removed')
         } catch {
           cleanup = 'fail'
           status = 'fail'
-          error = 'owned visual acceptance fixture cleanup failed'
-          recordCheck(checks, 'cleanup', 'fail', 'owned acceptance root retained')
+          error = 'mounted visual acceptance attachment cleanup failed'
+          recordCheck(checks, 'cleanup', 'fail', 'mounted attachment retained')
         }
       }
       if (git !== undefined && canonicalWorkspace !== undefined) {
@@ -1576,9 +1629,11 @@ export class MountedVisualAcceptanceService {
         ...(turn === undefined ? {} : { turn }),
       },
       ...(route === undefined ? {} : { agent: route }),
-      ...(png === undefined || validation === undefined
-        ? {}
-        : { image: imageEvidence(png, validation) }),
+      ...(landedImageEvidence !== undefined
+        ? { image: landedImageEvidence }
+        : png === undefined || validation === undefined
+          ? {}
+          : { image: imageEvidence(png, validation) }),
       ...(git === undefined ? {} : { git: { clean: true, head: git.head } }),
       ...(build === undefined ? {} : { build }),
       platform,

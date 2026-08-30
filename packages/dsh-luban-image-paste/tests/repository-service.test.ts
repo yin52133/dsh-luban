@@ -50,6 +50,26 @@ describe('attachment repository and ingest service', () => {
     })
   }
 
+  it('attests only the exact repository and config mounted into the service', async () => {
+    const config = Object.freeze(testConfig(workspace))
+    const ingest = new FileImageIngestService({
+      repository,
+      injector: new RecordingInjector(),
+      clipboard: emptyClipboard,
+      processor: passThroughProcessor,
+      config,
+    })
+    const otherRepository = await AttachmentRepository.create({
+      workspaceRoot: workspace,
+      attachDir: '.luban/other-attachments',
+      clock,
+    })
+
+    expect(ingest.matchesMount(repository, config)).toBe(true)
+    expect(ingest.matchesMount(otherRepository, config)).toBe(false)
+    expect(ingest.matchesMount(repository, { ...config })).toBe(false)
+  })
+
   it('publishes safe, sequential workspace-relative files and durable metadata', async () => {
     const ingest = service()
     const first = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
