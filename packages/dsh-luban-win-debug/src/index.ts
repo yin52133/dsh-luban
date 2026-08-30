@@ -33,6 +33,7 @@ export function apply(ctx: Context, input: unknown = {}): void {
   const config = parseConfig(input)
   const service = new DefaultWinDebugService(config, {
     sessionInjection: new DshSessionInjection(ctx.agents),
+    accountSessions: ctx.lubanAuth.accountSessions,
   })
   const api = new WinDebugHttpApi(service, ctx.lubanAuth)
   ctx.provide('lubanWinDebug', service)
@@ -74,7 +75,7 @@ export { DesktopMcpManager } from './desktop-mcp.js'
 export type { DesktopMcpDescriptor, DesktopToolRegistry } from './desktop-mcp.js'
 export { DeviceExecutionGate } from './device-gate.js'
 export { GdbSessionManager } from './gdb.js'
-export type { GdbSnapshotRequest, GdbStartRequest, GdbStatus } from './gdb.js'
+export type { GdbOccupancyStatus, GdbSnapshotRequest, GdbStartRequest, GdbStatus } from './gdb.js'
 export { HotplugWatcher } from './hotplug.js'
 export type { EndpointChange } from './hotplug.js'
 export { formatDesktopMcpResult, NodeStdioMcpClient } from './mcp-stdio.js'

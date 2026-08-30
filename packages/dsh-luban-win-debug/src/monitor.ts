@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type {
+  AccountId,
   ChannelAdapter,
   ChannelEndpoint,
   ChannelHandle,
@@ -143,7 +144,8 @@ export class ChannelHub {
 
   public active(): readonly ManagedChannel[] {
     return [...this.#channels.values()].map(
-      ({ id, endpoint, handle, openedAt }): ManagedChannel => ({
+      ({ accountId, id, endpoint, handle, openedAt }): ManagedChannel => ({
+        accountId,
         id,
         endpoint,
         handle,
@@ -152,7 +154,15 @@ export class ChannelHub {
     )
   }
 
-  public async open(endpointId: string, options: OpenOptions = {}): Promise<ManagedChannel> {
+  public activeFor(accountId: AccountId): readonly ManagedChannel[] {
+    return this.active().filter((channel): boolean => channel.accountId === accountId)
+  }
+
+  public async open(
+    accountId: AccountId,
+    endpointId: string,
+    options: OpenOptions = {},
+  ): Promise<ManagedChannel> {
     if (endpointId.length > 512) throw new LubanError('E_INVALID_INPUT', 'Endpoint id is too large')
     for (const adapter of this.#adapters.values()) {
       const endpoint = (await this.#safeList(adapter)).find(
@@ -172,7 +182,7 @@ export class ChannelHub {
               reason: 'occupied',
               endpointId: endpoint.id,
               owner: occupied === undefined ? 'luban-opening-channel' : 'luban-active-channel',
-              ...(occupied === undefined ? {} : { channelId: occupied.id }),
+              ...(occupied?.accountId === accountId ? { channelId: occupied.id } : {}),
             },
           },
         )
@@ -183,6 +193,7 @@ export class ChannelHub {
         releaseLease = await this.#openPreflight?.(endpoint, options.signal)
         const handle = await adapter.open(endpoint, options)
         const active: ActiveChannel = {
+          accountId,
           id: randomUUID(),
           endpoint,
           handle,
@@ -208,19 +219,28 @@ export class ChannelHub {
     })
   }
 
-  public lines(channelId: string, options: FilterOptions = {}): readonly ChannelLine[] {
-    const active = this.#require(channelId)
+  public lines(
+    accountId: AccountId,
+    channelId: string,
+    options: FilterOptions = {},
+  ): readonly ChannelLine[] {
+    const active = this.#requireOwned(accountId, channelId)
     return filterLines(active.lines, options)
   }
 
-  public write(channelId: string, data: string): Promise<void> {
+  public write(accountId: AccountId, channelId: string, data: string): Promise<void> {
     if (data.length > 64 * 1024)
       throw new LubanError('E_INVALID_INPUT', 'Channel write is too large')
-    return this.#require(channelId).handle.write(data)
+    return this.#requireOwned(accountId, channelId).handle.write(data)
   }
 
-  public exec(channelId: string, command: string, signal?: AbortSignal): Promise<ExecResult> {
-    const handle = this.#require(channelId).handle
+  public exec(
+    accountId: AccountId,
+    channelId: string,
+    command: string,
+    signal?: AbortSignal,
+  ): Promise<ExecResult> {
+    const handle = this.#requireOwned(accountId, channelId).handle
     if (handle.exec === undefined)
       throw new LubanError('E_INVALID_INPUT', 'Channel does not support commands')
     return (handle as CancellableCommandHandle).exec(command, signal)
@@ -248,6 +268,7 @@ export class ChannelHub {
       )
       .join('\n')
     return this.#snippetStore.write(
+      active.accountId,
       active.endpoint,
       content,
       selected[0]?.at ?? Date.now(),
@@ -255,12 +276,16 @@ export class ChannelHub {
     )
   }
 
-  public captureById(channelId: string, range: SnippetRange): Promise<SnippetFile> {
-    return this.capture(this.#require(channelId).handle, range)
+  public captureById(
+    accountId: AccountId,
+    channelId: string,
+    range: SnippetRange,
+  ): Promise<SnippetFile> {
+    return this.capture(this.#requireOwned(accountId, channelId).handle, range)
   }
 
-  public async close(channelId: string): Promise<void> {
-    await this.#closing(this.#require(channelId))
+  public async close(accountId: AccountId, channelId: string): Promise<void> {
+    await this.#closing(this.#requireOwned(accountId, channelId))
   }
 
   public publishEndpointChange(
@@ -313,6 +338,7 @@ export class ChannelHub {
         if (event.type === 'status') {
           this.#publish({
             type: 'channel-status',
+            accountId: active.accountId,
             channelId: active.id,
             endpoint: active.endpoint,
             event,
@@ -329,6 +355,7 @@ export class ChannelHub {
     } catch (error: unknown) {
       this.#publish({
         type: 'channel-status',
+        accountId: active.accountId,
         channelId: active.id,
         endpoint: active.endpoint,
         event: {
@@ -343,6 +370,7 @@ export class ChannelHub {
 
   #appendLine(active: ActiveChannel, text: string, at: number): void {
     const line: ChannelLine = {
+      accountId: active.accountId,
       sequence: ++this.#sequence,
       channelId: active.id,
       endpoint: active.endpoint,
@@ -354,10 +382,11 @@ export class ChannelHub {
     this.#publish({ type: 'line', line })
   }
 
-  #require(channelId: string): ActiveChannel {
+  #requireOwned(accountId: AccountId, channelId: string): ActiveChannel {
     const channel = this.#channels.get(channelId)
-    if (channel === undefined)
+    if (channel?.accountId !== accountId) {
       throw new LubanError('E_NOT_FOUND', `Channel ${channelId} was not found`)
+    }
     return channel
   }
 

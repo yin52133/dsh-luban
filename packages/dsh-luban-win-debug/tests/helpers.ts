@@ -1,4 +1,5 @@
-import type { ExecResult } from 'dsh-luban-core'
+import type { AccountId, AccountSessionRegistry, ExecResult, SessionId } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { vi } from 'vitest'
 import { parseConfig, type Config } from '../src/config.js'
 import { BoundedAsyncQueue } from '../src/queue.js'
@@ -14,6 +15,32 @@ import type {
   SerialProvider,
 } from '../src/types.js'
 import type { DesktopMcpClient, DesktopMcpConnectOptions } from '../src/mcp-stdio.js'
+
+export const TEST_ACCOUNT = asAccountId('test-account')
+
+export function memoryAccountSessions(
+  initial: readonly (readonly [AccountId, SessionId])[] = [],
+): AccountSessionRegistry {
+  const owners = new Map<SessionId, AccountId>(
+    initial.map(([accountId, sessionId]): readonly [SessionId, AccountId] => [
+      sessionId,
+      accountId,
+    ]),
+  )
+  return {
+    bind(accountId, sessionId): Promise<void> {
+      const owner = owners.get(sessionId)
+      if (owner !== undefined && owner !== accountId) {
+        return Promise.reject(new Error('Session belongs to another account'))
+      }
+      owners.set(sessionId, accountId)
+      return Promise.resolve()
+    },
+    ownerOf(sessionId): Promise<AccountId | null> {
+      return Promise.resolve(owners.get(sessionId) ?? null)
+    },
+  }
+}
 
 export interface Invocation {
   readonly command: string

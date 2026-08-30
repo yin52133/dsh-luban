@@ -12,6 +12,7 @@
 | v0.4 | 2026-08-30 | Codex | 补齐串口生命周期与真实 MCP/TCP 本机集成验证        |
 | v0.5 | 2026-08-30 | Codex | 补齐串口片段进入持久会话及重放的直接证据           |
 | v0.6 | 2026-08-30 | Codex | 将约束聚焦于防误操作、会话隔离与真实设备验收       |
+| v0.7 | 2026-08-30 | Codex | 通道、日志、片段、GDB、SSE 与会话注入按认证账号隔离 |
 
 ## 1. 概述与目标
 
@@ -66,7 +67,9 @@ export interface ChannelHandle {
 
 /** WinDebugService —— L3 装配：模板、监视、会话注入 */
 export interface WinDebugService {
-  captureSnippet(handle: ChannelHandle, range: SnippetRange): Promise<SnippetFile>;
+  open(accountId: AccountId, endpointId: string, opts?: OpenOptions): Promise<ManagedChannel>;
+  lines(accountId: AccountId, channelId: string, filter?: FilterOptions): readonly ChannelLine[];
+  captureById(accountId: AccountId, channelId: string, range: SnippetRange): Promise<AccountSnippetFile>;
   injectToSession(sessionId: SessionId, snippet: SnippetFile): Promise<void>;
   runTemplate(templateId: string, params: Record<string, string>): Promise<ExecResult>;
 }
@@ -74,7 +77,9 @@ export interface WinDebugService {
 
 ## 5. 数据模型
 
-见 `04-interfaces/data-models.md#channel`。要点：`ChannelEndpoint`（kind+地址参数）、`SnippetFile`（片段内容、时间窗、通道元数据、落盘路径）。
+见 `04-interfaces/data-models.md#channel`。要点：`ChannelEndpoint` 是部署级物理资源；
+`ManagedChannel`、`ChannelLine`、`AccountSnippetFile` 与 GDB/template artifact 携带 `accountId`。
+片段按账号子目录落盘，只有相同账号拥有的 DSH session 可以接收注入。
 
 ## 6. 配置设计
 
@@ -103,10 +108,13 @@ export interface WinDebugService {
 
 - 串口独占冲突：重复打开显示 Luban channel id；Windows 独占打开失败统一提示可能占用者类型；
   串口烧录前执行一次有界 open/close 独占探测。烧录/GDB 对同一目标持有进程内 lease，冲突时
-  fail closed；外部进程抢占仍以 Windows 串口独占错误为准。
+  拒绝并返回占用提示；外部进程抢占仍以 Windows 串口独占错误为准。
 - 模板命令执行前回显确认（危险命令如 erase 二次确认）；日志片段只写入所选会话的本地片段目录，
-  不在 UI 或错误摘要中回显认证值。
+  并保留账号归属。
 - 外部工具路径经配置解析，缺失时给出安装指引而非崩溃。
+- endpoint 列表、设备占用和 OpenOCD/GDB/Desktop MCP 生命周期属于部署级共享物理状态；账号只看到
+  自己打开的 channel、日志、片段与 GDB 输出。跨账号操作会被拒绝且不返回对方内容；GDB 归属冲突
+  使用明确的 `E_ACCOUNT_SCOPE_MISMATCH`/403，便于定位实际问题。历史无账号片段不自动归属任何用户。
 
 ## 9. checklist 映射
 
@@ -126,8 +134,8 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
 - 可选 `serialport` HAL 提供 COM 枚举、参数化打开、有界数据流和非重入热插拔轮询；缺少原生模块时
   返回明确安装指引，不影响其他通道加载。打开支持 timeout/abort，迟到连接会被关闭；热插拔 stop
   排空在途轮询并用 generation 阻止卸载后发布。
-- Settings 面板提供实时滚动、时间戳、文本/正则过滤、高亮和范围选择；片段经正则打码、有界截取、
-  原子落盘后，以文件路径、摘录、通道元数据和时间窗写入真实 rc2 `Session`/`Inbox` 的持久
+- Settings 面板提供实时滚动、时间戳、文本/正则过滤、高亮和范围选择；片段经有界截取、
+  按账号目录原子落盘后，以文件路径、摘录、通道元数据和时间窗写入同账号真实 rc2 `Session`/`Inbox` 的持久
   `next-turn`；非目标会话保持隔离，新会话视图可从 `agent/inbox/spliced` 事件重放。
 - OpenOCD、J-Link、esptool、STM32CubeProgrammer、adb 与 fastboot 内置模板使用配置的工具和
   参数数组；擦除等危险操作要求精确二次确认，错误行结构化返回。
@@ -138,8 +146,11 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
   完成 `initialize -> tools/list -> tools/call`，服务端未发布 allowlist 任一项即拒绝连接；协议
   消息、stderr、生命周期和取消均有界。集成测试启动真实 Node stdio MCP 子进程完成
   initialize/list/call/stop，并以真实 loopback TCP server 验证网络串口读写关闭。
-- `/luban-win-debug` REST/SSE 要求 M01 会话与 CSRF，限制请求体、事件和输出；客户端使用 DSH rc2
-  lazy-CJS 加载器，服务注册为 `ctx.lubanWinDebug`。
+- `/luban-win-debug` REST/SSE 只采用 M01 middleware 给出的 `accountId`，不接受 query/body 覆盖；
+  channel 列表、日志、写入、命令、片段、关闭及 SSE replay/live 都按账号过滤。每个账号使用独立的
+  replay cursor/ring；断档时客户端收到 `resync` 并重新读取当前状态与日志。客户端使用 DSH rc2
+  lazy-CJS 加载器，服务注册为 `ctx.lubanWinDebug`。GDB owner 可读取输出、生成快照和停止进程；
+  其他账号只看到部署级 running/stopped 状态。
 - 本机原生 `serialport` 枚举读取到 Microsoft COM3/COM4（只读，未打开端口）。本地 Prettier、
-  ESLint、严格类型检查、构建、62 项 M10 测试、发布元数据和 npm pack 白名单审计通过；
+  ESLint、严格类型检查、构建、66 项 M10 测试、发布元数据和 npm pack 内容检查通过；
   未连接真实目标板、调试器或外部网络设备。

@@ -1,4 +1,6 @@
 import type {
+  AccountId,
+  AccountSessionRegistry,
   ChannelAdapter,
   ChannelEndpoint,
   ChannelHandle,
@@ -50,6 +52,7 @@ export interface WinDebugDependencies {
   readonly serial?: SerialProvider
   readonly sockets?: SocketConnector
   readonly sessionInjection?: SessionInjection
+  readonly accountSessions?: AccountSessionRegistry
   readonly adapters?: readonly ChannelAdapter[]
   readonly desktopMcp?: DesktopMcpClient
 }
@@ -63,6 +66,7 @@ export class DefaultWinDebugService implements WinDebugService {
   readonly #mcp: DesktopMcpManager
   readonly #snippets: SnippetStore
   readonly #injection: SessionInjection | undefined
+  readonly #accountSessions: AccountSessionRegistry | undefined
   readonly #hotplug: HotplugWatcher | undefined
   readonly #detachHotplug: (() => void) | undefined
   #started = false
@@ -119,6 +123,7 @@ export class DefaultWinDebugService implements WinDebugService {
     })
     this.#mcp = new DesktopMcpManager(config, dependencies.desktopMcp)
     this.#injection = dependencies.sessionInjection
+    this.#accountSessions = dependencies.accountSessions
     const serialAdapter = adapters.find((adapter): boolean => adapter.kind === 'serial')
     if (serialAdapter !== undefined) {
       this.#hotplug = new HotplugWatcher(serialAdapter, config.serial.pollIntervalMs)
@@ -146,39 +151,63 @@ export class DefaultWinDebugService implements WinDebugService {
     return this.#hub.endpointErrors()
   }
 
-  public activeChannels(): readonly ManagedChannel[] {
-    return this.#hub.active()
+  public activeChannels(accountId: AccountId): readonly ManagedChannel[] {
+    return this.#hub.activeFor(accountId)
   }
 
-  public open(endpointId: string, options: OpenOptions = {}): Promise<ManagedChannel> {
-    return this.#hub.open(endpointId, options)
+  public open(
+    accountId: AccountId,
+    endpointId: string,
+    options: OpenOptions = {},
+  ): Promise<ManagedChannel> {
+    return this.#hub.open(accountId, endpointId, options)
   }
 
-  public close(channelId: string): Promise<void> {
-    return this.#hub.close(channelId)
+  public close(accountId: AccountId, channelId: string): Promise<void> {
+    return this.#hub.close(accountId, channelId)
   }
 
-  public write(channelId: string, data: string): Promise<void> {
-    return this.#hub.write(channelId, data)
+  public write(accountId: AccountId, channelId: string, data: string): Promise<void> {
+    return this.#hub.write(accountId, channelId, data)
   }
 
-  public exec(channelId: string, command: string, signal?: AbortSignal): Promise<ExecResult> {
-    return this.#hub.exec(channelId, command, signal)
+  public exec(
+    accountId: AccountId,
+    channelId: string,
+    command: string,
+    signal?: AbortSignal,
+  ): Promise<ExecResult> {
+    return this.#hub.exec(accountId, channelId, command, signal)
   }
 
-  public lines(channelId: string, filter: FilterOptions = {}): ReturnType<ChannelHub['lines']> {
-    return this.#hub.lines(channelId, filter)
+  public lines(
+    accountId: AccountId,
+    channelId: string,
+    filter: FilterOptions = {},
+  ): ReturnType<ChannelHub['lines']> {
+    return this.#hub.lines(accountId, channelId, filter)
   }
 
   public captureSnippet(handle: ChannelHandle, range: SnippetRange): Promise<SnippetFile> {
     return this.#hub.capture(handle, range)
   }
 
-  public captureById(channelId: string, range: SnippetRange): Promise<SnippetFile> {
-    return this.#hub.captureById(channelId, range)
+  public captureById(
+    accountId: AccountId,
+    channelId: string,
+    range: SnippetRange,
+  ): Promise<SnippetFile> {
+    return this.#hub.captureById(accountId, channelId, range)
   }
 
   public async injectToSession(sessionId: SessionId, snippet: SnippetFile): Promise<void> {
+    const accountId = snippet.accountId
+    if (accountId === undefined || this.#accountSessions === undefined) {
+      throw new LubanError('E_NOT_FOUND', `Session ${sessionId} was not found`)
+    }
+    if ((await this.#accountSessions.ownerOf(sessionId)) !== accountId) {
+      throw new LubanError('E_NOT_FOUND', `Session ${sessionId} was not found`)
+    }
     if (this.#injection === undefined) {
       throw new LubanError('E_CHANNEL_UNAVAILABLE', 'DSH session injection is unavailable')
     }
@@ -186,11 +215,12 @@ export class DefaultWinDebugService implements WinDebugService {
   }
 
   public async captureAndInject(
+    accountId: AccountId,
     channelId: string,
     range: SnippetRange,
     sessionId?: SessionId,
   ): Promise<SnippetFile> {
-    const snippet = await this.captureById(channelId, range)
+    const snippet = await this.captureById(accountId, channelId, range)
     if (sessionId !== undefined) await this.injectToSession(sessionId, snippet)
     return snippet
   }
@@ -212,6 +242,7 @@ export class DefaultWinDebugService implements WinDebugService {
   }
 
   public async runTemplateArtifact(
+    accountId: AccountId,
     templateId: string,
     params: Readonly<Record<string, string>>,
     confirmation?: string,
@@ -241,9 +272,9 @@ export class DefaultWinDebugService implements WinDebugService {
       '',
       ...result.lines.map((line): string => `[${line.level.toUpperCase()}] ${line.text}`),
     ].join('\n')
-    const snippet = await this.#snippets.write(endpoint, content, startedAt, Date.now())
+    const snippet = await this.#snippets.write(accountId, endpoint, content, startedAt, Date.now())
     if (sessionId !== undefined) await this.injectToSession(sessionId, snippet)
-    return { result, snippet, injected: sessionId !== undefined }
+    return { accountId, result, snippet, injected: sessionId !== undefined }
   }
 
   public templates(): ReturnType<CommandTemplateRegistry['list']> {
@@ -254,28 +285,30 @@ export class DefaultWinDebugService implements WinDebugService {
     return this.#android.devices()
   }
 
-  public gdbStatus(): ReturnType<GdbSessionManager['status']> {
-    return this.#gdb.status()
+  public gdbStatus(accountId: AccountId): ReturnType<GdbSessionManager['statusFor']> {
+    return this.#gdb.statusFor(accountId)
   }
 
   public gdbStart(
+    accountId: AccountId,
     request: GdbStartRequest,
     signal?: AbortSignal,
   ): ReturnType<GdbSessionManager['start']> {
-    return this.#gdb.start(request, signal)
+    return this.#gdb.start(accountId, request, signal)
   }
 
   public async gdbSnapshot(
+    accountId: AccountId,
     request: GdbSnapshotRequest,
     sessionId?: SessionId,
   ): Promise<GdbSnapshot> {
-    const snapshot = await this.#gdb.snapshot(request)
+    const snapshot = await this.#gdb.snapshot(accountId, request)
     if (sessionId !== undefined) await this.injectToSession(sessionId, snapshot.snippet)
     return snapshot
   }
 
-  public gdbStop(): ReturnType<GdbSessionManager['stop']> {
-    return this.#gdb.stop()
+  public gdbStop(accountId: AccountId): ReturnType<GdbSessionManager['stop']> {
+    return this.#gdb.stop(accountId)
   }
 
   public desktopMcpStatus(): ReturnType<DesktopMcpManager['status']> {
@@ -303,7 +336,7 @@ export class DefaultWinDebugService implements WinDebugService {
     this.#detachHotplug?.()
     await Promise.allSettled([
       ...(hotplug === undefined ? [] : [hotplug]),
-      this.#gdb.stop(),
+      this.#gdb.forceStop(),
       this.#mcp.stop(),
       this.#hub.dispose(),
     ])

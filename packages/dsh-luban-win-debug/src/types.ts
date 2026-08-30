@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   ChannelDataEvent,
   ChannelEndpoint,
   ChannelHandle,
@@ -67,6 +68,7 @@ export interface SerialProvider {
 }
 
 export interface ChannelLine {
+  readonly accountId: AccountId
   readonly sequence: number
   readonly channelId: string
   readonly endpoint: ChannelEndpoint
@@ -78,6 +80,7 @@ export type WinDebugEvent =
   | { readonly type: 'line'; readonly line: ChannelLine }
   | {
       readonly type: 'channel-status'
+      readonly accountId: AccountId
       readonly channelId: string
       readonly endpoint: ChannelEndpoint
       readonly event: ChannelDataEvent
@@ -89,8 +92,10 @@ export type WinDebugEvent =
       readonly removed: readonly ChannelEndpoint[]
       readonly endpoints: readonly ChannelEndpoint[]
     }
+  | { readonly type: 'resync'; readonly accountId: AccountId }
 
 export interface ManagedChannel {
+  readonly accountId: AccountId
   readonly id: string
   readonly endpoint: ChannelEndpoint
   readonly handle: ChannelHandle
@@ -132,9 +137,14 @@ export interface TemplateRunResult extends ExecResult {
 }
 
 export interface TemplateExecutionArtifact {
+  readonly accountId: AccountId
   readonly result: TemplateRunResult
-  readonly snippet: SnippetFile
+  readonly snippet: AccountSnippetFile
   readonly injected: boolean
+}
+
+export interface AccountSnippetFile extends SnippetFile {
+  readonly accountId: AccountId
 }
 
 export interface AndroidDevice {
@@ -145,6 +155,7 @@ export interface AndroidDevice {
 }
 
 export interface GdbSnapshot {
+  readonly accountId: AccountId
   readonly id: string
   readonly createdAt: number
   readonly target: string
@@ -152,7 +163,7 @@ export interface GdbSnapshot {
   readonly variables: readonly string[]
   readonly registers: boolean
   readonly result: ExecResult
-  readonly snippet: SnippetFile
+  readonly snippet: AccountSnippetFile
 }
 
 export interface DesktopMcpStatus {

@@ -9,7 +9,14 @@ import { describe, expect, it } from 'vitest'
 import { SerialChannelAdapter } from '../src/serial.js'
 import { DshSessionInjection } from '../src/session-injector.js'
 import { DefaultWinDebugService } from '../src/service.js'
-import { FakeCommandRunner, FakeSerialProvider, flush, testConfig } from './helpers.js'
+import {
+  FakeCommandRunner,
+  FakeSerialProvider,
+  flush,
+  memoryAccountSessions,
+  TEST_ACCOUNT,
+  testConfig,
+} from './helpers.js'
 
 function inboxBackedAgent(context: Context, session: Session): Agent {
   const inbox = new Inbox(session, {
@@ -62,10 +69,11 @@ describe('serial snippet session injection', (): void => {
       adapters: [new SerialChannelAdapter(serialProvider)],
       commands: new FakeCommandRunner(),
       sessionInjection: new DshSessionInjection(context.agents),
+      accountSessions: memoryAccountSessions([[TEST_ACCOUNT, asSessionId(targetSession.id)]]),
     })
 
     try {
-      const channel = await service.open('serial:COM3')
+      const channel = await service.open(TEST_ACCOUNT, 'serial:COM3')
       serialProvider.connections[0]?.emit(
         [
           'outside-before',
@@ -77,20 +85,22 @@ describe('serial snippet session injection', (): void => {
         ].join('\n'),
       )
       await flush()
-      const lines = service.lines(channel.id)
+      const lines = service.lines(TEST_ACCOUNT, channel.id)
       const from = lines.find((line): boolean => line.text === 'boot ok')?.sequence
       const to = lines.find((line): boolean => line.text === 'fatal: target halted')?.sequence
       if (from === undefined || to === undefined) throw new Error('missing selected serial lines')
 
       const snippet = await service.captureAndInject(
+        TEST_ACCOUNT,
         channel.id,
         { from, to },
         asSessionId(targetSession.id),
       )
 
-      expect(dirname(snippet.path)).toBe(config.snippet.dir)
+      expect(dirname(dirname(snippet.path))).toBe(config.snippet.dir)
       expect(basename(snippet.path)).toMatch(/^serial-\d+-[0-9a-f-]+\.log$/u)
-      expect(await readdir(config.snippet.dir)).toEqual([basename(snippet.path)])
+      expect(await readdir(dirname(snippet.path))).toEqual([basename(snippet.path)])
+      expect(snippet.accountId).toBe(TEST_ACCOUNT)
       expect(await readFile(snippet.path, 'utf8')).toBe(`${snippet.content}\n`)
       expect(snippet.content).toContain('boot ok')
       expect(snippet.content).toContain('token=[REDACTED]')

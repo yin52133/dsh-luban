@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService, ChannelKind } from 'dsh-luban-core'
+import type { AccountId, AuthService, ChannelKind, SessionId } from 'dsh-luban-core'
 import { LubanError, asSessionId, isLubanError, modulePrefix } from 'dsh-luban-core'
 import type { DefaultWinDebugService } from './service.js'
 import type { WinDebugEvent } from './types.js'
@@ -19,6 +19,23 @@ const CHANNEL_KINDS = new Set<ChannelKind>([
 interface EventEnvelope {
   readonly id: number
   readonly data: WinDebugEvent
+}
+
+interface AccountEventStream {
+  sequence: number
+  readonly events: EventEnvelope[]
+}
+
+export function eventVisibleToAccount(event: WinDebugEvent, accountId: AccountId): boolean {
+  switch (event.type) {
+    case 'endpoints-changed':
+      return true
+    case 'line':
+      return event.line.accountId === accountId
+    case 'channel-status':
+    case 'resync':
+      return event.accountId === accountId
+  }
 }
 
 function record(value: unknown, label = 'body'): Readonly<Record<string, unknown>> {
@@ -128,7 +145,7 @@ async function authenticate(
   response: ServerResponse,
   auth: AuthService,
   path: string,
-): Promise<boolean> {
+): Promise<AccountId | null> {
   const decision = await auth.middleware()({
     path,
     method: request.method ?? 'GET',
@@ -136,7 +153,13 @@ async function authenticate(
     cookie: request.headers.cookie,
     sourceIp: sourceIp(request),
   })
-  if (decision.allowed) return true
+  if (decision.allowed && decision.account !== undefined) return decision.account.accountId
+  if (decision.allowed) {
+    sendJson(response, 401, {
+      error: { code: 'E_AUTH_REQUIRED', message: 'Authentication required' },
+    })
+    return null
+  }
   if (decision.redirectTo !== undefined) {
     response.writeHead(decision.status, {
       location: decision.redirectTo,
@@ -151,13 +174,25 @@ async function authenticate(
       },
     })
   }
-  return false
+  return null
+}
+
+async function requireOwnedSession(
+  auth: AuthService,
+  accountId: AccountId,
+  sessionId: SessionId,
+): Promise<void> {
+  if ((await auth.accountSessions.ownerOf(sessionId)) !== accountId) {
+    throw new LubanError('E_NOT_FOUND', `Session ${sessionId} was not found`)
+  }
 }
 
 function errorStatus(error: LubanError): number {
   switch (error.code) {
     case 'E_AUTH_REQUIRED':
       return 401
+    case 'E_ACCOUNT_SCOPE_MISMATCH':
+      return 403
     case 'E_NOT_FOUND':
       return 404
     case 'E_INVALID_INPUT':
@@ -196,18 +231,17 @@ async function withDisconnectSignal<Value>(
 export class WinDebugHttpApi {
   readonly #service: DefaultWinDebugService
   readonly #auth: AuthService
-  readonly #events: EventEnvelope[] = []
-  readonly #clients = new Set<ServerResponse>()
+  readonly #streams = new Map<AccountId, AccountEventStream>()
+  readonly #clients = new Map<ServerResponse, AccountId>()
   readonly #unsubscribe: () => void
   readonly #heartbeat: ReturnType<typeof setInterval>
-  #sequence = 0
 
   public constructor(service: DefaultWinDebugService, auth: AuthService) {
     this.#service = service
     this.#auth = auth
     this.#unsubscribe = service.subscribe((event): void => this.#publish(event))
     this.#heartbeat = setInterval((): void => {
-      for (const response of [...this.#clients]) {
+      for (const response of [...this.#clients.keys()]) {
         if (!response.write(': heartbeat\n\n')) this.#removeClient(response)
       }
     }, 15_000)
@@ -223,7 +257,8 @@ export class WinDebugHttpApi {
       if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) {
         throw new LubanError('E_NOT_FOUND', 'Route not found')
       }
-      if (!(await authenticate(request, response, this.#auth, url.pathname))) return
+      const accountId = await authenticate(request, response, this.#auth, url.pathname)
+      if (accountId === null) return
       const path = url.pathname.slice(PREFIX.length) || '/'
       const method = request.method ?? 'GET'
 
@@ -231,13 +266,14 @@ export class WinDebugHttpApi {
         sendJson(response, 200, {
           status: 'ok',
           platform: 'win32',
-          active: this.#service.activeChannels().map((channel) => ({
+          active: this.#service.activeChannels(accountId).map((channel) => ({
+            accountId: channel.accountId,
             id: channel.id,
             endpoint: channel.endpoint,
             openedAt: channel.openedAt,
           })),
           adapterErrors: this.#service.endpointErrors(),
-          gdb: this.#service.gdbStatus(),
+          gdb: this.#service.gdbStatus(accountId),
           desktopMcp: this.#service.desktopMcpStatus(),
         })
         return
@@ -256,7 +292,8 @@ export class WinDebugHttpApi {
       }
       if (method === 'GET' && path === '/channels') {
         sendJson(response, 200, {
-          channels: this.#service.activeChannels().map((channel) => ({
+          channels: this.#service.activeChannels(accountId).map((channel) => ({
+            accountId: channel.accountId,
             id: channel.id,
             endpoint: channel.endpoint,
             openedAt: channel.openedAt,
@@ -275,19 +312,24 @@ export class WinDebugHttpApi {
             ? undefined
             : integer(body.timeoutMs, 'timeoutMs', 100, 300_000)
         const channel = await withDisconnectSignal(response, async (signal) =>
-          this.#service.open(requiredString(body.endpointId, 'endpointId', 512), {
+          this.#service.open(accountId, requiredString(body.endpointId, 'endpointId', 512), {
             ...(baudRate === undefined ? {} : { baudRate }),
             ...(timeoutMs === undefined ? {} : { timeoutMs }),
             signal,
           }),
         )
         sendJson(response, 201, {
-          channel: { id: channel.id, endpoint: channel.endpoint, openedAt: channel.openedAt },
+          channel: {
+            accountId: channel.accountId,
+            id: channel.id,
+            endpoint: channel.endpoint,
+            openedAt: channel.openedAt,
+          },
         })
         return
       }
       if (method === 'GET' && path === '/events') {
-        this.#connectEvents(request, response)
+        this.#connectEvents(request, response, accountId)
         return
       }
       if (method === 'GET' && path === '/templates') {
@@ -299,13 +341,14 @@ export class WinDebugHttpApi {
         return
       }
       if (method === 'GET' && path === '/gdb') {
-        sendJson(response, 200, this.#service.gdbStatus())
+        sendJson(response, 200, this.#service.gdbStatus(accountId))
         return
       }
       if (method === 'POST' && path === '/gdb/start') {
         const body = record(await jsonBody(request))
         const status = await withDisconnectSignal(response, async (signal) =>
           this.#service.gdbStart(
+            accountId,
             {
               interfaceConfig: requiredString(body.interfaceConfig, 'interfaceConfig', 4096),
               targetConfig: requiredString(body.targetConfig, 'targetConfig', 4096),
@@ -327,9 +370,14 @@ export class WinDebugHttpApi {
             : stringArray(body.breakpoints, 'breakpoints', 128)
         const variables =
           body.variables === undefined ? undefined : stringArray(body.variables, 'variables', 256)
-        const sessionId = optionalString(body.sessionId, 'sessionId', 512)
+        const rawSessionId = optionalString(body.sessionId, 'sessionId', 512)
+        const sessionId = rawSessionId === undefined ? undefined : asSessionId(rawSessionId)
+        if (sessionId !== undefined) {
+          await requireOwnedSession(this.#auth, accountId, sessionId)
+        }
         const snapshot = await withDisconnectSignal(response, async (signal) =>
           this.#service.gdbSnapshot(
+            accountId,
             {
               executable: requiredString(body.executable, 'executable', 4096),
               ...(breakpoints === undefined ? {} : { breakpoints }),
@@ -337,14 +385,14 @@ export class WinDebugHttpApi {
               ...(body.registers === undefined ? {} : { registers: body.registers === true }),
               signal,
             },
-            sessionId === undefined ? undefined : asSessionId(sessionId),
+            sessionId,
           ),
         )
         sendJson(response, 201, { snapshot })
         return
       }
       if (method === 'POST' && path === '/gdb/stop') {
-        sendJson(response, 200, await this.#service.gdbStop())
+        sendJson(response, 200, await this.#service.gdbStop(accountId))
         return
       }
       if (method === 'GET' && path === '/desktop-mcp') {
@@ -380,13 +428,18 @@ export class WinDebugHttpApi {
         if (templateId === undefined)
           throw new LubanError('E_INVALID_INPUT', 'Template id is missing')
         const body = record(await jsonBody(request))
-        const sessionId = optionalString(body.sessionId, 'sessionId', 512)
+        const rawSessionId = optionalString(body.sessionId, 'sessionId', 512)
+        const sessionId = rawSessionId === undefined ? undefined : asSessionId(rawSessionId)
+        if (sessionId !== undefined) {
+          await requireOwnedSession(this.#auth, accountId, sessionId)
+        }
         const artifact = await withDisconnectSignal(response, async (signal) =>
           this.#service.runTemplateArtifact(
+            accountId,
             decodeURIComponent(templateId),
             stringMap(body.params, 'params'),
             optionalString(body.confirmation, 'confirmation', 128),
-            sessionId === undefined ? undefined : asSessionId(sessionId),
+            sessionId,
             signal,
           ),
         )
@@ -403,7 +456,7 @@ export class WinDebugHttpApi {
         const id = decodeURIComponent(encodedId)
         if (method === 'GET' && action === 'logs') {
           sendJson(response, 200, {
-            lines: this.#service.lines(id, {
+            lines: this.#service.lines(accountId, id, {
               ...(url.searchParams.has('q') ? { query: url.searchParams.get('q') ?? '' } : {}),
               regex: url.searchParams.get('regex') === 'true',
               caseSensitive: url.searchParams.get('caseSensitive') === 'true',
@@ -412,20 +465,20 @@ export class WinDebugHttpApi {
           return
         }
         if (method === 'POST' && action === 'close') {
-          await this.#service.close(id)
+          await this.#service.close(accountId, id)
           sendJson(response, 200, { closed: true })
           return
         }
         if (method === 'POST' && action === 'write') {
           const body = record(await jsonBody(request))
-          await this.#service.write(id, requiredString(body.data, 'data', 64 * 1024))
+          await this.#service.write(accountId, id, requiredString(body.data, 'data', 64 * 1024))
           sendJson(response, 200, { written: true })
           return
         }
         if (method === 'POST' && action === 'exec') {
           const body = record(await jsonBody(request))
           const result = await withDisconnectSignal(response, async (signal) =>
-            this.#service.exec(id, requiredString(body.command, 'command'), signal),
+            this.#service.exec(accountId, id, requiredString(body.command, 'command'), signal),
           )
           sendJson(response, 200, {
             result,
@@ -434,14 +487,19 @@ export class WinDebugHttpApi {
         }
         if (method === 'POST' && action === 'capture') {
           const body = record(await jsonBody(request))
-          const sessionId = optionalString(body.sessionId, 'sessionId', 512)
+          const rawSessionId = optionalString(body.sessionId, 'sessionId', 512)
+          const sessionId = rawSessionId === undefined ? undefined : asSessionId(rawSessionId)
+          if (sessionId !== undefined) {
+            await requireOwnedSession(this.#auth, accountId, sessionId)
+          }
           const snippet = await this.#service.captureAndInject(
+            accountId,
             id,
             {
               from: integer(body.from, 'from', 1, Number.MAX_SAFE_INTEGER),
               to: integer(body.to, 'to', 1, Number.MAX_SAFE_INTEGER),
             },
-            sessionId === undefined ? undefined : asSessionId(sessionId),
+            sessionId,
           )
           sendJson(response, 201, { snippet, injected: sessionId !== undefined })
           return
@@ -463,33 +521,63 @@ export class WinDebugHttpApi {
   public dispose(): void {
     clearInterval(this.#heartbeat)
     this.#unsubscribe()
-    for (const response of [...this.#clients]) response.end()
+    for (const response of [...this.#clients.keys()]) response.end()
     this.#clients.clear()
   }
 
-  #connectEvents(request: IncomingMessage, response: ServerResponse): void {
+  #connectEvents(request: IncomingMessage, response: ServerResponse, accountId: AccountId): void {
     response.statusCode = 200
     securityHeaders(response)
     response.setHeader('content-type', 'text/event-stream; charset=utf-8')
     response.setHeader('connection', 'keep-alive')
     response.setHeader('x-accel-buffering', 'no')
     response.flushHeaders()
+    const stream = this.#streamFor(accountId)
     const rawId = request.headers['last-event-id']
     const requested = Number.parseInt(Array.isArray(rawId) ? (rawId[0] ?? '') : (rawId ?? ''), 10)
-    const oldest = this.#events[0]?.id ?? this.#sequence
-    if (Number.isSafeInteger(requested) && requested >= oldest - 1) {
-      for (const event of this.#events) if (event.id > requested) this.#writeEvent(response, event)
-    }
-    response.write('retry: 2000\n\n')
-    this.#clients.add(response)
+    const oldest = stream.events[0]?.id ?? stream.sequence + 1
+    const resyncRequired =
+      !Number.isSafeInteger(requested) || requested < oldest - 1 || requested > stream.sequence
+    this.#clients.set(response, accountId)
     response.once('close', (): void => this.#removeClient(response))
+    response.write('retry: 2000\n\n')
+    if (resyncRequired) {
+      this.#writeEvent(response, {
+        id: stream.sequence,
+        data: { type: 'resync', accountId },
+      })
+      return
+    }
+    for (const event of stream.events) {
+      if (event.id > requested) this.#writeEvent(response, event)
+    }
   }
 
   #publish(data: WinDebugEvent): void {
-    const event: EventEnvelope = { id: ++this.#sequence, data }
-    this.#events.push(event)
-    if (this.#events.length > 512) this.#events.shift()
-    for (const response of [...this.#clients]) this.#writeEvent(response, event)
+    if (data.type === 'endpoints-changed') {
+      for (const accountId of this.#streams.keys()) this.#publishFor(accountId, data)
+      return
+    }
+    const accountId = data.type === 'line' ? data.line.accountId : data.accountId
+    this.#publishFor(accountId, data)
+  }
+
+  #publishFor(accountId: AccountId, data: WinDebugEvent): void {
+    const stream = this.#streamFor(accountId)
+    const event: EventEnvelope = { id: ++stream.sequence, data }
+    stream.events.push(event)
+    if (stream.events.length > 512) stream.events.shift()
+    for (const [response, clientAccountId] of [...this.#clients]) {
+      if (clientAccountId === accountId) this.#writeEvent(response, event)
+    }
+  }
+
+  #streamFor(accountId: AccountId): AccountEventStream {
+    const existing = this.#streams.get(accountId)
+    if (existing !== undefined) return existing
+    const created: AccountEventStream = { sequence: 0, events: [] }
+    this.#streams.set(accountId, created)
+    return created
   }
 
   #writeEvent(response: ServerResponse, event: EventEnvelope): void {

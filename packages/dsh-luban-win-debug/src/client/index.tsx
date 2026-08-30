@@ -206,13 +206,14 @@ export function WinDebugSection(_props: SettingsSectionOwnerProps): ReactNode {
           if (line.channelId === channelId)
             setLines((current): UiLine[] => [...current.slice(-499), line])
         } else if (event.type === 'endpoints-changed') void refresh()
+        else if (event.type === 'resync') void Promise.all([refresh(), refreshLogs()])
       } catch {
         setError('Live debug event was invalid')
       }
     })
     events.onerror = (): void => setError('Live debug stream disconnected; retrying')
     return (): void => events.close()
-  }, [channelId, refresh])
+  }, [channelId, refresh, refreshLogs])
 
   useEffect(() => {
     void refreshLogs().catch((): undefined => undefined)

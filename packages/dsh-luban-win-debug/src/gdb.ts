@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
-import type { ChannelEndpoint } from 'dsh-luban-core'
+import type { AccountId, ChannelEndpoint } from 'dsh-luban-core'
 import { LubanError, redactSecrets } from 'dsh-luban-core'
 import { assertAllowedPath, type Config } from './config.js'
 import type { SnippetStore } from './snippet-store.js'
@@ -63,6 +63,10 @@ export interface GdbStatus {
   readonly recentOutput: readonly ManagedProcessEvent[]
 }
 
+export interface GdbOccupancyStatus {
+  readonly state: 'stopped' | 'running'
+}
+
 function safeBreakpoint(value: string): string {
   if (
     !/^(?:[A-Za-z_][A-Za-z0-9_:.]*|[A-Za-z0-9_./\\-]+:\d{1,8}|\*0x[0-9A-Fa-f]{1,16})$/u.test(value)
@@ -97,8 +101,10 @@ export class GdbSessionManager {
   #pump: Promise<void> | undefined
   #release: (() => void) | undefined
   #starting: Promise<GdbStatus> | undefined
+  #startingOwner: AccountId | undefined
   #stopping: Promise<GdbStatus> | undefined
   #startController: AbortController | undefined
+  #owner: AccountId | undefined
 
   public constructor(options: {
     readonly config: Config
@@ -125,8 +131,17 @@ export class GdbSessionManager {
     }
   }
 
-  public start(request: GdbStartRequest, signal?: AbortSignal): Promise<GdbStatus> {
+  public statusFor(accountId: AccountId): GdbStatus | GdbOccupancyStatus {
+    return this.#contextOwner() === accountId ? this.status() : { state: this.status().state }
+  }
+
+  public start(
+    accountId: AccountId,
+    request: GdbStartRequest,
+    signal?: AbortSignal,
+  ): Promise<GdbStatus> {
     if (this.#process !== undefined || this.#starting !== undefined) {
+      this.#requireOwner(accountId)
       throw new LubanError('E_INVALID_TRANSITION', 'GDB server is already running or starting')
     }
     if (this.#stopping !== undefined) {
@@ -136,17 +151,23 @@ export class GdbSessionManager {
     this.#startController = controller
     const combined =
       signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal])
-    const operation = this.#start(request, combined)
+    this.#startingOwner = accountId
+    const operation = this.#start(accountId, request, combined)
     this.#starting = operation
     const reset = (): void => {
       if (this.#starting === operation) this.#starting = undefined
+      if (this.#startingOwner === accountId) this.#startingOwner = undefined
       if (this.#startController === controller) this.#startController = undefined
     }
     void operation.then(reset, reset)
     return operation
   }
 
-  async #start(request: GdbStartRequest, signal: AbortSignal): Promise<GdbStatus> {
+  async #start(
+    accountId: AccountId,
+    request: GdbStartRequest,
+    signal: AbortSignal,
+  ): Promise<GdbStatus> {
     if (signal.aborted) {
       throw new LubanError('E_CHANNEL_UNAVAILABLE', 'GDB server start was cancelled', {
         retriable: true,
@@ -178,6 +199,7 @@ export class GdbSessionManager {
         ...(invocation.cwd === undefined ? {} : { cwd: invocation.cwd }),
         signal,
       })
+      this.#owner = accountId
       this.#release = release
     } catch (error: unknown) {
       release?.()
@@ -188,7 +210,10 @@ export class GdbSessionManager {
       try {
         for await (const event of owned.events()) {
           this.#appendOutput(event)
-          if (event.type === 'exit' && this.#process === owned) this.#process = undefined
+          if (event.type === 'exit' && this.#process === owned) {
+            this.#process = undefined
+            this.#owner = undefined
+          }
         }
       } catch (error: unknown) {
         this.#appendOutput({
@@ -196,7 +221,10 @@ export class GdbSessionManager {
           text: error instanceof Error ? error.message : 'OpenOCD event stream failed',
           at: Date.now(),
         })
-        if (this.#process === owned) this.#process = undefined
+        if (this.#process === owned) {
+          this.#process = undefined
+          this.#owner = undefined
+        }
       } finally {
         if (this.#release === release) {
           this.#release = undefined
@@ -257,7 +285,8 @@ export class GdbSessionManager {
     }
   }
 
-  public async snapshot(request: GdbSnapshotRequest): Promise<GdbSnapshot> {
+  public async snapshot(accountId: AccountId, request: GdbSnapshotRequest): Promise<GdbSnapshot> {
+    this.#requireOwner(accountId)
     if (this.#process === undefined)
       throw new LubanError('E_INVALID_TRANSITION', 'GDB server is not running')
     if ((request.breakpoints?.length ?? 0) > 128 || (request.variables?.length ?? 0) > 256) {
@@ -312,8 +341,9 @@ export class GdbSessionManager {
       result.stdout,
       result.stderr,
     ].join('\n')
-    const snippet = await this.#snippets.write(endpoint, content, createdAt, Date.now())
+    const snippet = await this.#snippets.write(accountId, endpoint, content, createdAt, Date.now())
     return {
+      accountId,
       id: randomUUID(),
       createdAt,
       target: this.#config.gdb.target,
@@ -325,7 +355,13 @@ export class GdbSessionManager {
     }
   }
 
-  public stop(): Promise<GdbStatus> {
+  public stop(accountId: AccountId): Promise<GdbStatus> {
+    this.#requireOwner(accountId)
+    return this.forceStop()
+  }
+
+  /** Internal lifecycle cleanup that intentionally bypasses account ownership. */
+  public forceStop(): Promise<GdbStatus> {
     if (this.#stopping === undefined) {
       const operation = this.#stop()
       this.#stopping = operation
@@ -335,6 +371,17 @@ export class GdbSessionManager {
       void operation.then(reset, reset)
     }
     return this.#stopping
+  }
+
+  #contextOwner(): AccountId | undefined {
+    return this.#startingOwner ?? this.#owner
+  }
+
+  #requireOwner(accountId: AccountId): void {
+    const owner = this.#contextOwner()
+    if (owner !== undefined && owner !== accountId) {
+      throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'GDB session belongs to another account')
+    }
   }
 
   async #stop(): Promise<GdbStatus> {
@@ -358,6 +405,8 @@ export class GdbSessionManager {
         await pump
       } finally {
         release?.()
+        this.#owner = undefined
+        this.#startingOwner = undefined
       }
     }
     return this.status()

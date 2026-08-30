@@ -224,14 +224,13 @@ export class DeviceExecutionGate {
       if (channel !== undefined) {
         throw new LubanError(
           'E_CHANNEL_UNAVAILABLE',
-          `${claim.label} is occupied by Luban channel ${channel.id}; close that channel before retrying`,
+          `${claim.label} is occupied by another Luban channel; close it before retrying`,
           {
             retriable: true,
             details: {
               reason: 'occupied',
               resource: claim.key,
               owner: 'luban-active-channel',
-              channelId: channel.id,
             },
           },
         )

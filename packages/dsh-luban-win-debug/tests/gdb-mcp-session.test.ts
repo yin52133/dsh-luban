@@ -14,6 +14,7 @@ import {
   FakeDesktopMcpClient,
   FakeManagedProcessRunner,
   flush,
+  TEST_ACCOUNT,
   testConfig,
 } from './helpers.js'
 
@@ -57,7 +58,7 @@ describe('GDB session manager', (): void => {
     const targetConfig = join(root, 'target.cfg')
     const executable = join(root, 'firmware.elf')
 
-    await manager.start({ interfaceConfig, targetConfig })
+    await manager.start(TEST_ACCOUNT, { interfaceConfig, targetConfig })
     expect(manager.status()).toMatchObject({ state: 'running', pid: 4242 })
     expect(processes.calls[0]).toMatchObject({
       command: 'openocd.exe',
@@ -69,7 +70,7 @@ describe('GDB session manager', (): void => {
       },
     })
 
-    const snapshot = await manager.snapshot({
+    const snapshot = await manager.snapshot(TEST_ACCOUNT, {
       executable,
       breakpoints: ['main', 'main.c:42'],
       variables: ['counter'],
@@ -103,12 +104,13 @@ describe('GDB session manager', (): void => {
     ])
     expect(snapshot.snippet.content).toContain('r0 0x00000001')
     expect(snapshot.snippet.endpoint.kind).toBe('gdb')
-    await expect(manager.snapshot({ executable, variables: ['dangerous()'] })).rejects.toThrow(
-      'Unsafe GDB expression',
-    )
-    await manager.stop()
+    await expect(
+      manager.snapshot(TEST_ACCOUNT, { executable, variables: ['dangerous()'] }),
+    ).rejects.toThrow('Unsafe GDB expression')
+    await manager.stop(TEST_ACCOUNT)
     expect(processes.processes[0]?.stop).toHaveBeenCalledOnce()
     expect(manager.status().state).toBe('stopped')
+    expect(manager.statusFor(TEST_ACCOUNT)).toEqual({ state: 'stopped' })
   })
 
   it('bounds and sanitizes process output including event-stream failures', async (): Promise<void> => {
@@ -129,7 +131,7 @@ describe('GDB session manager', (): void => {
       snippets: new SnippetStore(config.snippet),
     })
 
-    await manager.start({
+    await manager.start(TEST_ACCOUNT, {
       interfaceConfig: join(root, 'interface.cfg'),
       targetConfig: join(root, 'target.cfg'),
     })
@@ -212,7 +214,7 @@ describe('GDB session manager', (): void => {
       ),
     ).toBe(true)
 
-    await manager.stop()
+    await manager.stop(TEST_ACCOUNT)
   })
 
   it('rejects an OpenOCD config outside the configured root before starting', async (): Promise<void> => {
@@ -228,7 +230,7 @@ describe('GDB session manager', (): void => {
       snippets: new SnippetStore(config.snippet),
     })
     await expect(
-      manager.start({
+      manager.start(TEST_ACCOUNT, {
         interfaceConfig: join(root, '..', 'outside.cfg'),
         targetConfig: join(root, 'target.cfg'),
       }),
@@ -258,7 +260,7 @@ describe('GDB session manager', (): void => {
     const targetConfig = join(root, 'target.cfg')
     const firmware = join(root, 'firmware.bin')
 
-    await manager.start({ interfaceConfig, targetConfig })
+    await manager.start(TEST_ACCOUNT, { interfaceConfig, targetConfig })
     await expect(
       templates.run('openocd-flash', {
         interfaceConfig: flashInterfaceConfig,
@@ -268,7 +270,7 @@ describe('GDB session manager', (): void => {
     ).rejects.toThrow('occupied by running template openocd-server')
     expect(commands.calls).toHaveLength(0)
 
-    await manager.stop()
+    await manager.stop(TEST_ACCOUNT)
     await expect(
       templates.run('openocd-flash', {
         interfaceConfig: flashInterfaceConfig,
@@ -295,7 +297,7 @@ describe('GDB session manager', (): void => {
       preflight,
     })
 
-    await manager.start({
+    await manager.start(TEST_ACCOUNT, {
       interfaceConfig: join(root, 'interface.cfg'),
       targetConfig: join(root, 'target.cfg'),
     })
@@ -306,7 +308,7 @@ describe('GDB session manager', (): void => {
       return Promise.reject(new Error('stop failed'))
     })
 
-    await expect(manager.stop()).rejects.toThrow('stop failed')
+    await expect(manager.stop(TEST_ACCOUNT)).rejects.toThrow('stop failed')
     expect(release).toHaveBeenCalledOnce()
     expect(manager.status().state).toBe('stopped')
   })
@@ -316,15 +318,15 @@ describe('GDB session manager', (): void => {
     const processes = new FakeManagedProcessRunner()
     const service = new DefaultWinDebugService(testConfig(root), { processes })
     try {
-      await service.gdbStart({
+      await service.gdbStart(TEST_ACCOUNT, {
         interfaceConfig: join(root, 'interface.cfg'),
         targetConfig: join(root, 'target.cfg'),
       })
 
-      const channel = await service.open('gdb:local')
+      const channel = await service.open(TEST_ACCOUNT, 'gdb:local')
       expect(channel.endpoint.params.target).toBe('127.0.0.1:3333')
-      await service.close(channel.id)
-      await service.gdbStop()
+      await service.close(TEST_ACCOUNT, channel.id)
+      await service.gdbStop(TEST_ACCOUNT)
     } finally {
       await service.dispose()
     }
@@ -346,20 +348,20 @@ describe('GDB session manager', (): void => {
       processes,
       snippets: new SnippetStore(config.snippet),
     })
-    const starting = manager.start({
+    const starting = manager.start(TEST_ACCOUNT, {
       interfaceConfig: join(root, 'interface.cfg'),
       targetConfig: join(root, 'target.cfg'),
     })
     await flush()
 
     expect(() =>
-      manager.start({
+      manager.start(TEST_ACCOUNT, {
         interfaceConfig: join(root, 'other-interface.cfg'),
         targetConfig: join(root, 'other-target.cfg'),
       }),
     ).toThrow('already running or starting')
-    const stopping = manager.stop()
-    expect(manager.stop()).toBe(stopping)
+    const stopping = manager.stop(TEST_ACCOUNT)
+    expect(manager.stop(TEST_ACCOUNT)).toBe(stopping)
     let stopSettled = false
     void stopping.finally((): void => {
       stopSettled = true
