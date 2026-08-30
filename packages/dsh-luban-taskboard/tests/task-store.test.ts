@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Actor, Clock } from 'dsh-luban-core'
-import { asActorId, asHostId, asSessionId } from 'dsh-luban-core'
+import { asAccountId, asActorId, asHostId, asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import { createLedgerStore } from '../src/ledger.js'
@@ -50,6 +50,44 @@ afterEach(async (): Promise<void> => {
 })
 
 describe('JsonTaskStore', (): void => {
+  it('partitions queries, imports, and claims by account', async (): Promise<void> => {
+    const { store, claims } = await harness()
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    const aliceTask = await store.create({
+      accountId: alice,
+      title: 'Scoped task',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'Alice owns this task',
+    })
+    const bobTask = await store.create({
+      accountId: bob,
+      title: 'Scoped task',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'Bob owns this task',
+    })
+
+    expect((await store.query({ accountId: alice })).map((task) => task.id)).toEqual([aliceTask.id])
+    expect((await store.query({ accountId: bob })).map((task) => task.id)).toEqual([bobTask.id])
+    expect(await store.import([{ title: 'Imported' }], alice)).toMatchObject({ imported: 1 })
+    expect(await store.import([{ title: 'Imported' }], bob)).toMatchObject({ imported: 1 })
+
+    const claim = await claims.claim(
+      { accountId: bob },
+      {
+        actor: { kind: 'agent', id: asActorId('bob-agent'), accountId: bob },
+        sessionId: asSessionId('bob-session'),
+        host: asHostId('ubuntu'),
+      },
+    )
+    expect(claim).toMatchObject({ ok: true, task: { id: bobTask.id, accountId: 'bob' } })
+    expect(await store.get(aliceTask.id)).toMatchObject({ status: 'todo', accountId: 'alice' })
+  })
+
   it('enforces acceptance, legal transitions, and optimistic versions', async (): Promise<void> => {
     const { store } = await harness()
     const created = await store.create({

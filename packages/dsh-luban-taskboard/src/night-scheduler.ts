@@ -5,6 +5,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId as DshSessionId } from '@deepseek-ai/dsh-session'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {
+  AccountSessionRegistry,
   Actor,
   Clock,
   HostId,
@@ -270,7 +271,11 @@ export class DshAgentNightExecutor implements NightTaskExecutor {
         ref: report.ref,
         summary: `${report.summary} Evidence: ${report.evidence}`,
         at: this.#clock.now(),
-        by: { kind: 'agent', id: asActorId(sessionId) },
+        by: {
+          kind: 'agent',
+          id: asActorId(sessionId),
+          ...(task.accountId === undefined ? {} : { accountId: task.accountId }),
+        },
       }
     } finally {
       this.#handles.delete(handle)
@@ -293,6 +298,7 @@ export class DefaultNightScheduler implements NightScheduler {
   readonly #config: NightConfig
   readonly #hostScope: 'win' | 'ubuntu'
   readonly #hostId: HostId
+  readonly #accountSessions: AccountSessionRegistry | undefined
   readonly #clock: Clock
   readonly #taskExecutors = new Map<string, NightTaskExecutorRoute>()
   #timer: ReturnType<typeof setInterval> | undefined
@@ -306,6 +312,7 @@ export class DefaultNightScheduler implements NightScheduler {
     readonly config: NightConfig
     readonly hostScope: 'win' | 'ubuntu'
     readonly hostId?: HostId
+    readonly accountSessions?: AccountSessionRegistry
     readonly clock?: Clock
   }) {
     this.#store = options.store
@@ -314,6 +321,7 @@ export class DefaultNightScheduler implements NightScheduler {
     this.#config = options.config
     this.#hostScope = options.hostScope
     this.#hostId = options.hostId ?? asHostId(this.#hostScope)
+    this.#accountSessions = options.accountSessions
     this.#clock = options.clock ?? systemClock
   }
 
@@ -400,6 +408,9 @@ export class DefaultNightScheduler implements NightScheduler {
         throw new LubanError('E_IO', 'Claimed night task is missing its claim identity')
       }
       try {
+        if (claim.task.accountId !== undefined) {
+          await this.#accountSessions?.bind(claim.task.accountId, sessionId)
+        }
         const executor = this.#executorFor(claim.task)
         if (executor === undefined) {
           throw new LubanError('E_UNAVAILABLE', 'No night executor matches the claimed task')

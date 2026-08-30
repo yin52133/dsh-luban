@@ -84,6 +84,7 @@ export function apply(ctx: Context, input: Partial<TaskboardConfig> = {}): void 
     executor,
     config: config.night,
     hostScope,
+    accountSessions: ctx.lubanAuth.accountSessions,
     clock: systemClock,
   })
   const api = new TaskboardHttpApi({ store, claims, scheduler, auth: ctx.lubanAuth })

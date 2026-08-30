@@ -6,6 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AuthService, Clock } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -85,7 +86,11 @@ async function createLoopbackHarness(): Promise<LoopbackHarness> {
             : { allowed: false, status: 401 },
         )
     },
-  } as AuthService
+    accountSessions: {
+      bind: (): Promise<void> => Promise.resolve(),
+      ownerOf: () => Promise.resolve(null),
+    },
+  }
   const api = new TaskboardHttpApi({ store, claims, scheduler, auth })
   const server = createServer((request, response): void => {
     void api.handler(request, response)
@@ -356,6 +361,7 @@ describe('Taskboard React integration', (): void => {
     vi.stubGlobal('EventSource', events.constructor)
 
     const task = await harness.store.create({
+      accountId: asAccountId('ui-user'),
       title: 'Review overnight output',
       description: 'Generated while unattended',
       status: 'todo',
@@ -365,9 +371,17 @@ describe('Taskboard React integration', (): void => {
       tags: ['auto-ok'],
     })
     const claim = await harness.claims.claim(
-      { statuses: ['todo'], requireAcceptance: true },
       {
-        actor: { kind: 'agent', id: 'agent/nightly' as never },
+        accountId: asAccountId('ui-user'),
+        statuses: ['todo'],
+        requireAcceptance: true,
+      },
+      {
+        actor: {
+          kind: 'agent',
+          id: 'agent/nightly' as never,
+          accountId: asAccountId('ui-user'),
+        },
         sessionId: 'agent/nightly' as never,
         host: 'local' as never,
       },

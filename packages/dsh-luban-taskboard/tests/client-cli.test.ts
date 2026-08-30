@@ -194,7 +194,11 @@ describe('taskctl', (): void => {
               : { allowed: false, status: 401 },
           )
       },
-    } as AuthService
+      accountSessions: {
+        bind: (): Promise<void> => Promise.resolve(),
+        ownerOf: () => Promise.resolve(null),
+      },
+    }
     const api = new TaskboardHttpApi({ store, claims, scheduler, auth })
     const server = createServer((request, response): void => {
       void api.handler(request, response)

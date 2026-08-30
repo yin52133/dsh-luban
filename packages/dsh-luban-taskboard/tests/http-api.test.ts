@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AuthService, Clock } from 'dsh-luban-core'
+import { LubanError, asAccountId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import { TaskboardHttpApi } from '../src/http-api.js'
@@ -70,6 +71,41 @@ class StaticClock implements Clock {
   }
 }
 
+function testAuth(): Pick<AuthService, 'middleware' | 'accountSessions'> {
+  const owners = new Map<string, string>()
+  return {
+    middleware(): ReturnType<AuthService['middleware']> {
+      return (request) => {
+        const user =
+          request.cookie === 'session=ok'
+            ? 'alice'
+            : request.cookie === 'session=bob'
+              ? 'bob'
+              : undefined
+        return Promise.resolve(
+          user === undefined
+            ? { allowed: false, status: 401 }
+            : { allowed: true, status: 200, user },
+        )
+      }
+    },
+    accountSessions: {
+      bind(accountId, sessionId): Promise<void> {
+        const current = owners.get(sessionId)
+        if (current !== undefined && current !== accountId) {
+          throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'session belongs to another account')
+        }
+        owners.set(sessionId, accountId)
+        return Promise.resolve()
+      },
+      ownerOf(sessionId) {
+        const owner = owners.get(sessionId)
+        return Promise.resolve(owner === undefined ? null : asAccountId(owner))
+      },
+    },
+  }
+}
+
 afterEach(async (): Promise<void> => {
   await Promise.all(
     [...directories].map(async (directory): Promise<void> => {
@@ -103,16 +139,7 @@ describe('TaskboardHttpApi', (): void => {
       hostScope: 'ubuntu',
       clock,
     })
-    const auth = {
-      middleware(): ReturnType<AuthService['middleware']> {
-        return (request) =>
-          Promise.resolve(
-            request.cookie === 'session=ok'
-              ? { allowed: true, status: 200, user: 'alice' }
-              : { allowed: false, status: 401 },
-          )
-      },
-    }
+    const auth = testAuth()
     const api = new TaskboardHttpApi({ store, claims, scheduler, auth })
     const server = createServer((request, response): void => {
       void api.handler(request, response)
@@ -124,6 +151,7 @@ describe('TaskboardHttpApi', (): void => {
     const address = server.address() as AddressInfo
     const base = `http://127.0.0.1:${String(address.port)}/luban-taskboard`
     const headers = { cookie: 'session=ok', 'content-type': 'application/json' }
+    const bobHeaders = { cookie: 'session=bob', 'content-type': 'application/json' }
 
     const unauthorized = await fetch(`${base}/tasks`)
     expect(unauthorized.status).toBe(401)
@@ -137,17 +165,39 @@ describe('TaskboardHttpApi', (): void => {
         priority: 'P0',
         acceptance: 'Visible over HTTP',
         tags: ['auto-ok'],
+        accountId: 'bob',
       }),
     })
     expect(created.status).toBe(201)
     const createdJson = (await created.json()) as {
-      readonly task: { readonly id: string; readonly version: number }
+      readonly task: { readonly accountId: string; readonly id: string; readonly version: number }
     }
+    expect(createdJson.task.accountId).toBe('alice')
     const listed = await fetch(`${base}/tasks?status=todo`, { headers: { cookie: 'session=ok' } })
     const listedJson = (await listed.json()) as {
       readonly tasks: readonly { readonly title: string }[]
     }
     expect(listedJson.tasks.map((task) => task.title)).toEqual(['HTTP task'])
+    const bobList = (await (
+      await fetch(`${base}/tasks`, { headers: { cookie: 'session=bob' } })
+    ).json()) as { readonly tasks: readonly unknown[] }
+    expect(bobList.tasks).toEqual([])
+    expect(
+      (
+        await fetch(`${base}/tasks/${encodeURIComponent(createdJson.task.id)}`, {
+          headers: { cookie: 'session=bob' },
+        })
+      ).status,
+    ).toBe(404)
+    expect(
+      (
+        await fetch(`${base}/tasks/${encodeURIComponent(createdJson.task.id)}`, {
+          method: 'PATCH',
+          headers: bobHeaders,
+          body: JSON.stringify({ expectedVersion: 1, title: 'Bob must not mutate Alice' }),
+        })
+      ).status,
+    ).toBe(404)
 
     const dropped = await fetch(`${base}/tasks/${encodeURIComponent(createdJson.task.id)}`, {
       method: 'DELETE',
@@ -185,6 +235,30 @@ describe('TaskboardHttpApi', (): void => {
       readonly task: { readonly claim?: { readonly executionOwner?: string } | null }
     }
     expect(spoofed.task.claim?.executionOwner).toBeUndefined()
+
+    const bobClaimCandidate = await fetch(`${base}/tasks`, {
+      method: 'POST',
+      headers: bobHeaders,
+      body: JSON.stringify({
+        title: 'Bob claim candidate',
+        status: 'todo',
+        hostScope: 'ubuntu',
+        priority: 'P1',
+        acceptance: 'Bob owns the session context',
+        tags: ['bob-claim'],
+      }),
+    })
+    expect(bobClaimCandidate.status).toBe(201)
+    const crossAccountClaim = await fetch(`${base}/claim`, {
+      method: 'POST',
+      headers: bobHeaders,
+      body: JSON.stringify({
+        sessionId: 'luban-night-forged',
+        host: 'ubuntu',
+        tags: ['bob-claim'],
+      }),
+    })
+    expect(crossAccountClaim.status).toBe(404)
 
     const imported = await fetch(`${base}/import`, {
       method: 'POST',
@@ -236,7 +310,7 @@ describe('TaskboardHttpApi', (): void => {
     )
 
     const stream = await fetch(`${base}/events`, { headers: { cookie: 'session=ok' } })
-    const secondStream = await fetch(`${base}/events`, { headers: { cookie: 'session=ok' } })
+    const secondStream = await fetch(`${base}/events`, { headers: { cookie: 'session=bob' } })
     expect(stream.headers.get('content-type')).toContain('text/event-stream')
     if (stream.body === null || secondStream.body === null)
       throw new Error('SSE response has no body')
@@ -245,7 +319,9 @@ describe('TaskboardHttpApi', (): void => {
     const first = await reader.read()
     const secondBaseline = await secondReader.read()
     expect(new TextDecoder().decode(first.value)).toContain('event: baseline')
-    expect(new TextDecoder().decode(secondBaseline.value)).toContain('event: baseline')
+    const bobBaseline = new TextDecoder().decode(secondBaseline.value)
+    expect(bobBaseline).toContain('event: baseline')
+    expect(bobBaseline).not.toContain('HTTP task')
 
     const liveCreate = await fetch(`${base}/tasks`, {
       method: 'POST',
@@ -257,9 +333,19 @@ describe('TaskboardHttpApi', (): void => {
       }),
     })
     expect(liveCreate.status).toBe(201)
-    const [live, secondLive] = await Promise.all([reader.read(), secondReader.read()])
+    const live = await reader.read()
     expect(new TextDecoder().decode(live.value)).toContain('event: task')
-    expect(new TextDecoder().decode(secondLive.value)).toContain('event: task')
+    const bobLiveCreate = await fetch(`${base}/tasks`, {
+      method: 'POST',
+      headers: bobHeaders,
+      body: JSON.stringify({ title: 'Bob live task', hostScope: 'any', priority: 'P2' }),
+    })
+    expect(bobLiveCreate.status).toBe(201)
+    const secondLive = await secondReader.read()
+    const bobLiveFrame = new TextDecoder().decode(secondLive.value)
+    expect(bobLiveFrame).toContain('event: task')
+    expect(bobLiveFrame).toContain('Bob live task')
+    expect(bobLiveFrame).not.toContain('"title":"Live task"')
     await Promise.all([reader.cancel(), secondReader.cancel()])
 
     const recovered = await fetch(`${base}/events`, {
@@ -301,16 +387,7 @@ describe('TaskboardHttpApi', (): void => {
       hostScope: 'ubuntu',
       clock,
     })
-    const auth = {
-      middleware(): ReturnType<AuthService['middleware']> {
-        return (request) =>
-          Promise.resolve(
-            request.cookie === 'session=ok'
-              ? { allowed: true, status: 200, user: 'alice' }
-              : { allowed: false, status: 401 },
-          )
-      },
-    }
+    const auth = testAuth()
     const headers = { cookie: 'session=ok', 'content-type': 'application/json' }
 
     const firstApi = new TaskboardHttpApi({ store, claims, scheduler, auth })

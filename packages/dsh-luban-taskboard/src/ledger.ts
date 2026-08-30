@@ -1,5 +1,5 @@
 import type { Actor, Clock, Task, TaskId, TaskOutput, TaskStatus } from 'dsh-luban-core'
-import { AtomicJsonStore, LubanError, asSessionId, asTaskId } from 'dsh-luban-core'
+import { AtomicJsonStore, LubanError, asAccountId, asSessionId, asTaskId } from 'dsh-luban-core'
 
 export interface SchedulerLedger {
   readonly dateKey: string
@@ -65,6 +65,7 @@ function actorValue(value: unknown, label: string): Actor {
   return {
     kind,
     id,
+    ...(typeof row.accountId === 'string' ? { accountId: asAccountId(row.accountId) } : {}),
     ...(typeof row.displayName === 'string' ? { displayName: row.displayName } : {}),
   }
 }
@@ -138,6 +139,7 @@ function taskValue(value: unknown, index: number): Task {
         })()
   return {
     id: asTaskId(stringValue(row.id, `${label}.id`)),
+    ...(typeof row.accountId === 'string' ? { accountId: asAccountId(row.accountId) } : {}),
     title: stringValue(row.title, `${label}.title`),
     description: stringValue(row.description, `${label}.description`),
     status,

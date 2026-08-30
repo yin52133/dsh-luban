@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type {
+  AccountId,
   Actor,
   ClaimMutationOptions,
   Clock,
@@ -49,6 +50,7 @@ export interface ImportReport {
 }
 
 export interface AtomicClaimInput {
+  readonly accountId?: AccountId
   readonly actor: Actor
   readonly sessionId: SessionId
   readonly host: 'win' | 'ubuntu'
@@ -136,6 +138,7 @@ function normalizeCreate(input: TaskCreateInput): TaskCreateInput {
     throw new LubanError('E_ACCEPTANCE_REQUIRED', 'todo tasks require acceptance criteria')
   }
   return {
+    ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
     title,
     description,
     status: input.status ?? 'backlog',
@@ -232,6 +235,7 @@ function validateTransition(task: Task, to: TaskStatus): void {
 }
 
 function matches(task: Task, filter: TaskQuery): boolean {
+  if (filter.accountId !== undefined && task.accountId !== filter.accountId) return false
   if (filter.statuses !== undefined && !filter.statuses.includes(task.status)) return false
   if (
     filter.hostScope !== undefined &&
@@ -289,11 +293,13 @@ function claimCandidate(
   ledger: TaskLedger,
   input: AtomicClaimInput,
 ): { readonly task: Task; readonly index: number } | undefined {
+  const accountId = input.accountId ?? input.actor.accountId
   return ledger.tasks
     .map((task, index): { readonly task: Task; readonly index: number } => ({ task, index }))
     .filter(
       ({ task }): boolean =>
         task.status === 'todo' &&
+        (accountId === undefined || task.accountId === accountId) &&
         (task.hostScope === 'any' || task.hostScope === input.host) &&
         (input.statuses === undefined || input.statuses.includes(task.status)) &&
         (input.workspace === undefined || task.workspace === input.workspace) &&
@@ -316,11 +322,15 @@ function claimTask(
   dateKey?: string,
 ): { readonly ledger: TaskLedger; readonly task: Task } {
   const leaseId = `lease-${String(ledger.sequence + 1)}-${randomBytes(8).toString('hex')}`
+  const actor =
+    input.actor.accountId === undefined && selected.task.accountId !== undefined
+      ? { ...input.actor, accountId: selected.task.accountId }
+      : input.actor
   const task: Task = {
     ...selected.task,
     status: 'doing',
     claim: {
-      actor: input.actor,
+      actor,
       sessionId: input.sessionId,
       claimedAt: at,
       leaseId,
@@ -332,13 +342,7 @@ function claimTask(
   }
   return {
     task,
-    ledger: withAudit(
-      replaceTask(ledger, selected.index, task),
-      task.id,
-      'claimed',
-      input.actor,
-      at,
-    ),
+    ledger: withAudit(replaceTask(ledger, selected.index, task), task.id, 'claimed', actor, at),
   }
 }
 
@@ -469,6 +473,7 @@ export class JsonTaskStore {
     const at = this.#clock.now()
     const task: Task = {
       id: nextTaskId(at),
+      ...(normalized.accountId === undefined ? {} : { accountId: normalized.accountId }),
       title: normalized.title,
       description: normalized.description ?? '',
       status: normalized.status ?? 'backlog',
@@ -522,6 +527,7 @@ export class JsonTaskStore {
       const at = this.#clock.now()
       const next: Task = {
         id: current.id,
+        ...(current.accountId === undefined ? {} : { accountId: current.accountId }),
         title: patch.title === undefined ? current.title : trimmed(patch.title, 'title', 200),
         description:
           patch.description === undefined
@@ -638,7 +644,7 @@ export class JsonTaskStore {
         task: claimed,
         from: 'todo',
         to: 'doing',
-        actor: input.actor,
+        actor: claimed.claim?.actor ?? input.actor,
       })
     }
     return claimed ?? null
@@ -687,7 +693,7 @@ export class JsonTaskStore {
         task: result.task,
         from: 'todo',
         to: 'doing',
-        actor: input.actor,
+        actor: result.task.claim?.actor ?? input.actor,
       })
     }
     return result
@@ -817,7 +823,7 @@ export class JsonTaskStore {
     return { task: mutation.task, scheduler, quotaAllocated }
   }
 
-  public async import(tasks: readonly ImportTask[]): Promise<ImportReport> {
+  public async import(tasks: readonly ImportTask[], accountId?: AccountId): Promise<ImportReport> {
     const errors: { index: number; message: string }[] = []
     let imported = 0
     let skipped = 0
@@ -825,13 +831,14 @@ export class JsonTaskStore {
     await this.#store.update((ledger): TaskLedger => {
       let next = ledger
       const identities = new Set(
-        ledger.tasks.map(
-          (task): string => `${task.title.toLocaleLowerCase()}\0${task.workspace ?? ''}`,
-        ),
+        ledger.tasks
+          .filter((task): boolean => accountId === undefined || task.accountId === accountId)
+          .map((task): string => `${task.title.toLocaleLowerCase()}\0${task.workspace ?? ''}`),
       )
       tasks.forEach((item, index): void => {
         try {
           const normalized = normalizeCreate({
+            ...(accountId === undefined ? {} : { accountId }),
             title: item.title,
             description: item.description ?? '',
             status: item.status ?? 'backlog',
@@ -849,6 +856,7 @@ export class JsonTaskStore {
           const at = this.#clock.now()
           const task: Task = {
             id: nextTaskId(at),
+            ...(normalized.accountId === undefined ? {} : { accountId: normalized.accountId }),
             title: normalized.title,
             description: normalized.description ?? '',
             status: normalized.status ?? 'backlog',

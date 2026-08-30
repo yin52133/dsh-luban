@@ -1,7 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Actor, AuthService, TaskEvent, TaskPatch, TaskStatus } from 'dsh-luban-core'
+import type {
+  AccountId,
+  Actor,
+  AuthService,
+  Task,
+  TaskEvent,
+  TaskId,
+  TaskPatch,
+  TaskStatus,
+} from 'dsh-luban-core'
 import {
   LubanError,
+  asAccountId,
   asActorId,
   asHostId,
   asSessionId,
@@ -25,7 +35,10 @@ interface EventEnvelope {
 
 interface AuthCarrier {
   readonly middleware: AuthService['middleware']
+  readonly accountSessions: AuthService['accountSessions']
 }
+
+type ScopedActor = Actor & { readonly accountId: AccountId }
 
 function record(value: unknown, label = 'request body'): Readonly<Record<string, unknown>> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -103,6 +116,7 @@ function errorStatus(error: LubanError): number {
     case 'E_AUTH_REQUIRED':
       return 401
     case 'E_NOT_FOUND':
+    case 'E_ACCOUNT_SCOPE_MISMATCH':
       return 404
     case 'E_VERSION_CONFLICT':
       return 409
@@ -128,7 +142,7 @@ async function requireActor(
   request: IncomingMessage,
   path: string,
   auth: AuthCarrier | undefined,
-): Promise<Actor> {
+): Promise<ScopedActor> {
   if (auth === undefined)
     throw new LubanError('E_UNAVAILABLE', 'Luban authentication service is unavailable')
   const decision = await auth.middleware()({
@@ -143,7 +157,25 @@ async function requireActor(
       details: { status: decision.status },
     })
   }
-  return { kind: 'user', id: asActorId(decision.user), displayName: decision.user }
+  const accountId = decision.account?.accountId ?? asAccountId(decision.user)
+  return {
+    kind: 'user',
+    id: asActorId(accountId),
+    accountId,
+    displayName: decision.user,
+  }
+}
+
+async function requireOwnedTask(
+  store: JsonTaskStore,
+  id: TaskId,
+  accountId: AccountId,
+): Promise<Task> {
+  const task = await store.get(id)
+  if (task?.accountId !== accountId) {
+    throw new LubanError('E_NOT_FOUND', `Task ${id} was not found`)
+  }
+  return task
 }
 
 function taskInput(
@@ -261,7 +293,7 @@ function importedTasks(value: unknown): readonly ImportTask[] {
 /** Bounded SSE broadcaster with baseline recovery after an event gap. */
 export class TaskEventStream {
   readonly #store: JsonTaskStore
-  readonly #clients = new Set<ServerResponse>()
+  readonly #clients = new Map<ServerResponse, AccountId>()
   readonly #events: EventEnvelope[] = []
   readonly #unsubscribe: () => void
   readonly #heartbeat: ReturnType<typeof setInterval>
@@ -271,7 +303,7 @@ export class TaskEventStream {
     this.#store = store
     this.#unsubscribe = store.subscribe((event): void => this.publish(event))
     this.#heartbeat = setInterval((): void => {
-      for (const response of [...this.#clients]) {
+      for (const response of this.#clients.keys()) {
         if (!response.write(': heartbeat\n\n')) this.#remove(response)
       }
     }, 15_000)
@@ -282,10 +314,16 @@ export class TaskEventStream {
     const envelope: EventEnvelope = { id: ++this.#sequence, event: 'task', data: event }
     this.#events.push(envelope)
     if (this.#events.length > 256) this.#events.shift()
-    for (const response of [...this.#clients]) this.#write(response, envelope)
+    for (const [response, accountId] of this.#clients) {
+      if (event.task.accountId === accountId) this.#write(response, envelope)
+    }
   }
 
-  public async connect(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  public async connect(
+    request: IncomingMessage,
+    response: ServerResponse,
+    accountId: AccountId,
+  ): Promise<void> {
     const lastEventId = request.headers['last-event-id']
     const requested = Number.parseInt(
       Array.isArray(lastEventId) ? (lastEventId[0] ?? '') : (lastEventId ?? ''),
@@ -295,8 +333,19 @@ export class TaskEventStream {
     const baselineRequired =
       !Number.isSafeInteger(requested) || requested < oldest - 1 || requested > this.#sequence
     const pending = baselineRequired
-      ? [{ id: this.#sequence, event: 'baseline' as const, data: await this.#store.query({}) }]
-      : this.#events.filter((event): boolean => event.id > requested)
+      ? [
+          {
+            id: this.#sequence,
+            event: 'baseline' as const,
+            data: await this.#store.query({ accountId }),
+          },
+        ]
+      : this.#events.filter(
+          (event): boolean =>
+            event.id > requested &&
+            event.event === 'task' &&
+            (event.data as TaskEvent).task.accountId === accountId,
+        )
 
     response.statusCode = 200
     securityHeaders(response)
@@ -304,7 +353,7 @@ export class TaskEventStream {
     response.setHeader('connection', 'keep-alive')
     response.setHeader('x-accel-buffering', 'no')
     response.flushHeaders()
-    this.#clients.add(response)
+    this.#clients.set(response, accountId)
     response.once('close', (): void => this.#remove(response))
     response.write('retry: 2000\n\n')
     for (const envelope of pending) this.#write(response, envelope)
@@ -313,7 +362,7 @@ export class TaskEventStream {
   public dispose(): void {
     clearInterval(this.#heartbeat)
     this.#unsubscribe()
-    for (const response of [...this.#clients]) response.end()
+    for (const response of this.#clients.keys()) response.end()
     this.#clients.clear()
   }
 
@@ -368,7 +417,7 @@ export class TaskboardHttpApi {
       const method = request.method ?? 'GET'
 
       if (method === 'GET' && path === '/events') {
-        await this.#events.connect(request, response)
+        await this.#events.connect(request, response, actor.accountId)
         return
       }
       if (method === 'GET' && path === '/tasks') {
@@ -383,6 +432,7 @@ export class TaskboardHttpApi {
           throw new LubanError('E_INVALID_INPUT', 'hostScope filter is invalid')
         }
         const tasks = await this.#store.query({
+          accountId: actor.accountId,
           ...(statuses.length === 0 ? {} : { statuses }),
           ...(host === null ? {} : { hostScope: host }),
           ...(url.searchParams.has('workspace')
@@ -397,15 +447,20 @@ export class TaskboardHttpApi {
       }
       if (method === 'POST' && path === '/tasks') {
         sendJson(response, 201, {
-          task: await this.#store.create(taskInput(record(await jsonBody(request)))),
+          task: await this.#store.create({
+            ...taskInput(record(await jsonBody(request))),
+            accountId: actor.accountId,
+          }),
         })
         return
       }
       if (method === 'POST' && path === '/claim') {
         const body = record(await jsonBody(request))
         const sessionId = asSessionId(requiredString(body.sessionId, 'sessionId'))
+        await this.#auth.accountSessions.bind(actor.accountId, sessionId)
         const result = await this.#claims.claim(
           {
+            accountId: actor.accountId,
             statuses: ['todo'],
             ...(typeof body.workspace === 'string' ? { workspace: body.workspace } : {}),
             ...(stringArray(body.tags, 'tags') === undefined
@@ -417,6 +472,7 @@ export class TaskboardHttpApi {
             actor: {
               kind: 'agent',
               id: asActorId(sessionId),
+              accountId: actor.accountId,
               ...(actor.displayName === undefined ? {} : { displayName: actor.displayName }),
             },
             sessionId,
@@ -428,7 +484,7 @@ export class TaskboardHttpApi {
       }
       if (method === 'POST' && path === '/import') {
         sendJson(response, 200, {
-          report: await this.#store.import(importedTasks(await jsonBody(request))),
+          report: await this.#store.import(importedTasks(await jsonBody(request)), actor.accountId),
         })
         return
       }
@@ -448,10 +504,9 @@ export class TaskboardHttpApi {
       if (encodedId === undefined) throw new LubanError('E_INVALID_INPUT', 'Task id is missing')
       const id = asTaskId(decodeURIComponent(encodedId))
       const action = match[2]
+      const ownedTask = await requireOwnedTask(this.#store, id, actor.accountId)
       if (method === 'GET' && action === undefined) {
-        const task = await this.#store.get(id)
-        if (task === null) throw new LubanError('E_NOT_FOUND', `Task ${id} was not found`)
-        sendJson(response, 200, { task })
+        sendJson(response, 200, { task: ownedTask })
         return
       }
       if (method === 'PATCH' && action === undefined) {
@@ -500,8 +555,7 @@ export class TaskboardHttpApi {
       }
       if (method === 'POST' && action === 'complete') {
         const body = record(await jsonBody(request))
-        const task = await this.#store.get(id)
-        if (task?.claim === undefined || task.claim === null) {
+        if (ownedTask.claim === undefined || ownedTask.claim === null) {
           throw new LubanError('E_INVALID_TRANSITION', 'Task is not claimed')
         }
         const kind = body.kind
@@ -516,7 +570,7 @@ export class TaskboardHttpApi {
               ref: requiredString(body.ref, 'ref'),
               summary: requiredString(body.summary, 'summary'),
               at: Date.now(),
-              by: task.claim.actor,
+              by: ownedTask.claim.actor,
             },
             { autoDone: body.autoDone === true },
           ),

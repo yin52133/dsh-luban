@@ -66,6 +66,7 @@ export class DefaultAgentClaimService implements AgentClaimService {
       return { ok: false, reason: 'acceptance-required' }
     }
     const task = await this.#store.atomicClaim({
+      ...(filter.accountId === undefined ? {} : { accountId: filter.accountId }),
       actor: session.actor,
       sessionId: session.sessionId,
       host: this.#hostScope,
@@ -87,6 +88,7 @@ export class DefaultAgentClaimService implements AgentClaimService {
       throw new LubanError('E_INVALID_INPUT', 'Night claims require the trusted scheduler owner')
     }
     return this.#store.atomicNightClaim({
+      ...(filter.accountId === undefined ? {} : { accountId: filter.accountId }),
       actor: session.actor,
       sessionId: session.sessionId,
       host: this.#hostScope,
