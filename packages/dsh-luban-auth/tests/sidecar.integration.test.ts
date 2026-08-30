@@ -393,6 +393,47 @@ describe('AuthSidecar integration', () => {
     expect(hostText).not.toContain('bob-session')
     expect(hostText).not.toContain('legacy-session')
 
+    const foreignCancellation = await fetch(`${harness.baseUrl}/api/respond`, {
+      method: 'POST',
+      headers: {
+        cookie: bobCookie,
+        'content-type': 'application/json',
+        origin: harness.baseUrl,
+      },
+      body: JSON.stringify({
+        type: 'client-response',
+        rpcId: 'alice-question-cancel',
+        result: {
+          ok: false,
+          error: { code: 'cancelled', message: 'Question cancelled' },
+        },
+      }),
+    })
+    expect(foreignCancellation.status).toBe(200)
+    await expect(foreignCancellation.json()).resolves.toEqual({
+      accepted: false,
+      reason: 'not-pending',
+    })
+
+    const ownCancellation = await fetch(`${harness.baseUrl}/api/respond`, {
+      method: 'POST',
+      headers: {
+        cookie: aliceCookie,
+        'content-type': 'application/json',
+        origin: harness.baseUrl,
+      },
+      body: JSON.stringify({
+        type: 'client-response',
+        rpcId: 'alice-question-cancel',
+        result: {
+          ok: false,
+          error: { code: 'cancelled', message: 'Question cancelled' },
+        },
+      }),
+    })
+    expect(ownCancellation.status).toBe(200)
+    await expect(ownCancellation.json()).resolves.toEqual({ accepted: true })
+
     const foreignResponse = await fetch(`${harness.baseUrl}/api/respond`, {
       method: 'POST',
       headers: {
@@ -604,6 +645,11 @@ async function handleUpstreamRequest(
             { type: 'session/subscribed', sessionId: 'alice-session', lastSeq: 1 },
             { type: 'session/subscribed', sessionId: 'bob-session', lastSeq: 2 },
             { type: 'session/subscribed', sessionId: 'legacy-session', lastSeq: 3 },
+            {
+              type: 'question/requested',
+              sessionId: 'alice-session',
+              questions: [{ id: 'q1', question: 'Continue?' }],
+            },
           ]
         : [
             { type: 'host/session-status', sessionId: 'alice-session', running: false },
@@ -621,7 +667,10 @@ async function handleUpstreamRequest(
       response.write(
         `data: ${JSON.stringify({
           type: 'server-request',
-          rpcId: `event-${String(index)}`,
+          rpcId:
+            payload.type === 'question/requested'
+              ? 'alice-question-cancel'
+              : `event-${String(index)}`,
           method: payload.type,
           payload,
         })}\n\n`,

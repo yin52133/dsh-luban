@@ -16,6 +16,7 @@ import { pipeline } from 'node:stream/promises'
 import { StringDecoder } from 'node:string_decoder'
 import { asSessionId, type AccountId } from 'dsh-luban-core'
 import type { AuthManager } from './auth-manager.js'
+import { DshEventScope, type DshEventChannel } from './dsh-event-scope.js'
 import {
   AUTH_COOKIE_NAME,
   AUTH_ROOT,
@@ -103,6 +104,7 @@ export class AuthSidecar implements AuthGateway {
   readonly #manager: AuthManager
   readonly #trustedHostnames: ReadonlySet<string>
   readonly #onError: (error: Error) => void
+  readonly #dshEventScope: DshEventScope
   readonly #sockets = new Set<Duplex>()
   readonly #upstreamRequests = new Set<ClientRequest>()
   #server: Server | undefined
@@ -114,6 +116,7 @@ export class AuthSidecar implements AuthGateway {
     this.#manager = options.manager
     this.#trustedHostnames = options.trustedHostnames
     this.#onError = options.onError ?? (() => undefined)
+    this.#dshEventScope = new DshEventScope((sessionId) => this.#manager.dshSessionOwner(sessionId))
   }
 
   public get port(): number | undefined {
@@ -532,7 +535,8 @@ export class AuthSidecar implements AuthGateway {
     const rpcId = typeof message?.rpcId === 'string' ? message.rpcId : undefined
     const method = methodFromDshPath(target.pathname)
     const scopeRoot = target.pathname === DSH_RESPOND_ROUTE ? message : asRecord(message?.payload)
-    const denial = await this.#firstSessionScopeDenial(accountId, collectSessionIds(scopeRoot))
+    const sessionIds = collectSessionIds(scopeRoot)
+    const denial = await this.#firstSessionScopeDenial(accountId, sessionIds)
     if (denial !== null) {
       if (target.pathname === DSH_RESPOND_ROUTE) {
         sendDshRespondDenied(response)
@@ -540,6 +544,15 @@ export class AuthSidecar implements AuthGateway {
       }
       if (rpcId === undefined) throw accountScopeHttpError(denial)
       sendDshScopeError(response, rpcId, denial)
+      return
+    }
+    if (
+      target.pathname === DSH_RESPOND_ROUTE &&
+      sessionIds.length === 0 &&
+      isQuestionCancellation(message) &&
+      (rpcId === undefined || this.#dshEventScope.ownerOfQuestionRpc(rpcId) !== accountId)
+    ) {
+      sendDshRespondDenied(response)
       return
     }
     await this.#proxyBufferedDshRequest(request, response, target, security, body, {
@@ -736,6 +749,7 @@ export class AuthSidecar implements AuthGateway {
     security: RequestSecurityContext,
     accountId: AccountId,
   ): Promise<void> {
+    const channel: DshEventChannel = target.pathname === DSH_MUX_ROUTE ? 'mux' : 'host'
     const headers = buildProxyHeaders(request.headers, security, this.#upstream, false)
     headers['accept-encoding'] = 'identity'
     const transport = this.#upstream.protocol === 'https:' ? httpsRequest : httpRequest
@@ -766,7 +780,7 @@ export class AuthSidecar implements AuthGateway {
         (upstreamResponse): void => {
           writeProxyResponseHead(response, upstreamResponse, this.#upstream, security)
           const filter = new DshSseFilter((block): Promise<string | null> =>
-            this.#filterDshEventBlock(accountId, block),
+            this.#filterDshEventBlock(accountId, channel, block),
           )
           pipeline(upstreamResponse, filter, response).then(
             (): void => settle(),
@@ -780,24 +794,17 @@ export class AuthSidecar implements AuthGateway {
     })
   }
 
-  async #filterDshEventBlock(accountId: AccountId, block: string): Promise<string | null> {
+  async #filterDshEventBlock(
+    accountId: AccountId,
+    channel: DshEventChannel,
+    block: string,
+  ): Promise<string | null> {
     const data = sseData(block)
     if (data === null) return block
-    const message = parseJsonRecord(Buffer.from(data, 'utf8'))
-    if (message?.type !== 'server-request') return null
-    const payload = asRecord(message.payload)
-    if (payload === null || typeof payload.type !== 'string' || message.method !== payload.type) {
-      return null
-    }
-    if (typeof payload.sessionId === 'string') {
-      const denial = await this.#firstSessionScopeDenial(accountId, [payload.sessionId])
-      return denial === null ? block : null
-    }
-    const rewritten = await rewriteSessionIdArrays(payload, async (sessionId): Promise<boolean> => {
-      return (await this.#manager.dshSessionOwner(asSessionId(sessionId))) === accountId
-    })
-    if (!rewritten.changed) return block
-    return `data: ${JSON.stringify({ ...message, payload: rewritten.value })}`
+    const serialized = Buffer.from(data, 'utf8')
+    const filtered = await this.#dshEventScope.filter(accountId, channel, serialized)
+    if (filtered === null) return null
+    return filtered === serialized ? block : `data: ${filtered.toString('utf8')}`
   }
 
   async #proxyHttp(
@@ -1068,6 +1075,13 @@ function collectSessionIds(value: unknown): string[] {
     }
   }
   return ids
+}
+
+function isQuestionCancellation(message: Readonly<Record<string, unknown>> | null): boolean {
+  if (message?.type !== 'client-response') return false
+  const result = asRecord(message.result)
+  const error = asRecord(result?.error)
+  return result?.ok === false && error?.code === 'cancelled'
 }
 
 function sessionIdsFromSearchParams(params: URLSearchParams): string[] {
