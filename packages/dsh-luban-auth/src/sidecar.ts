@@ -534,6 +534,10 @@ export class AuthSidecar implements AuthGateway {
     const scopeRoot = target.pathname === DSH_RESPOND_ROUTE ? message : asRecord(message?.payload)
     const denial = await this.#firstSessionScopeDenial(accountId, collectSessionIds(scopeRoot))
     if (denial !== null) {
+      if (target.pathname === DSH_RESPOND_ROUTE) {
+        sendDshRespondDenied(response)
+        return
+      }
       if (rpcId === undefined) throw accountScopeHttpError(denial)
       sendDshScopeError(response, rpcId, denial)
       return
@@ -1154,6 +1158,10 @@ function sendDshScopeError(
     'content-length': String(body.length),
   })
   response.end(body)
+}
+
+function sendDshRespondDenied(response: ServerResponse): void {
+  sendJson(response, 200, { accepted: false, reason: 'not-pending' })
 }
 
 function errorCode(error: unknown): string | undefined {

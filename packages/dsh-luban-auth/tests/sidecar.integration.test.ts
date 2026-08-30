@@ -392,6 +392,47 @@ describe('AuthSidecar integration', () => {
     expect(hostText).toContain('alice-session')
     expect(hostText).not.toContain('bob-session')
     expect(hostText).not.toContain('legacy-session')
+
+    const foreignResponse = await fetch(`${harness.baseUrl}/api/respond`, {
+      method: 'POST',
+      headers: {
+        cookie: aliceCookie,
+        'content-type': 'application/json',
+        origin: harness.baseUrl,
+      },
+      body: JSON.stringify({
+        type: 'client-response',
+        rpcId: 'bob-question',
+        result: {
+          ok: true,
+          value: { sessionId: 'bob-session', answer: { answers: [] } },
+        },
+      }),
+    })
+    expect(foreignResponse.status).toBe(200)
+    await expect(foreignResponse.json()).resolves.toEqual({
+      accepted: false,
+      reason: 'not-pending',
+    })
+
+    const ownResponse = await fetch(`${harness.baseUrl}/api/respond`, {
+      method: 'POST',
+      headers: {
+        cookie: aliceCookie,
+        'content-type': 'application/json',
+        origin: harness.baseUrl,
+      },
+      body: JSON.stringify({
+        type: 'client-response',
+        rpcId: 'alice-question',
+        result: {
+          ok: true,
+          value: { sessionId: 'alice-session', answer: { answers: [] } },
+        },
+      }),
+    })
+    expect(ownResponse.status).toBe(200)
+    await expect(ownResponse.json()).resolves.toEqual({ accepted: true })
   })
 
   it('protects and tunnels WebSocket upgrades and closes upgraded resources', async () => {
@@ -592,6 +633,12 @@ async function handleUpstreamRequest(
   if (target.pathname === '/api/session.export') {
     response.writeHead(200, { 'content-type': 'application/octet-stream' })
     response.end(`export:${target.searchParams.get('sessionId') ?? ''}`)
+    return
+  }
+  if (request.method === 'POST' && target.pathname === '/api/respond') {
+    await readRequestJson(request)
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ accepted: true }))
     return
   }
   if (request.method === 'POST' && target.pathname.startsWith('/api/')) {
