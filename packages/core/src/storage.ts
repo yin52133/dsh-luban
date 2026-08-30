@@ -40,7 +40,7 @@ function delay(milliseconds: number): Promise<void> {
   })
 }
 
-const WINDOWS_RENAME_RETRY_DELAYS_MS = [5, 10, 20, 40, 80, 160, 320, 500] as const
+const WINDOWS_RENAME_RETRY_TIMEOUT_MS = 5_000
 const WINDOWS_TRANSIENT_FILE_CODES = new Set(['EACCES', 'EBUSY', 'EPERM'])
 
 function isWindowsTransientFileError(error: unknown): boolean {
@@ -48,20 +48,21 @@ function isWindowsTransientFileError(error: unknown): boolean {
 }
 
 async function renameAtomically(source: string, target: string): Promise<void> {
-  let retry = 0
+  const deadline = Date.now() + WINDOWS_RENAME_RETRY_TIMEOUT_MS
+  let retryDelay = 10
   for (;;) {
     try {
       await rename(source, target)
       return
     } catch (error: unknown) {
-      const retryDelay = WINDOWS_RENAME_RETRY_DELAYS_MS[retry]
-      if (!isWindowsTransientFileError(error) || retryDelay === undefined) {
+      const remaining = deadline - Date.now()
+      if (!isWindowsTransientFileError(error) || remaining <= 0) {
         throw error
       }
       // Windows readers briefly prevent replacing an existing file. Keep the publish atomic,
       // but give bounded local readers and security scanners time to release their handles.
-      retry += 1
-      await delay(retryDelay)
+      await delay(Math.min(retryDelay, remaining))
+      retryDelay = Math.min(retryDelay * 2, 100)
     }
   }
 }

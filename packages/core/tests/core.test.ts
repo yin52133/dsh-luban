@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -208,6 +208,30 @@ describe('AtomicJsonStore', (): void => {
     }
 
     expect(await store.read()).toBe(4)
+  })
+
+  it('retries an atomic publish until an external Windows read handle closes', async (): Promise<void> => {
+    const directory = await temporaryDirectory()
+    const filePath = join(directory, 'external-reader-ledger.json')
+    const store = new AtomicJsonStore({
+      filePath,
+      codec: numberCodec,
+      initial: (): number => 0,
+      backupCount: 0,
+    })
+    await store.write(0)
+
+    const reader = await open(filePath, 'r')
+    const writing = store.write(1)
+    await new Promise<void>((resolve): void => {
+      setTimeout(resolve, 50)
+    })
+    await reader.close()
+    await writing
+
+    expect(await store.read()).toBe(1)
+    expect((await readdir(directory)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+    await expect(readFile(`${filePath}.lock`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('bounds the default daily history to seven write days', async (): Promise<void> => {
