@@ -26,6 +26,8 @@ export interface AtomicJsonStoreOptions<Value> {
   readonly lockTimeoutMs?: number
   readonly staleLockMs?: number
   readonly backupCount?: number
+  /** Optional gate after durable staging and immediately before the atomic publish. */
+  readonly beforePublish?: () => void | Promise<void>
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -85,6 +87,7 @@ export class AtomicJsonStore<Value> {
   readonly #lockTimeoutMs: number
   readonly #staleLockMs: number
   readonly #backupCount: number
+  readonly #beforePublish: (() => void | Promise<void>) | undefined
 
   public constructor(options: AtomicJsonStoreOptions<Value>) {
     this.#filePath = options.filePath
@@ -93,6 +96,7 @@ export class AtomicJsonStore<Value> {
     this.#lockTimeoutMs = options.lockTimeoutMs ?? 5_000
     this.#staleLockMs = options.staleLockMs ?? 30_000
     this.#backupCount = options.backupCount ?? 7
+    this.#beforePublish = options.beforePublish
   }
 
   public async read(): Promise<Value> {
@@ -157,6 +161,7 @@ export class AtomicJsonStore<Value> {
       } finally {
         await handle.close()
       }
+      await this.#beforePublish?.()
       await renameAtomically(temporary, this.#filePath)
     } catch (error: unknown) {
       await rm(temporary, { force: true }).catch((): undefined => undefined)

@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process'
 import { mkdir, open, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -151,6 +153,36 @@ describe('AtomicJsonStore', (): void => {
     },
   }
 
+  interface CrashSnapshot {
+    readonly generation: 'old' | 'new'
+    readonly payload: string
+    readonly closingMarker: string
+  }
+
+  const crashSnapshotCodec = {
+    decode(value: unknown): CrashSnapshot {
+      if (typeof value !== 'object' || value === null) {
+        throw new LubanError('E_INVALID_INPUT', 'crash snapshot object required')
+      }
+      const row = value as Readonly<Record<string, unknown>>
+      if (
+        (row.generation !== 'old' && row.generation !== 'new') ||
+        typeof row.payload !== 'string' ||
+        typeof row.closingMarker !== 'string'
+      ) {
+        throw new LubanError('E_INVALID_INPUT', 'complete crash snapshot required')
+      }
+      return {
+        generation: row.generation,
+        payload: row.payload,
+        closingMarker: row.closingMarker,
+      }
+    },
+    encode(value: CrashSnapshot): unknown {
+      return value
+    },
+  }
+
   it('serializes concurrent updates and retains one snapshot per local calendar day', async (): Promise<void> => {
     const directory = await temporaryDirectory()
     const filePath = join(directory, 'ledger.json')
@@ -208,6 +240,94 @@ describe('AtomicJsonStore', (): void => {
     }
 
     expect(await store.read()).toBe(4)
+  })
+
+  it('keeps the old JSON complete when its writer is killed at the publish boundary', async (): Promise<void> => {
+    const directory = await temporaryDirectory()
+    const filePath = join(directory, 'crash-ledger.json')
+    const oldSnapshot: CrashSnapshot = {
+      generation: 'old',
+      payload: 'stable-old-payload',
+      closingMarker: 'old-complete',
+    }
+    const store = new AtomicJsonStore({
+      filePath,
+      codec: crashSnapshotCodec,
+      initial: (): CrashSnapshot => oldSnapshot,
+      backupCount: 0,
+    })
+    await store.write(oldSnapshot)
+
+    const writerPath = fileURLToPath(new URL('./fixtures/atomic-json-writer.ts', import.meta.url))
+    const writer = spawn(process.execPath, ['--import', 'tsx', writerPath, filePath, '1024'], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let writerOutput = ''
+    let writerError = ''
+    writer.stdout.setEncoding('utf8')
+    writer.stdout.on('data', (chunk: string): void => {
+      writerOutput += chunk
+    })
+    writer.stderr.setEncoding('utf8')
+    writer.stderr.on('data', (chunk: string): void => {
+      writerError += chunk
+    })
+    const writerExit = new Promise<{
+      readonly code: number | null
+      readonly signal: string | null
+    }>((resolve, reject): void => {
+      writer.once('error', reject)
+      writer.once('exit', (code, signal): void => resolve({ code, signal }))
+    })
+
+    try {
+      await new Promise<void>((resolve, reject): void => {
+        const timeout = setTimeout((): void => {
+          reject(new Error(`writer did not reach the publish boundary: ${writerError}`))
+        }, 10_000)
+        const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+          clearTimeout(timeout)
+          writer.stdout.off('data', onOutput)
+          reject(
+            new Error(
+              `writer exited before the publish boundary (${String(code)}, ${String(signal)}): ${writerError}`,
+            ),
+          )
+        }
+        const onOutput = (): void => {
+          if (!writerOutput.includes('before-publish\n')) return
+          clearTimeout(timeout)
+          writer.off('exit', onExit)
+          writer.stdout.off('data', onOutput)
+          resolve()
+        }
+        writer.stdout.on('data', onOutput)
+        writer.once('exit', onExit)
+      })
+      expect(writer.kill('SIGKILL')).toBe(true)
+      const exit = await writerExit
+      expect(exit.signal !== null || exit.code !== 0).toBe(true)
+    } finally {
+      if (writer.exitCode === null && writer.signalCode === null) {
+        writer.kill('SIGKILL')
+        await writerExit.catch((): undefined => undefined)
+      }
+    }
+
+    const serialized = await readFile(filePath, 'utf8')
+    const parsed = crashSnapshotCodec.decode(JSON.parse(serialized) as unknown)
+    expect(parsed).toEqual(oldSnapshot)
+
+    const reopened = new AtomicJsonStore({
+      filePath,
+      codec: crashSnapshotCodec,
+      initial: (): CrashSnapshot => oldSnapshot,
+      lockTimeoutMs: 1_000,
+      staleLockMs: 0,
+      backupCount: 0,
+    })
+    expect(await reopened.read()).toEqual(parsed)
   })
 
   it('retries an atomic publish until an external Windows read handle closes', async (): Promise<void> => {
