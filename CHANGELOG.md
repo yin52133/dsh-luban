@@ -9,6 +9,11 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 
 - Added a fail-closed M12 target-host profile smoke runner for isolated DSH
   fixture installation, host/client lifecycle checks, restart, and cleanup.
+- Added an opt-in M11 production browser runner and same-clean-SHA Windows/Ubuntu
+  evidence aggregator with nonce, screenshot, platform, and secret boundaries.
+- Added a mounted M06 visual readback acceptance runner through the production
+  attachment and DSH followup path, with exact message/turn/route evidence and
+  fail-closed cleanup.
 
 ### Changed
 
@@ -26,6 +31,8 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
   bounded fallback for missing or unloaded projection services.
 - Strengthened direct acceptance evidence for durable plan rejection feedback,
   serial snippet injection, and agent-facing context archive retrieval.
+- Reconciled checklist notes with the canonical status legend: runner availability
+  no longer implies target-host or provider acceptance.
 
 ## [0.1.0] - 2026-08-30
 

@@ -58,8 +58,9 @@ uv run --project tools/browser-bridge --locked python -m unittest discover -s to
 ## 仓库现状
 
 - 设计与实现按 [checklist.json](checklist.json) 的 MS1 → MS4 证据化推进。
-- 已进入插件实现与逐模块验收阶段；`review` 表示本地门禁已通过、仍待整套 profile 或
-  目标设备验收，不能当作已发布。
+- 已进入插件实现与逐模块验收阶段；`review` 表示实现已完成、明确验收当前可执行，但尚无
+  覆盖完整口径的直接证据；`blocked` 表示明确验收因环境、设备、授权或外部依赖暂时无法继续。
+  `done` 只表示设计验收已有直接证据，不等同于已经发布。
 - npm 发布、GitHub Release、市场 PR 与 topic 修改均是独立的外部操作，未经明确授权不会执行。
 
 ## 许可

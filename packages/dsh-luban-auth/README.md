@@ -92,8 +92,10 @@ outer sidecar by design rather than a route-local authentication plugin.
 
 ## Platform Support
 
-The same implementation is tested on Windows and Ubuntu. File modes are
-enforced where supported; Windows deployments must additionally verify the
+The same implementation and automated contracts are shared by Windows and
+Ubuntu. The current checklist still requires the same Git SHA to pass both CI
+quality jobs; workflow availability alone is not that evidence. File modes are
+enforced where supported, and Windows deployments must additionally verify the
 service-account ACL. `trustProxy` is only for an explicitly configured TLS
 reverse proxy.
 

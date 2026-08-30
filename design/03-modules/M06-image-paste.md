@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 注入、附件安全边界与验证证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐 Settings 挂载、paste/drop 路由与多文件边界验证 |
 | v0.4 | 2026-08-30 | Codex | 补齐 ReactDOM 客户端与真实 Sharp resize 验证 |
+| v0.5 | 2026-08-30 | Codex | 增加 mounted live 视觉读图验收与证据边界 |
 
 ## 1. 概述与目标
 
@@ -115,11 +116,19 @@ M06-F001 ~ M06-F004 共 4 项，与 `checklist.json` 一一对应。
 - 附件索引记录 SHA-256、压缩报告与 `referencedBy`。注入在 per-image/session mutex 内先登记引用，
   `followup` 失败则回滚；被引用附件无论年龄都不会被自动或手动删除。
 - 客户端测试使用真实 ReactDOM/jsdom 覆盖 paste/drop、预览、删除、cleanup 与刷新；真实 Sharp
-  resize/整图解码探针验证截断输入 fail closed。本地 Prettier、严格类型、ESLint、构建、61 项
-  M06 测试、Cordis route/timer 卸载、release metadata 与 pack dry-run 通过。
+  resize/整图解码探针验证截断输入 fail closed。本地 Prettier、严格类型、ESLint、构建、
+  Cordis route/timer 卸载、release metadata 与 pack dry-run 通过；具体测试数以当前门禁输出为准。
+- `ctx.lubanImageVisualAcceptance.run({ live: true, sessionId })` 在已挂载 Cordis 中执行生产
+  `AttachmentRepository → FileImageIngestService → DshImageSessionInjector.followup` 链路。runner
+  要求 clean Git、Windows/Ubuntu、空 idle inbox 与 top-level live session；像素 nonce 不进入 prompt、
+  文件名或证据，并绑定精确 message→turn、单一实际 provider/model route 及模型 image capability。
+  turn 未确定结束时不取消其他 inbox 工作且保留 fixture，只有确定 settlement 后才清理自己目录。
+- standalone CLI 不重建 Host 拥有的模型/工具组合；注入 fake 的结果永久标记 `simulated`，不能升级为
+  live pass。当前 runner 仅使验收可执行，尚无真实视觉 provider session 的 direct evidence。
 
 ## 11. 目标环境验收
 
-- 仍需在真实 Windows/Ubuntu profile 验证系统剪贴板、浏览器 paste/drop、live DSH 图片读取和长期 TTL 清理。
+- 仍需在真实 Windows/Ubuntu profile 抽查系统剪贴板、浏览器 paste/drop 与长期 TTL；M06-F003 的
+  明确 blocker 是尚无 mounted live 视觉 provider 读图 pass。
 - 最近列表返回数量受 `recentLimit` 限制，但当前 UI 读取原图而非缩略图；大图工作区应调低该值，缩略图列入后续优化。
 - Web 与 CLI API 请求均有 10 秒完整 deadline；该期限覆盖 headers 与 JSON body，JSON 响应另有显式字节上限。

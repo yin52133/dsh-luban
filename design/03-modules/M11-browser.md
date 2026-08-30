@@ -12,6 +12,7 @@
 | v0.4 | 2026-08-30 | Codex | 收紧自动任务域名白名单，拒绝裸 `*` wildcard |
 | v0.5 | 2026-08-30 | Codex | 收口 bridge 子进程退出与 task claim 轮换竞态 |
 | v0.6 | 2026-08-30 | Codex | 夜间执行改由 scheduler 路由并独占终态 claim 写入 |
+| v0.7 | 2026-08-30 | Codex | 增加同一 clean SHA 的双平台 production live 验收 |
 
 ## 1. 概述与目标
 
@@ -111,14 +112,19 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
   全部被账本拒绝，B 仍继续 queue/progress/artifact 并进入 `review(autoDone)`。
 - 夜间浏览器任务通过共享 `NightTaskExecutorRoute` 进入 queue；browser 只上报进度并返回产物，
   scheduler 独占 complete/fail。持久化 `executionOwner` 防止普通 listener 双执行且不能由 HTTP 伪造。
-- 本地 ESLint、严格类型、构建、22 项 M11 包测试、6 项 M11 跨模块集成与 13 项 `uv --locked`
-  Python 测试、Ruff、compileall、ESM 导入及 npm pack 白名单均通过。真实 uv JSONL 子进程已完成
+- 本地 ESLint、严格类型、构建、M11 包测试、跨模块集成与 `uv --locked` Python 测试、Ruff、
+  compileall、ESM 导入及 npm pack 白名单均通过。真实 uv JSONL 子进程已完成
   ping→shutdown→exit 0 且剥离模型凭据；本机 browser-use/Chrome 已加载 loopback DOM，并验证
   临时复制 profile 清理，未访问外部网站或模型提供商。
 - M11-F002/M11-F003 域名策略复核：TS 配置、YAML 模板和任务解析拒绝裸 `*`，自动任务
   仍要求非空白名单；Python 桥接在执行前再次拒绝，精确域名与 `*.example.com` 继续可用。
+- `luban-browser-acceptance` 提供 production run 与双端 aggregate：真实路径固定构造
+  `BridgeProcess → BrowserService`，用 loopback nonce 页面验证 progress、结构化结果与 PNG screenshot；
+  Windows/Ubuntu 证据必须来自同一 clean Git SHA、同一 canonical task/fixture。凭据与 nonce 不写入
+  evidence，注入引擎只能生成 `test-only` 且聚合器拒绝 test-double。runner 就绪不等于已通过现场验收。
 
 ## 11. 开放问题
 
-- browser-use 在 ubuntu 无桌面环境下的 headless 稳定性实测；若依赖 playwright，其浏览器下载与离线部署方式写入部署文档。
-- 仍需在 Windows/Ubuntu 目标 profile 用真实登录态、人工可见标签页和长期任务完成端到端验收。
+- browser-use 在 Ubuntu 无桌面环境下的 headless 稳定性实测；若依赖 playwright，其浏览器下载与离线部署方式写入部署文档。
+- M11-F001/M11-F004 仍需可用 provider，在同一 clean SHA 的 Windows 与 Ubuntu 上分别完成 canonical
+  loopback live task 并聚合两份 production evidence；该确定性口径不依赖站点登录态。

@@ -1,11 +1,11 @@
 # dsh-luban-hud
 
-An authenticated, always-visible DSH telemetry HUD backed by concurrent, pluggable providers. It shows context capacity, workspace, model/reasoning effort, and billing-reconcilable token/request rates in the Web shell and CLI.
+An authenticated, always-visible DSH telemetry HUD backed by concurrent, pluggable providers. It shows context capacity, workspace, model/reasoning effort, and token/request rates designed for later billing reconciliation in the Web shell and CLI.
 
 ## Features
 
 - **M07-F001** — concurrent `TelemetryProvider` sampling with field-level first-provider priority, per-provider timeout, immutable snapshots, and partial-failure diagnostics.
-- **M07-F002** — official rc2 `assistant/message.usage` and `request/context.contextWindow` first; content estimation only fills an unknown `used` field and never invents a maximum.
+- **M07-F002** — official rc2 `SessionProjectionRegistry.contextPressure` first; only a missing or unloaded projection service/key falls back to `assistant/message.usage`, `request/context.contextWindow`, and content estimation. An incomplete official projection stays unknown.
 - **M07-F003** — workspace-relative display plus live model and reasoning-effort values from public rc2 `Session`/`AgentRegistry` interfaces. Selection prefers the current initiator, then a running agent, then the newest registered agent.
 - **M07-F004** — monotonic 1-minute and 5-minute sliding TPM/RPM windows. Cached input/output fields are disjoint and included; reasoning tokens are not double-counted inside output.
 - **M07-F005** — compact/full Web status bar in the official rc2 `shell.overlay` slot and a one-line `luban-hud` CLI rendered from the same snapshot response.
@@ -94,6 +94,9 @@ The implementation uses the public rc2 `AgentRegistry`, `Session.requestContext(
 - Windows 10/11 and PowerShell: workspace paths display with portable `/` separators; CLI uses the auth sidecar.
 - Ubuntu/Linux: the same host, Web, and CLI implementation is used.
 - Web: current DSH rc2 browser client; subscriptions pause when `document.hidden`.
+
+Window math and token-source projection are directly tested. Comparison with a
+real provider billing/token ledger remains the explicit M07-F004 blocker.
 
 ## License
 

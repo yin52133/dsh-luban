@@ -139,6 +139,35 @@ Progress and the final artifact are written back exclusively through
 Tests inject mock bridges and engines. They do not start a real browser, fetch a
 website, download Chromium, or call an LLM.
 
+## Live dual-platform acceptance
+
+The opt-in production runner uses the packaged locked bridge, a loopback nonce
+page, an isolated browser profile, and the configured browser-use provider. Run
+it only from a clean worktree on each target host:
+
+```powershell
+$env:LUBAN_LIVE_ACCEPTANCE = '1'
+$env:BROWSER_USE_API_KEY = '<provider credential>'
+luban-browser-acceptance run --output .luban/acceptance/m11-windows.json
+```
+
+On Ubuntu, export the same variables and choose a distinct output path. Then
+aggregate only the two production records from the same clean Git SHA:
+
+```sh
+luban-browser-acceptance aggregate \
+  --windows .luban/acceptance/m11-windows.json \
+  --ubuntu .luban/acceptance/m11-ubuntu.json \
+  --output .luban/acceptance/m11-dual.json
+```
+
+Each platform record attests the runtime OS, canonical task/fixture hashes,
+progress, structured nonce readback, and validated PNG screenshot without
+persisting the nonce or credential. The aggregate rejects dirty/different Git
+SHAs, task or fixture drift, duplicate platforms, failed checks, and all
+`test-double` evidence. The runner is ready, but M11-F001/M11-F004 remain
+blocked until real Windows and Ubuntu production records are available.
+
 ## Compatibility
 
 - DSH: `0.1.1-rc.2`
@@ -151,8 +180,9 @@ website, download Chromium, or call an LLM.
 - Windows: local Chrome or Edge through the platform HAL
 - Ubuntu: headless Chromium through the same task contract
 
-Real browser/provider acceptance remains environment-dependent; automated tests
-exercise fake processes and never contact external websites.
+Standard automated tests exercise fake processes and never contact external
+websites or providers. Live acceptance is a separate explicit opt-in and remains
+pending on both target platforms.
 
 ## License
 

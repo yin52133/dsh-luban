@@ -119,8 +119,10 @@ and M03 `lubanKeepalive`, without alpha-only host session APIs.
 
 ## Platform Support
 
-- Ubuntu/Linux with systemd user services: fully supported.
-- Headless Ubuntu: supported; no desktop session is required when user linger is enabled.
+- Ubuntu/Linux systemd user-service implementation is available; target-host
+  installation, linger, status, and reboot recovery still require live evidence.
+- Headless Ubuntu is the intended deployment; no desktop session is required
+  once user linger has been explicitly enabled and verified.
 - Windows/macOS: plugin self-disables without registering its service or HTTP route.
 
 ## Authenticated API

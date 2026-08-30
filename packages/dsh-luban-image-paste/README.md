@@ -17,6 +17,9 @@ session injection for Windows and Ubuntu.
   decode failure, or unverifiable size bound fails closed before persistence.
 - Real DSH rc2 `AgentRegistry` injection in Markdown or absolute-path form,
   limited to live, top-level sessions in the configured workspace.
+- Opt-in mounted live acceptance that renders an unpredictable code as PNG
+  pixels, injects it through the production repository/service path, and binds
+  the readback to one exact DSH message, turn, session, provider, and model.
 - Authenticated recent-image previews, reference-safe manual deletion, and TTL
   cleanup that always retains attachments referenced by a session. Recent
   responses are server-bounded by `recentLimit`.
@@ -101,10 +104,35 @@ For CLI capture, copy an image, export `LUBAN_SESSION_COOKIE` and
 `LUBAN_CSRF_TOKEN` from the authenticated session, then run `luban-img capture`.
 The CLI sends `x-luban-csrf` on both upload and injection writes.
 
+## Live visual acceptance
+
+Live M06-F003 evidence must run inside the mounted plugin so it can use the
+Host-owned `AgentRegistry`, LLM registry, and existing top-level session:
+
+```typescript
+const evidence = await ctx.lubanImageVisualAcceptance.run({
+  live: true,
+  sessionId: '<idle top-level rc2 session>',
+})
+```
+
+The runner requires a clean Git worktree, Windows or Ubuntu, an empty idle
+inbox, and an actual response route whose model metadata declares image input.
+The nonce exists only in PNG pixels and model-authored output; evidence stores
+hashes, never the nonce or provider credential. It waits for the exact queued
+message's turn and removes only its owned fixture after that turn settles. A
+timeout or uncertain queue state retains the fixture and fails closed.
+
+`luban-img-visual-acceptance` is intentionally plan/blocked-only: a standalone
+process cannot safely reconstruct the mounted DSH model/tool composition.
+Injected simulations always remain `simulated` and cannot satisfy the live
+acceptance. M06-F003 therefore remains blocked until a real mounted visual
+provider session returns a production pass.
+
 ## Compatibility
 
 Tested with DeepSeek Harness `0.1.1-rc.2`, Cordis 4.0.1, React 18, and Node.js
-`^22.19.0` or `>=24.0.0`. The DSH peer baseline is `>=0.1.1-rc.1`; injection uses
+`^22.19.0` or `>=24.0.0`. The DSH peer baseline is `>=0.1.1-rc.2`; injection uses
 the rc2 `AgentRegistry.get` and identified user-message APIs. Dormant sessions,
 subagent-owned sessions, and sessions from another workspace are rejected; this
 plugin does not reconstruct the host-owned model/tool composition for cold resume.
