@@ -2,8 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 
-export const LIVE_BROWSER_EVIDENCE_SCHEMA = 'dsh-luban/m11-live-browser/v1' as const
-export const LIVE_BROWSER_DUAL_SCHEMA = 'dsh-luban/m11-live-browser-dual/v1' as const
+export const LIVE_BROWSER_EVIDENCE_SCHEMA = 'dsh-luban/m11-live-browser/v2' as const
+export const LIVE_BROWSER_DUAL_SCHEMA = 'dsh-luban/m11-live-browser-dual/v2' as const
+export const LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA = 'dsh-luban/browser-build-provenance/v2' as const
 export const LIVE_BROWSER_FEATURES = Object.freeze(['M11-F001', 'M11-F004'] as const)
 export const LIVE_BROWSER_CHALLENGE_PORT = 47_631
 export const LIVE_BROWSER_CHALLENGE_URL =
@@ -53,8 +54,10 @@ export const LIVE_BROWSER_CHECK_IDS = Object.freeze([
   'optIn',
   'providerCredentialPresent',
   'gitClean',
+  'buildProvenanceAttested',
   'platformAttested',
   'browserProfileResolved',
+  'browserBinaryAttested',
   'challengeFetched',
   'resultOk',
   'structuredNonceMatched',
@@ -83,6 +86,20 @@ export interface LiveBrowserProfileEvidence {
   readonly isolated: true
 }
 
+export interface LiveBrowserBinaryEvidence {
+  readonly kind: 'chrome' | 'edge' | 'chromium'
+  readonly version: string
+  readonly sha256: string
+}
+
+export interface LiveBrowserBuildEvidence {
+  readonly schemaVersion: typeof LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA
+  readonly gitSha: string
+  readonly dirty: false
+  readonly treeSha256: string
+  readonly fileCount: number
+}
+
 export interface LiveBrowserScreenshotEvidence {
   readonly sha256: string
   readonly bytes: number
@@ -102,12 +119,14 @@ export interface LiveBrowserEvidence {
     readonly sha: string
     readonly dirty: boolean
   }
+  readonly build: LiveBrowserBuildEvidence
   readonly taskSha256: string
   readonly fixtureSha256: string
   readonly providerEnvironment: string
   readonly platform: LiveBrowserPlatformEvidence
   readonly browser: {
     readonly profile: LiveBrowserProfileEvidence
+    readonly binary: LiveBrowserBinaryEvidence
     readonly bridgeVersion: '0.1.0'
     readonly browserUseVersion: '0.13.8'
     readonly python: '3.12'
@@ -307,6 +326,7 @@ function assertEvidenceShape(evidence: LiveBrowserEvidence): void {
       'startedAt',
       'finishedAt',
       'git',
+      'build',
       'taskSha256',
       'fixtureSha256',
       'providerEnvironment',
@@ -351,6 +371,22 @@ function assertEvidenceShape(evidence: LiveBrowserEvidence): void {
   ) {
     invalidEvidence('Evidence Git fields are invalid')
   }
+  const rawBuild: unknown = evidence.build
+  if (
+    !isRecord(rawBuild) ||
+    !hasExactKeys(rawBuild, ['schemaVersion', 'gitSha', 'dirty', 'treeSha256', 'fileCount']) ||
+    rawBuild.schemaVersion !== LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA ||
+    !isGitSha(rawBuild.gitSha) ||
+    rawBuild.dirty !== false ||
+    rawBuild.gitSha !== evidence.git.sha ||
+    !isSha256(rawBuild.treeSha256) ||
+    !isPositiveInteger(rawBuild.fileCount)
+  ) {
+    throw new LiveAcceptanceError(
+      'E_LIVE_EVIDENCE_PROVENANCE',
+      'Evidence build provenance does not match its clean source commit',
+    )
+  }
 
   assertPlatformShape(evidence.platform, evidence.browser)
   assertChallengeShape(evidence.challenge)
@@ -361,7 +397,10 @@ function assertEvidenceShape(evidence: LiveBrowserEvidence): void {
   if (
     !checks.optIn ||
     !checks.providerCredentialPresent ||
+    !checks.buildProvenanceAttested ||
     !checks.platformAttested ||
+    !checks.browserProfileResolved ||
+    !checks.browserBinaryAttested ||
     !checks.secretFree ||
     checks.gitClean !== !evidence.git.dirty ||
     checks.challengeFetched !== evidence.challenge.requestCount >= 1 ||
@@ -393,7 +432,7 @@ function assertPlatformShape(
     !/^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(platform.node) ||
     !hasExactKeys(
       browser,
-      ['profile', 'bridgeVersion', 'browserUseVersion', 'python'],
+      ['profile', 'binary', 'bridgeVersion', 'browserUseVersion', 'python'],
       ['challengeUserAgentSha256'],
     ) ||
     !isExact(browser.bridgeVersion, '0.1.0') ||
@@ -402,7 +441,10 @@ function assertPlatformShape(
     (browser.challengeUserAgentSha256 !== undefined &&
       !isSha256(browser.challengeUserAgentSha256)) ||
     !hasExactKeys(browser.profile, ['kernel', 'headless', 'isolated']) ||
-    !isExact(browser.profile.isolated, true)
+    !isExact(browser.profile.isolated, true) ||
+    !hasExactKeys(browser.binary, ['kind', 'version', 'sha256']) ||
+    !isBrowserVersion(browser.binary.version) ||
+    !isSha256(browser.binary.sha256)
   ) {
     invalidEvidence('Evidence platform or browser profile fields are invalid')
   }
@@ -412,6 +454,7 @@ function assertPlatformShape(
       platform.runtimePlatform !== 'win32' ||
       platform.osReleaseId !== undefined ||
       (browser.profile.kernel !== 'chrome' && browser.profile.kernel !== 'edge') ||
+      browser.binary.kind !== browser.profile.kernel ||
       !isExact(browser.profile.headless, false)
     ) {
       throw new LiveAcceptanceError(
@@ -426,6 +469,7 @@ function assertPlatformShape(
     platform.runtimePlatform !== 'linux' ||
     platform.osReleaseId !== 'ubuntu' ||
     browser.profile.kernel !== 'chromium-headless' ||
+    browser.binary.kind !== 'chromium' ||
     !isExact(browser.profile.headless, true)
   ) {
     throw new LiveAcceptanceError(
@@ -533,6 +577,7 @@ function assertAggregatableEvidence(evidence: LiveBrowserEvidence): void {
       platform.runtimePlatform !== 'win32' ||
       platform.osReleaseId !== undefined ||
       !['chrome', 'edge'].includes(browser.profile.kernel) ||
+      browser.binary.kind !== browser.profile.kernel ||
       browser.profile.headless
     ) {
       throw new LiveAcceptanceError(
@@ -545,6 +590,7 @@ function assertAggregatableEvidence(evidence: LiveBrowserEvidence): void {
     platform.runtimePlatform !== 'linux' ||
     platform.osReleaseId !== 'ubuntu' ||
     browser.profile.kernel !== 'chromium-headless' ||
+    browser.binary.kind !== 'chromium' ||
     !browser.profile.headless
   ) {
     throw new LiveAcceptanceError(
@@ -621,6 +667,10 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
 function invalidEvidence(message: string): never {
   throw new LiveAcceptanceError('E_LIVE_EVIDENCE_INVALID', message)
 }
@@ -656,6 +706,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isSha256(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
+}
+
+function isBrowserVersion(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 128 &&
+    /^\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$/u.test(value)
+  )
 }
 
 function isGitSha(value: unknown): value is string {

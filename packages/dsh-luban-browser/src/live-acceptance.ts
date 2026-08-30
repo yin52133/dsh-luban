@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { BrowserEvent, BrowserProfile, BrowserResult, BrowserSession } from '@luban/core'
 import { stringify } from 'yaml'
 import { BridgeProcess } from './bridge-process.js'
@@ -12,6 +13,7 @@ import { resolveConfig, type ResolvedConfig } from './config.js'
 import {
   assertSecretFree,
   LIVE_BROWSER_CANONICAL_TASK,
+  LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA,
   LIVE_BROWSER_CHALLENGE_HTML_TEMPLATE,
   LIVE_BROWSER_CHALLENGE_PORT,
   LIVE_BROWSER_CHALLENGE_URL,
@@ -25,6 +27,8 @@ import {
   parseLiveBrowserEvidence,
   sha256Text,
   type LiveBrowserChecks,
+  type LiveBrowserBinaryEvidence,
+  type LiveBrowserBuildEvidence,
   type LiveBrowserEvidence,
   type LiveBrowserExecution,
   type LiveBrowserPlatformEvidence,
@@ -39,6 +43,9 @@ const OPT_IN_ENVIRONMENT = 'LUBAN_LIVE_ACCEPTANCE'
 const DEFAULT_PROVIDER_ENVIRONMENT = 'BROWSER_USE_API_KEY'
 const TEMPORARY_DIRECTORY_PREFIX = 'luban-browser-live-'
 const MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024
+const MAX_BUILD_FILE_BYTES = 16 * 1024 * 1024
+const MAX_BUILD_TREE_BYTES = 64 * 1024 * 1024
+const MAX_BUILD_FILES = 2048
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 const PNG_CRC_TABLE = Uint32Array.from({ length: 256 }, (_, value): number => {
   let crc = value
@@ -51,6 +58,11 @@ const PNG_CRC_TABLE = Uint32Array.from({ length: 256 }, (_, value): number => {
 interface GitEvidence {
   readonly sha: string
   readonly dirty: boolean
+}
+
+interface RequestedLiveBrowserProfile extends BrowserProfile {
+  readonly kernel: 'auto' | 'chromium-headless'
+  readonly headless: boolean
 }
 
 export interface ChallengeObservation {
@@ -80,6 +92,10 @@ interface LiveAcceptanceDependencies {
   readonly execution: LiveBrowserExecution
   readonly inspectPlatform: () => Promise<LiveBrowserPlatformEvidence>
   readonly inspectGit: (repositoryRoot: string) => Promise<GitEvidence>
+  readonly inspectBuild: (
+    repositoryRoot: string,
+    expectedGit: GitEvidence,
+  ) => Promise<LiveBrowserBuildEvidence>
   readonly startChallenge: (nonce: string) => Promise<ChallengeServerHandle>
   readonly createService: (input: ServiceFactoryInput) => AcceptanceBrowserService
   readonly nonce: () => string
@@ -205,6 +221,7 @@ async function runWithDependencies(
       'Live acceptance requires a clean source tree',
     )
   }
+  const build = await dependencies.inspectBuild(repositoryRoot, git)
 
   const temporaryDirectory = await dependencies.makeTemporaryDirectory()
   let challenge: ChallengeServerHandle | undefined
@@ -251,6 +268,7 @@ async function runWithDependencies(
       config,
       platform,
       git,
+      build,
       profile,
       providerEnvironment: provider.name,
       providerSecret: provider.value,
@@ -269,6 +287,18 @@ async function runWithDependencies(
     dependencies.removeTemporaryDirectory(temporaryDirectory),
   ])
   const cleanup = [...runtimeCleanup, ...directoryCleanup]
+  let postRunGit: GitEvidence | undefined
+  try {
+    postRunGit = await dependencies.inspectGit(repositoryRoot)
+  } catch (error: unknown) {
+    if (operationError === undefined) operationError = error
+  }
+  if (postRunGit !== undefined && (postRunGit.dirty || postRunGit.sha !== git.sha)) {
+    throw new LiveAcceptanceError(
+      'E_LIVE_GIT_CHANGED',
+      'Git HEAD or worktree changed during live browser acceptance',
+    )
+  }
   if (operationError !== undefined) {
     if (operationError instanceof LiveAcceptanceError) throw operationError
     throw new LiveAcceptanceError('E_LIVE_BROWSER_RUN', 'Live browser execution failed')
@@ -289,19 +319,20 @@ async function executeAcceptance(input: {
   readonly config: ResolvedConfig
   readonly platform: LiveBrowserPlatformEvidence
   readonly git: GitEvidence
-  readonly profile: LiveBrowserProfileEvidence
+  readonly build: LiveBrowserBuildEvidence
+  readonly profile: BrowserProfile
   readonly providerEnvironment: LiveBrowserProviderEnvironment
   readonly providerSecret: string
   readonly environment: NodeJS.ProcessEnv
   readonly nonce: string
 }): Promise<LiveBrowserEvidence> {
   const startedAt = input.dependencies.now().toISOString()
-  let session: BrowserSession | undefined
   let browserResult: BrowserResult | undefined
   let progressEvents = 0
   const screenshotPaths = new Set<string>()
+  const session = await input.service.start(input.profile)
+  const attestedBrowser = attestedSessionBrowser(session.profile, input.platform)
   try {
-    session = await input.service.start(input.profile)
     for await (const event of input.service.run({
       templateId: LIVE_BROWSER_TEMPLATE_ID,
       goal: '',
@@ -313,17 +344,20 @@ async function executeAcceptance(input: {
   } catch {
     // A stable failed evidence record is preferable to provider diagnostics.
   }
-  for (const path of browserResult?.screenshots ?? []) screenshotPaths.add(path)
+  if (browserResult !== undefined) {
+    for (const path of browserResult.screenshots) screenshotPaths.add(path)
+  }
   const screenshots = await verifyScreenshots([...screenshotPaths], input.config.artifactsDir)
   const observedNonce = structuredNonce(browserResult?.structured)
   const challenge = input.challenge.snapshot()
-  const profileResolved = sameProfile(session?.profile, input.profile)
   const checks: LiveBrowserChecks = Object.freeze({
     optIn: true,
     providerCredentialPresent: true,
     gitClean: !input.git.dirty,
+    buildProvenanceAttested: input.build.gitSha === input.git.sha,
     platformAttested: platformIsAttested(input.platform),
-    browserProfileResolved: profileResolved,
+    browserProfileResolved: true,
+    browserBinaryAttested: true,
     challengeFetched: challenge.requestCount >= 1,
     resultOk: browserResult?.status === 'ok',
     structuredNonceMatched: observedNonce === input.nonce,
@@ -343,12 +377,14 @@ async function executeAcceptance(input: {
     startedAt,
     finishedAt: input.dependencies.now().toISOString(),
     git: Object.freeze({ ...input.git }),
+    build: input.build,
     taskSha256: LIVE_BROWSER_TASK_SHA256,
     fixtureSha256: LIVE_BROWSER_FIXTURE_SHA256,
     providerEnvironment: input.providerEnvironment,
     platform: input.platform,
     browser: Object.freeze({
-      profile: input.profile,
+      profile: attestedBrowser.profile,
+      binary: attestedBrowser.binary,
       bridgeVersion: '0.1.0',
       browserUseVersion: '0.13.8',
       python: '3.12',
@@ -383,6 +419,7 @@ function productionDependencies(): LiveAcceptanceDependencies {
     execution: 'production',
     inspectPlatform: inspectRuntimePlatform,
     inspectGit,
+    inspectBuild: inspectRuntimeBuildProvenance,
     startChallenge: startLoopbackChallenge,
     createService: ({ config, environment }): AcceptanceBrowserService => {
       const bridge = new BridgeProcess({
@@ -464,16 +501,129 @@ function providerCredential(environment: NodeJS.ProcessEnv): {
   return { name: requested, value }
 }
 
+export async function inspectRuntimeBuildProvenance(
+  repositoryRoot: string,
+  expectedGit: GitEvidence,
+  runtimeModulePath = fileURLToPath(import.meta.url),
+): Promise<LiveBrowserBuildEvidence> {
+  try {
+    const canonicalRepository = await realpath(repositoryRoot)
+    const distributionPath = join(canonicalRepository, 'packages', 'dsh-luban-browser', 'dist')
+    const distributionMetadata = await lstat(distributionPath)
+    if (!distributionMetadata.isDirectory() || distributionMetadata.isSymbolicLink()) {
+      throw new Error('invalid distribution directory')
+    }
+    const canonicalDistribution = await realpath(distributionPath)
+    const runtimeMetadata = await lstat(runtimeModulePath)
+    if (!runtimeMetadata.isFile() || runtimeMetadata.isSymbolicLink()) {
+      throw new Error('invalid runtime module')
+    }
+    const canonicalRuntime = await realpath(runtimeModulePath)
+    if (!isWithin(canonicalDistribution, canonicalRuntime)) {
+      throw new Error('runtime module is outside repository distribution')
+    }
+
+    const provenancePath = join(canonicalDistribution, 'build-provenance.json')
+    const provenanceMetadata = await lstat(provenancePath)
+    if (
+      !provenanceMetadata.isFile() ||
+      provenanceMetadata.isSymbolicLink() ||
+      provenanceMetadata.size < 1 ||
+      provenanceMetadata.size > 64 * 1024
+    ) {
+      throw new Error('invalid provenance file')
+    }
+    const canonicalProvenance = await realpath(provenancePath)
+    if (!sameFilesystemPath(canonicalProvenance, provenancePath)) {
+      throw new Error('provenance file escaped distribution')
+    }
+    const decoded = JSON.parse(await readFile(canonicalProvenance, 'utf8')) as unknown
+    const tree = await hashDistributionTree(canonicalDistribution)
+    if (
+      !isRecord(decoded) ||
+      !hasExactKeys(decoded, ['schemaVersion', 'gitSha', 'dirty', 'treeSha256', 'fileCount']) ||
+      decoded.schemaVersion !== LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA ||
+      typeof decoded.gitSha !== 'string' ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(decoded.gitSha) ||
+      decoded.dirty !== false ||
+      decoded.gitSha !== expectedGit.sha ||
+      decoded.treeSha256 !== tree.sha256 ||
+      decoded.fileCount !== tree.fileCount ||
+      expectedGit.dirty
+    ) {
+      throw new Error('build provenance does not match Git state')
+    }
+    return Object.freeze({
+      schemaVersion: LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA,
+      gitSha: decoded.gitSha,
+      dirty: false,
+      treeSha256: tree.sha256,
+      fileCount: tree.fileCount,
+    })
+  } catch (error: unknown) {
+    if (error instanceof LiveAcceptanceError) throw error
+    throw new LiveAcceptanceError(
+      'E_LIVE_BUILD_PROVENANCE',
+      'Runtime module is not a clean build of the current repository commit',
+    )
+  }
+}
+
+async function hashDistributionTree(
+  root: string,
+): Promise<Readonly<{ sha256: string; fileCount: number }>> {
+  const files: { readonly name: string; readonly path: string; readonly size: number }[] = []
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true })
+    entries.sort((left, right): number =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    )
+    for (const entry of entries) {
+      const path = join(directory, entry.name)
+      const name = relative(root, path).replaceAll('\\', '/')
+      if (name === 'build-provenance.json') continue
+      const metadata = await lstat(path)
+      if (metadata.isSymbolicLink()) throw new Error('distribution contains a symbolic link')
+      if (metadata.isDirectory()) {
+        await visit(path)
+      } else if (metadata.isFile()) {
+        if (metadata.size > MAX_BUILD_FILE_BYTES) throw new Error('distribution file is too large')
+        files.push({ name, path, size: metadata.size })
+        if (files.length > MAX_BUILD_FILES) throw new Error('distribution has too many files')
+      } else {
+        throw new Error('distribution contains an unsupported entry')
+      }
+    }
+  }
+  await visit(root)
+  files.sort((left, right): number =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  )
+  const totalBytes = files.reduce((sum, file): number => sum + file.size, 0)
+  if (files.length === 0 || totalBytes > MAX_BUILD_TREE_BYTES) {
+    throw new Error('distribution tree has an invalid size')
+  }
+  const digest = createHash('sha256')
+  for (const file of files) {
+    const contents = await readFile(file.path)
+    if (contents.byteLength !== file.size) throw new Error('distribution changed while hashing')
+    digest.update(file.name, 'utf8')
+    digest.update('\0')
+    digest.update(String(contents.byteLength), 'ascii')
+    digest.update('\0')
+    digest.update(contents)
+  }
+  return Object.freeze({ sha256: digest.digest('hex'), fileCount: files.length })
+}
+
 async function inspectGit(repositoryRoot: string): Promise<GitEvidence> {
-  const [sha, status] = await Promise.all([
-    git(repositoryRoot, ['rev-parse', 'HEAD']),
-    git(repositoryRoot, ['status', '--porcelain=v1', '--untracked-files=normal']),
-  ])
-  const normalizedSha = sha.trim().toLowerCase()
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(normalizedSha)) {
+  const shaBefore = (await git(repositoryRoot, ['rev-parse', 'HEAD'])).trim().toLowerCase()
+  const status = await git(repositoryRoot, ['status', '--porcelain=v1', '--untracked-files=normal'])
+  const shaAfter = (await git(repositoryRoot, ['rev-parse', 'HEAD'])).trim().toLowerCase()
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(shaBefore) || shaAfter !== shaBefore) {
     throw new LiveAcceptanceError('E_LIVE_GIT', 'Git returned an invalid commit identity')
   }
-  return Object.freeze({ sha: normalizedSha, dirty: status.trim() !== '' })
+  return Object.freeze({ sha: shaBefore, dirty: status.trim() !== '' })
 }
 
 function git(repositoryRoot: string, args: readonly string[]): Promise<string> {
@@ -493,11 +643,11 @@ function git(repositoryRoot: string, args: readonly string[]): Promise<string> {
   })
 }
 
-function profileFor(platform: LiveBrowserPlatformEvidence): LiveBrowserProfileEvidence {
+function profileFor(platform: LiveBrowserPlatformEvidence): RequestedLiveBrowserProfile {
   return Object.freeze(
     platform.target === 'windows'
-      ? { kernel: 'chrome', headless: false, isolated: true }
-      : { kernel: 'chromium-headless', headless: true, isolated: true },
+      ? { kernel: 'auto', headless: false }
+      : { kernel: 'chromium-headless', headless: true },
   )
 }
 
@@ -517,15 +667,61 @@ function platformIsAttested(platform: LiveBrowserPlatformEvidence): boolean {
   return platform.runtimePlatform === 'linux' && platform.osReleaseId === 'ubuntu'
 }
 
-function sameProfile(
-  actual: BrowserProfile | undefined,
-  expected: LiveBrowserProfileEvidence,
-): boolean {
-  return (
-    actual?.kernel === expected.kernel &&
-    actual.headless === expected.headless &&
-    Reflect.get(actual, 'isolated') === expected.isolated
-  )
+function attestedSessionBrowser(
+  actual: BrowserProfile,
+  platform: LiveBrowserPlatformEvidence,
+): Readonly<{
+  profile: LiveBrowserProfileEvidence
+  binary: LiveBrowserBinaryEvidence
+}> {
+  const binary = actual.binary
+  const keys = Object.keys(actual)
+  const kernel = actual.kernel
+  const expectedBinary = actual.kernel === 'chromium-headless' ? 'chromium' : actual.kernel
+  if (
+    keys.length !== 4 ||
+    !['kernel', 'headless', 'isolated', 'binary'].every((key): boolean => keys.includes(key)) ||
+    !isLiveBrowserKernel(kernel) ||
+    (platform.target === 'windows'
+      ? kernel !== 'chrome' && kernel !== 'edge'
+      : kernel !== 'chromium-headless') ||
+    actual.headless !== (platform.target === 'ubuntu') ||
+    actual.isolated !== true ||
+    !isRecord(binary) ||
+    !hasExactKeys(binary, ['kind', 'version', 'sha256']) ||
+    !isLiveBrowserBinaryKind(binary.kind) ||
+    binary.kind !== expectedBinary ||
+    typeof binary.version !== 'string' ||
+    binary.version.length > 128 ||
+    !/^\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$/u.test(binary.version) ||
+    typeof binary.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/u.test(binary.sha256)
+  ) {
+    throw new LiveAcceptanceError(
+      'E_LIVE_BROWSER_PROFILE',
+      'Browser bridge did not return the required actual browser attestation',
+    )
+  }
+  return Object.freeze({
+    profile: Object.freeze({
+      kernel,
+      headless: actual.headless,
+      isolated: true,
+    }),
+    binary: Object.freeze({
+      kind: binary.kind,
+      version: binary.version,
+      sha256: binary.sha256,
+    }),
+  })
+}
+
+function isLiveBrowserKernel(value: unknown): value is LiveBrowserProfileEvidence['kernel'] {
+  return typeof value === 'string' && ['chrome', 'edge', 'chromium-headless'].includes(value)
+}
+
+function isLiveBrowserBinaryKind(value: unknown): value is LiveBrowserBinaryEvidence['kind'] {
+  return typeof value === 'string' && ['chrome', 'edge', 'chromium'].includes(value)
 }
 
 function structuredNonce(value: unknown): string | undefined {
@@ -725,4 +921,11 @@ function knownSecretValues(environment: NodeJS.ProcessEnv): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value)
+  return (
+    keys.length === expected.length && expected.every((key): boolean => Object.hasOwn(value, key))
+  )
 }

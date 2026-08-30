@@ -410,7 +410,19 @@ export interface WinDebugService {
 export interface BrowserProfile {
   readonly kernel?: 'auto' | 'chrome' | 'edge' | 'chromium-headless'
   readonly userDataDir?: string
+  /** Explicit executable to validate and launch instead of searching installed browsers. */
+  readonly executablePath?: string
   readonly headless?: boolean
+  /** True when the bridge created and owns the browser profile directory. */
+  readonly isolated?: boolean
+  /** Attestation of the executable that the bridge will launch. */
+  readonly binary?: BrowserBinaryAttestation
+}
+
+export interface BrowserBinaryAttestation {
+  readonly kind: 'chrome' | 'edge' | 'chromium'
+  readonly version: string
+  readonly sha256: string
 }
 
 export interface BrowserSession {

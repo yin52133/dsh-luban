@@ -480,20 +480,51 @@ function decodeResult(value: unknown): BrowserResult {
 function decodeStartedProfile(value: unknown): BrowserProfile {
   const source = asRecord(value)
   const profile = asRecord(source.profile)
+  const binary = asRecord(profile.binary)
   const kernel = profile.kernel
+  const binaryKind = binary.kind
   if (
-    typeof kernel !== 'string' ||
-    !['chrome', 'edge', 'chromium-headless'].includes(kernel) ||
+    !hasExactKeys(profile, ['kernel', 'headless', 'isolated', 'binary']) ||
+    !hasExactKeys(binary, ['kind', 'version', 'sha256']) ||
+    !isResolvedBrowserKernel(kernel) ||
     typeof profile.headless !== 'boolean' ||
-    typeof profile.isolated !== 'boolean'
+    typeof profile.isolated !== 'boolean' ||
+    !isBrowserBinaryKind(binaryKind) ||
+    binaryKind !==
+      ({ chrome: 'chrome', edge: 'edge', 'chromium-headless': 'chromium' } as const)[kernel] ||
+    typeof binary.version !== 'string' ||
+    binary.version.length > 128 ||
+    !/^\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$/u.test(binary.version) ||
+    typeof binary.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/u.test(binary.sha256)
   ) {
     throw new BrowserError('E_BROWSER_PROTOCOL', 'Browser bridge resolved profile is invalid')
   }
   return Object.freeze({
-    kernel: kernel as NonNullable<BrowserProfile['kernel']>,
+    kernel,
     headless: profile.headless,
     isolated: profile.isolated,
+    binary: Object.freeze({
+      kind: binaryKind,
+      version: binary.version,
+      sha256: binary.sha256,
+    }),
   })
+}
+
+function isResolvedBrowserKernel(value: unknown): value is 'chrome' | 'edge' | 'chromium-headless' {
+  return typeof value === 'string' && ['chrome', 'edge', 'chromium-headless'].includes(value)
+}
+
+function isBrowserBinaryKind(value: unknown): value is 'chrome' | 'edge' | 'chromium' {
+  return typeof value === 'string' && ['chrome', 'edge', 'chromium'].includes(value)
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value)
+  return (
+    keys.length === expected.length && expected.every((key): boolean => Object.hasOwn(value, key))
+  )
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -5,7 +6,9 @@ import type { BrowserEvent, BrowserProfile, BrowserSession } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   aggregateLiveBrowserEvidence,
+  inspectRuntimeBuildProvenance,
   inspectRuntimePlatform,
+  LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA,
   LIVE_BROWSER_EVIDENCE_SCHEMA,
   LIVE_BROWSER_FEATURES,
   LIVE_BROWSER_FIXTURE_SHA256,
@@ -23,8 +26,26 @@ import {
 import { runLiveAcceptanceCli } from '../src/live-acceptance-cli.js'
 
 const GIT_SHA = 'a'.repeat(40)
+const RUNTIME_CONTENT = 'export {}\n'
+const BUILD_TREE_SHA256 = createHash('sha256')
+  .update('live-acceptance.js', 'utf8')
+  .update('\0')
+  .update(String(Buffer.byteLength(RUNTIME_CONTENT)), 'ascii')
+  .update('\0')
+  .update(RUNTIME_CONTENT, 'utf8')
+  .digest('hex')
 const NONCE = '0123456789abcdef0123456789abcdef'
 const PROVIDER_SECRET = 'provider-secret-for-tests'
+const CHROME_BINARY = Object.freeze({
+  kind: 'chrome' as const,
+  version: '140.0.7339.81',
+  sha256: 'e'.repeat(64),
+})
+const CHROMIUM_BINARY = Object.freeze({
+  kind: 'chromium' as const,
+  version: '140.0.7339.80',
+  sha256: 'f'.repeat(64),
+})
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
@@ -65,9 +86,23 @@ class FakeAcceptanceService implements AcceptanceBrowserService {
   }
 
   public start(profile: BrowserProfile): Promise<BrowserSession> {
+    const resolvedProfile =
+      profile.kernel === 'chromium-headless'
+        ? {
+            kernel: 'chromium-headless' as const,
+            headless: true,
+            isolated: true,
+            binary: CHROMIUM_BINARY,
+          }
+        : {
+            kernel: 'chrome' as const,
+            headless: false,
+            isolated: true,
+            binary: CHROME_BINARY,
+          }
     return Promise.resolve({
       id: 'test-double-session',
-      profile: this.#options.profile ?? profile,
+      profile: this.#options.profile ?? resolvedProfile,
       startedAt: 1,
     })
   }
@@ -123,6 +158,14 @@ describe('M11 live browser acceptance runner', (): void => {
       kernel: 'chrome',
       headless: false,
       isolated: true,
+    })
+    expect(evidence.browser.binary).toEqual(CHROME_BINARY)
+    expect(evidence.build).toEqual({
+      schemaVersion: LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA,
+      gitSha: GIT_SHA,
+      dirty: false,
+      treeSha256: BUILD_TREE_SHA256,
+      fileCount: 1,
     })
     expect(evidence.taskSha256).toBe(LIVE_BROWSER_TASK_SHA256)
     expect(evidence.fixtureSha256).toBe(LIVE_BROWSER_FIXTURE_SHA256)
@@ -284,6 +327,95 @@ describe('M11 live browser acceptance runner', (): void => {
       osReleaseId: 'ubuntu',
     })
   })
+
+  it('rejects an actual browser identity that contradicts the resolved kernel', async (): Promise<void> => {
+    const dependencies = await testDependencies(
+      ({ config, nonce }) =>
+        new FakeAcceptanceService(config.artifactsDir, nonce, {
+          profile: {
+            kernel: 'chrome',
+            headless: false,
+            isolated: true,
+            binary: { ...CHROME_BINARY, kind: 'edge' },
+          },
+        }),
+    )
+
+    await expect(
+      runLiveBrowserAcceptanceForTest(liveOptions(), dependencies),
+    ).rejects.toMatchObject({ code: 'E_LIVE_BROWSER_PROFILE' })
+  })
+
+  it.each([
+    ['dirty worktree', { sha: GIT_SHA, dirty: true }],
+    ['HEAD drift', { sha: 'b'.repeat(40), dirty: false }],
+  ])('rejects post-run Git %s', async (_label, changedGit): Promise<void> => {
+    const inspectGit = vi
+      .fn<() => Promise<{ sha: string; dirty: boolean }>>()
+      .mockResolvedValueOnce({ sha: GIT_SHA, dirty: false })
+      .mockResolvedValueOnce(changedGit)
+    const dependencies = await testDependencies(
+      ({ config, nonce }) => new FakeAcceptanceService(config.artifactsDir, nonce),
+      { inspectGit },
+    )
+
+    await expect(
+      runLiveBrowserAcceptanceForTest(liveOptions(), dependencies),
+    ).rejects.toMatchObject({ code: 'E_LIVE_GIT_CHANGED' })
+    expect(inspectGit).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('M11 runtime build provenance', (): void => {
+  it('accepts only a clean matching build whose runtime module is inside the repository dist', async (): Promise<void> => {
+    const fixture = await provenanceFixture({ gitSha: GIT_SHA, dirty: false })
+
+    await expect(
+      inspectRuntimeBuildProvenance(fixture.root, { sha: GIT_SHA, dirty: false }, fixture.runtime),
+    ).resolves.toEqual({
+      schemaVersion: LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA,
+      gitSha: GIT_SHA,
+      dirty: false,
+      treeSha256: BUILD_TREE_SHA256,
+      fileCount: 1,
+    })
+  })
+
+  it.each([
+    ['stale SHA', 'b'.repeat(40), false],
+    ['dirty build', GIT_SHA, true],
+  ])('rejects a %s provenance record', async (_label, gitSha, dirty): Promise<void> => {
+    const fixture = await provenanceFixture({ gitSha, dirty })
+
+    await expect(
+      inspectRuntimeBuildProvenance(fixture.root, { sha: GIT_SHA, dirty: false }, fixture.runtime),
+    ).rejects.toMatchObject({ code: 'E_LIVE_BUILD_PROVENANCE' })
+  })
+
+  it('rejects an installed runtime module or source seam outside the repository dist', async (): Promise<void> => {
+    const fixture = await provenanceFixture({ gitSha: GIT_SHA, dirty: false })
+    const outsideRuntime = join(await temporaryDirectory('luban-installed-runtime-'), 'live.js')
+    await writeFile(outsideRuntime, 'export {}\n')
+    const sourceDirectory = join(fixture.root, 'packages', 'dsh-luban-browser', 'src')
+    await mkdir(sourceDirectory, { recursive: true })
+    const sourceRuntime = join(sourceDirectory, 'live-acceptance.ts')
+    await writeFile(sourceRuntime, 'export {}\n')
+
+    for (const runtime of [outsideRuntime, sourceRuntime]) {
+      await expect(
+        inspectRuntimeBuildProvenance(fixture.root, { sha: GIT_SHA, dirty: false }, runtime),
+      ).rejects.toMatchObject({ code: 'E_LIVE_BUILD_PROVENANCE' })
+    }
+  })
+
+  it('rejects a distribution file changed after provenance was written', async (): Promise<void> => {
+    const fixture = await provenanceFixture({ gitSha: GIT_SHA, dirty: false })
+    await writeFile(fixture.runtime, 'export const stale = true\n')
+
+    await expect(
+      inspectRuntimeBuildProvenance(fixture.root, { sha: GIT_SHA, dirty: false }, fixture.runtime),
+    ).rejects.toMatchObject({ code: 'E_LIVE_BUILD_PROVENANCE' })
+  })
 })
 
 describe('M11 dual-platform evidence aggregation', (): void => {
@@ -360,6 +492,14 @@ describe('M11 dual-platform evidence aggregation', (): void => {
       { ...evidence, fixtureSha256: 'f'.repeat(64) },
       { ...evidence, providerEnvironment: 'UNTRUSTED_API_KEY' },
       { ...evidence, verdict: 'test-only' },
+      { ...evidence, build: { ...evidence.build, gitSha: 'b'.repeat(40) } },
+      {
+        ...evidence,
+        browser: {
+          ...evidence.browser,
+          binary: { ...evidence.browser.binary, kind: 'edge' as const },
+        },
+      },
       { ...evidence, checks: { ...evidence.checks, unknown: true } },
       {
         ...evidence,
@@ -406,6 +546,14 @@ async function testDependencies(
   return {
     inspectPlatform: () => Promise.resolve(windowsPlatform()),
     inspectGit: () => Promise.resolve({ sha: GIT_SHA, dirty: false }),
+    inspectBuild: () =>
+      Promise.resolve({
+        schemaVersion: LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA,
+        gitSha: GIT_SHA,
+        dirty: false,
+        treeSha256: BUILD_TREE_SHA256,
+        fileCount: 1,
+      }),
     startChallenge: () => Promise.resolve(fakeChallenge()),
     createService,
     nonce: () => NONCE,
@@ -452,8 +600,10 @@ function allChecks(): LiveBrowserChecks {
     optIn: true,
     providerCredentialPresent: true,
     gitClean: true,
+    buildProvenanceAttested: true,
     platformAttested: true,
     browserProfileResolved: true,
+    browserBinaryAttested: true,
     challengeFetched: true,
     resultOk: true,
     structuredNonceMatched: true,
@@ -474,6 +624,13 @@ function productionEvidence(target: 'windows' | 'ubuntu'): LiveBrowserEvidence {
     startedAt: new Date(1).toISOString(),
     finishedAt: new Date(2).toISOString(),
     git: { sha: GIT_SHA, dirty: false },
+    build: {
+      schemaVersion: LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA,
+      gitSha: GIT_SHA,
+      dirty: false,
+      treeSha256: BUILD_TREE_SHA256,
+      fileCount: 1,
+    },
     taskSha256: LIVE_BROWSER_TASK_SHA256,
     fixtureSha256: LIVE_BROWSER_FIXTURE_SHA256,
     providerEnvironment: 'BROWSER_USE_API_KEY',
@@ -490,6 +647,7 @@ function productionEvidence(target: 'windows' | 'ubuntu'): LiveBrowserEvidence {
       profile: windows
         ? { kernel: 'chrome', headless: false, isolated: true }
         : { kernel: 'chromium-headless', headless: true, isolated: true },
+      binary: windows ? CHROME_BINARY : CHROMIUM_BINARY,
       bridgeVersion: '0.1.0',
       browserUseVersion: '0.13.8',
       python: '3.12',
@@ -523,4 +681,27 @@ async function temporaryDirectory(prefix: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), prefix))
   temporaryDirectories.add(directory)
   return directory
+}
+
+async function provenanceFixture(provenance: {
+  readonly gitSha: string
+  readonly dirty: boolean
+}): Promise<{ readonly root: string; readonly runtime: string }> {
+  const root = await temporaryDirectory('luban-build-provenance-')
+  const distribution = join(root, 'packages', 'dsh-luban-browser', 'dist')
+  await mkdir(distribution, { recursive: true })
+  const runtime = join(distribution, 'live-acceptance.js')
+  await Promise.all([
+    writeFile(runtime, RUNTIME_CONTENT),
+    writeFile(
+      join(distribution, 'build-provenance.json'),
+      JSON.stringify({
+        schemaVersion: LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA,
+        ...provenance,
+        treeSha256: BUILD_TREE_SHA256,
+        fileCount: 1,
+      }),
+    ),
+  ])
+  return { root, runtime }
 }

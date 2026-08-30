@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from luban_browser_bridge import hal
 from luban_browser_bridge.engine import BrowserUseEngine
 from luban_browser_bridge.errors import BridgeError
 
@@ -96,7 +97,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             patch("luban_browser_bridge.engine.importlib.import_module", return_value=fake_module),
         ):
             engine = BrowserUseEngine()
-            await engine.start({"kernel": "chromium-headless"})
+            await _start_engine(engine, Path(directory))
             result = await engine.run(
                 {
                     "runId": "run-1",
@@ -129,7 +130,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             patch("luban_browser_bridge.engine.importlib.metadata.version", return_value="0.13.8"),
         ):
             engine = BrowserUseEngine()
-            await engine.start({"kernel": "chromium-headless"})
+            await _start_engine(engine, Path(directory))
             with self.assertRaises(BridgeError) as raised:
                 await engine.run(
                     {
@@ -145,6 +146,19 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.payload.code, "E_BROWSER_INVALID_TASK")
         self.assertIn("Wildcard domain pattern", raised.exception.payload.message)
+
+    async def test_missing_browser_fails_before_loading_browser_use(self) -> None:
+        with (
+            patch("luban_browser_bridge.engine.importlib.metadata.version", return_value="0.13.8"),
+            patch.object(hal.sys, "platform", "win32"),
+            patch.object(hal, "_browser_candidates", return_value=()),
+            patch("luban_browser_bridge.engine.importlib.import_module") as import_module,
+        ):
+            engine = BrowserUseEngine()
+            with self.assertRaises(BridgeError) as raised:
+                await engine.start({"kernel": "auto"})
+        self.assertEqual(raised.exception.payload.code, "E_BROWSER_UNAVAILABLE")
+        import_module.assert_not_called()
 
     async def test_removes_browser_use_profile_copy_for_every_agent_outcome(self) -> None:
         cases: tuple[tuple[str, type[object], bool], ...] = (
@@ -238,7 +252,7 @@ async def _execute(
                 return_value=fake_module,
             ),
         ):
-            await engine.start({"kernel": "chrome", "userDataDir": str(caller_profile)})
+            await _start_engine(engine, caller_profile.parent, caller_profile)
             return await engine.run(
                 _run_spec(output_dir, run_id),
                 lambda event: _append([], event),
@@ -246,6 +260,30 @@ async def _execute(
             )
     finally:
         await engine.stop()
+
+
+async def _start_engine(
+    engine: BrowserUseEngine,
+    root: Path,
+    user_data_dir: Path | None = None,
+) -> None:
+    browser = root / "attested-chrome.exe"
+    browser.write_bytes(b"test-chrome-binary")
+    profile: dict[str, object] = {
+        "kernel": "chrome",
+        "executablePath": str(browser),
+    }
+    if user_data_dir is not None:
+        profile["userDataDir"] = str(user_data_dir)
+    with (
+        patch.object(hal.sys, "platform", "win32"),
+        patch.object(
+            hal,
+            "_probe_browser_identity",
+            return_value=("chrome", "140.0.0.0"),
+        ),
+    ):
+        await engine.start(profile)
 
 
 def _required_copy() -> Path:

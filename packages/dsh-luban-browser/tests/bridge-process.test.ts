@@ -83,6 +83,28 @@ describe('BridgeProcess', (): void => {
     })
     await expect(bridge.close()).resolves.toBeUndefined()
   })
+
+  it('rejects a resolved profile whose binary product does not match its kernel', async (): Promise<void> => {
+    const harness = await createHarness({
+      shutdownWithoutNewline: false,
+      exitDelayMs: 20,
+      resolvedProfile: {
+        kernel: 'chrome',
+        headless: false,
+        isolated: true,
+        binary: { kind: 'edge', version: '140.0.0.0', sha256: 'a'.repeat(64) },
+      },
+    })
+    const bridge = new BridgeProcess({
+      config: harness.config,
+      spawnProcess: harness.spawnProcess,
+    })
+
+    await expect(bridge.start({ kernel: 'chrome' })).rejects.toMatchObject({
+      code: 'E_BROWSER_PROTOCOL',
+    })
+    await expect(bridge.close()).resolves.toBeUndefined()
+  })
 })
 
 interface HarnessOptions {
@@ -128,6 +150,7 @@ function bridgeFixtureScript(options: HarnessOptions): string {
       kernel: 'chromium-headless',
       headless: true,
       isolated: true,
+      binary: { kind: 'chromium', version: '140.0.7339.80', sha256: 'a'.repeat(64) },
     },
   )
   return String.raw`
