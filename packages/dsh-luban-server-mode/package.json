@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "luban-build-worker": "./dist/build-worker.js"
+    "luban-build-worker": "./dist/build-worker.js",
+    "luban-server-mode": "./dist/operator-cli.js"
   },
   "exports": {
     ".": {

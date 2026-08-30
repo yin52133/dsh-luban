@@ -61,7 +61,15 @@ export { NodeResourceProbe } from './resources.js'
 export type { ResourceProbe, ResourceSample } from './resources.js'
 export { DefaultServerModeService } from './service.js'
 export { UserSystemdInstaller } from './systemd.js'
-export type { SystemdInstallerOptions } from './systemd.js'
+export type {
+  SystemdActiveState,
+  SystemdEnabledState,
+  SystemdInstallerOptions,
+  SystemdLingerState,
+  SystemdPreflight,
+  SystemdStatus,
+  SystemdUnitState,
+} from './systemd.js'
 export { compileTemplate } from './templates.js'
 export type { CompileTemplateInput } from './templates.js'
 export { decodeWorkerResult, decodeWorkerSpec } from './worker-protocol.js'

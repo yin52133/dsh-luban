@@ -4,7 +4,11 @@ const sharedExternals = [/^@deepseek-ai\//u, /^@luban\//u, /^react(?:\/|$)/u]
 
 export default defineConfig([
   {
-    entry: { index: 'src/index.ts', 'build-worker': 'src/build-worker.ts' },
+    entry: {
+      index: 'src/index.ts',
+      'build-worker': 'src/build-worker.ts',
+      'operator-cli': 'src/operator-cli.ts',
+    },
     outDir: 'dist',
     format: ['esm'],
     platform: 'node',
