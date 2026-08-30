@@ -13,6 +13,8 @@ import { isIP, connect as netConnect, type Socket } from 'node:net'
 import { connect as tlsConnect } from 'node:tls'
 import { Transform, type Duplex, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { StringDecoder } from 'node:string_decoder'
+import { asSessionId, type AccountId } from 'dsh-luban-core'
 import type { AuthManager } from './auth-manager.js'
 import {
   AUTH_COOKIE_NAME,
@@ -46,6 +48,16 @@ const LOGOUT_ROUTE = `${AUTH_ROOT}/logout`
 const SESSION_ROUTE = `${AUTH_ROOT}/session`
 const REVOKE_ALL_ROUTE = `${AUTH_ROOT}/revoke-all`
 const USERS_ROUTE = `${AUTH_ROOT}/users`
+const DSH_API_ROOT = '/api/'
+const DSH_MUX_ROUTE = `${DSH_API_ROOT}events.mux`
+const DSH_HOST_EVENTS_ROUTE = `${DSH_API_ROOT}events.host`
+const DSH_RESPOND_ROUTE = `${DSH_API_ROOT}respond`
+const DSH_FILTERED_UNARY_METHODS = new Set([
+  'session.list',
+  'session.search',
+  'session.create',
+  'session.fork',
+])
 const SENSITIVE_COOKIE_NAMES = new Set([AUTH_COOKIE_NAME, CSRF_COOKIE_NAME])
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -67,6 +79,22 @@ interface SidecarOptions {
 }
 
 type ManagerAuthentication = NonNullable<Awaited<ReturnType<AuthManager['authenticateToken']>>>
+
+interface SessionScopeDenial {
+  readonly sessionId: string
+  readonly reason: 'foreign' | 'unbound'
+}
+
+interface DshRequestContext {
+  readonly accountId: AccountId
+  readonly method: string | undefined
+  readonly rpcId: string | undefined
+}
+
+interface BodyRewrite {
+  readonly body: Buffer
+  readonly changed: boolean
+}
 
 /** Global authentication gateway in front of the loopback-only DSH WebServer. */
 export class AuthSidecar implements AuthGateway {
@@ -225,6 +253,28 @@ export class AuthSidecar implements AuthGateway {
 
     assertRequestOrigin(request, security, csrfValid)
     assertProxyBodySize(request, this.#config.maxProxyBodyBytes)
+    const queryDenial = await this.#firstSessionScopeDenial(
+      authenticated.session.accountId,
+      sessionIdsFromSearchParams(target.searchParams),
+    )
+    if (queryDenial !== null) throw accountScopeHttpError(queryDenial)
+    if (
+      request.method === 'GET' &&
+      (target.pathname === DSH_MUX_ROUTE || target.pathname === DSH_HOST_EVENTS_ROUTE)
+    ) {
+      await this.#proxyDshEventStream(
+        request,
+        response,
+        target,
+        security,
+        authenticated.session.accountId,
+      )
+      return
+    }
+    if (request.method === 'POST' && target.pathname.startsWith(DSH_API_ROOT)) {
+      await this.#proxyDshApi(request, response, target, security, authenticated.session.accountId)
+      return
+    }
     await this.#proxyHttp(request, response, target, security)
   }
 
@@ -458,6 +508,294 @@ export class AuthSidecar implements AuthGateway {
     return security.protocol === 'https'
   }
 
+  async #firstSessionScopeDenial(
+    accountId: AccountId,
+    sessionIds: Iterable<string>,
+  ): Promise<SessionScopeDenial | null> {
+    for (const sessionId of new Set(sessionIds)) {
+      const owner = await this.#manager.dshSessionOwner(asSessionId(sessionId))
+      if (owner === accountId) continue
+      return { sessionId, reason: owner === null ? 'unbound' : 'foreign' }
+    }
+    return null
+  }
+
+  async #proxyDshApi(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: URL,
+    security: RequestSecurityContext,
+    accountId: AccountId,
+  ): Promise<void> {
+    const body = await readBoundedBody(request, this.#config.maxProxyBodyBytes)
+    const message = parseJsonRecord(body)
+    const rpcId = typeof message?.rpcId === 'string' ? message.rpcId : undefined
+    const method = methodFromDshPath(target.pathname)
+    const scopeRoot = target.pathname === DSH_RESPOND_ROUTE ? message : asRecord(message?.payload)
+    const denial = await this.#firstSessionScopeDenial(accountId, collectSessionIds(scopeRoot))
+    if (denial !== null) {
+      if (rpcId === undefined) throw accountScopeHttpError(denial)
+      sendDshScopeError(response, rpcId, denial)
+      return
+    }
+    await this.#proxyBufferedDshRequest(request, response, target, security, body, {
+      accountId,
+      method,
+      rpcId,
+    })
+  }
+
+  async #proxyBufferedDshRequest(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: URL,
+    security: RequestSecurityContext,
+    body: Buffer,
+    context: DshRequestContext,
+  ): Promise<void> {
+    const headers = buildProxyHeaders(request.headers, security, this.#upstream, false)
+    headers['accept-encoding'] = 'identity'
+    headers['content-length'] = String(body.length)
+    const transport = this.#upstream.protocol === 'https:' ? httpsRequest : httpRequest
+    const rewriteResponse =
+      context.method !== undefined &&
+      (DSH_FILTERED_UNARY_METHODS.has(context.method) || context.method.startsWith('workspace.'))
+    await new Promise<void>((resolve, reject): void => {
+      let settled = false
+      const settle = (error?: unknown): void => {
+        if (settled) return
+        settled = true
+        this.#upstreamRequests.delete(upstreamRequest)
+        if (error === undefined) resolve()
+        else
+          reject(
+            error instanceof Error
+              ? error
+              : new Error('luban-auth: upstream proxy failed', { cause: error }),
+          )
+      }
+      const upstreamRequest = transport(
+        {
+          protocol: this.#upstream.protocol,
+          hostname: this.#upstream.hostname,
+          port: upstreamPort(this.#upstream),
+          method: request.method,
+          path: `${target.pathname}${target.search}`,
+          headers,
+          agent: false,
+        },
+        (upstreamResponse): void => {
+          if (!rewriteResponse) {
+            writeProxyResponseHead(response, upstreamResponse, this.#upstream, security)
+            upstreamResponse.once('error', settle)
+            upstreamResponse.once('end', (): void => settle())
+            upstreamResponse.pipe(response)
+            return
+          }
+          void (async (): Promise<void> => {
+            const upstreamBody = await readBoundedBody(
+              upstreamResponse,
+              this.#config.maxProxyBodyBytes,
+            )
+            const rewritten = await this.#rewriteDshUnaryResponse(context, upstreamBody)
+            const responseHeaders = filterResponseHeaders(upstreamResponse.headers)
+            responseHeaders['content-length'] = String(rewritten.body.length)
+            if (rewritten.changed) {
+              delete responseHeaders['content-encoding']
+              delete responseHeaders.etag
+              delete responseHeaders['content-md5']
+            }
+            if (upstreamResponse.statusMessage === undefined) {
+              response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders)
+            } else {
+              response.writeHead(
+                upstreamResponse.statusCode ?? 502,
+                upstreamResponse.statusMessage,
+                responseHeaders,
+              )
+            }
+            response.end(rewritten.body)
+          })().then(
+            (): void => settle(),
+            (error: unknown): void => settle(error),
+          )
+        },
+      )
+      this.#upstreamRequests.add(upstreamRequest)
+      upstreamRequest.once('error', settle)
+      upstreamRequest.end(body)
+    })
+  }
+
+  async #rewriteDshUnaryResponse(context: DshRequestContext, body: Buffer): Promise<BodyRewrite> {
+    const message = parseJsonRecord(body)
+    if (
+      message?.type !== 'server-response' ||
+      typeof message.rpcId !== 'string' ||
+      message.rpcId !== context.rpcId
+    ) {
+      return { body, changed: false }
+    }
+    const result = asRecord(message.result)
+    if (result === null) return { body, changed: false }
+    const method = context.method
+    if ((method === 'session.create' || method === 'session.fork') && result.ok === false) {
+      const error = asRecord(result.error)
+      const details = asRecord(error?.details)
+      if (error?.code === 'workspace-attach-failed' && typeof details?.sessionId === 'string') {
+        const denial = await this.#bindCreatedSession(context.accountId, details.sessionId)
+        if (denial !== null) {
+          return { body: dshScopeErrorBody(message.rpcId, denial), changed: true }
+        }
+      }
+      return { body, changed: false }
+    }
+    if (result.ok !== true) return { body, changed: false }
+    const value = asRecord(result.value)
+    if (value === null) return { body, changed: false }
+
+    if (method === 'session.create' || method === 'session.fork') {
+      if (typeof value.sessionId !== 'string') return { body, changed: false }
+      const denial = await this.#bindCreatedSession(context.accountId, value.sessionId)
+      return denial === null
+        ? { body, changed: false }
+        : { body: dshScopeErrorBody(message.rpcId, denial), changed: true }
+    }
+
+    if (method === 'session.list' || method === 'session.search') {
+      if (!Array.isArray(value.items)) return { body, changed: false }
+      const keep = await Promise.all(
+        value.items.map(async (item): Promise<boolean> => {
+          const record = asRecord(item)
+          if (typeof record?.sessionId !== 'string') return false
+          return (
+            (await this.#manager.dshSessionOwner(asSessionId(record.sessionId))) ===
+            context.accountId
+          )
+        }),
+      )
+      const items = value.items.filter((_item, index) => keep[index] === true)
+      if (items.length === value.items.length) return { body, changed: false }
+      return {
+        body: Buffer.from(
+          JSON.stringify({
+            ...message,
+            result: { ...result, value: { ...value, items } },
+          }),
+          'utf8',
+        ),
+        changed: true,
+      }
+    }
+
+    if (method?.startsWith('workspace.') === true) {
+      const rewrittenValue = await rewriteSessionIdArrays(
+        value,
+        async (sessionId): Promise<boolean> => {
+          return (await this.#manager.dshSessionOwner(asSessionId(sessionId))) === context.accountId
+        },
+      )
+      if (!rewrittenValue.changed) return { body, changed: false }
+      return {
+        body: Buffer.from(
+          JSON.stringify({ ...message, result: { ...result, value: rewrittenValue.value } }),
+          'utf8',
+        ),
+        changed: true,
+      }
+    }
+    return { body, changed: false }
+  }
+
+  async #bindCreatedSession(
+    accountId: AccountId,
+    sessionId: string,
+  ): Promise<SessionScopeDenial | null> {
+    const owner = await this.#manager.dshSessionOwner(asSessionId(sessionId))
+    if (owner === accountId) return null
+    if (owner !== null) return { sessionId, reason: 'foreign' }
+    try {
+      await this.#manager.bindDshSession(accountId, asSessionId(sessionId))
+      return null
+    } catch (error: unknown) {
+      if (errorCode(error) === 'E_ACCOUNT_SCOPE_MISMATCH') {
+        return { sessionId, reason: 'foreign' }
+      }
+      throw error
+    }
+  }
+
+  async #proxyDshEventStream(
+    request: IncomingMessage,
+    response: ServerResponse,
+    target: URL,
+    security: RequestSecurityContext,
+    accountId: AccountId,
+  ): Promise<void> {
+    const headers = buildProxyHeaders(request.headers, security, this.#upstream, false)
+    headers['accept-encoding'] = 'identity'
+    const transport = this.#upstream.protocol === 'https:' ? httpsRequest : httpRequest
+    await new Promise<void>((resolve, reject): void => {
+      let settled = false
+      const settle = (error?: unknown): void => {
+        if (settled) return
+        settled = true
+        this.#upstreamRequests.delete(upstreamRequest)
+        if (error === undefined) resolve()
+        else
+          reject(
+            error instanceof Error
+              ? error
+              : new Error('luban-auth: upstream event proxy failed', { cause: error }),
+          )
+      }
+      const upstreamRequest = transport(
+        {
+          protocol: this.#upstream.protocol,
+          hostname: this.#upstream.hostname,
+          port: upstreamPort(this.#upstream),
+          method: request.method,
+          path: `${target.pathname}${target.search}`,
+          headers,
+          agent: false,
+        },
+        (upstreamResponse): void => {
+          writeProxyResponseHead(response, upstreamResponse, this.#upstream, security)
+          const filter = new DshSseFilter((block): Promise<string | null> =>
+            this.#filterDshEventBlock(accountId, block),
+          )
+          pipeline(upstreamResponse, filter, response).then(
+            (): void => settle(),
+            (error: unknown): void => settle(error),
+          )
+        },
+      )
+      this.#upstreamRequests.add(upstreamRequest)
+      upstreamRequest.once('error', settle)
+      upstreamRequest.end()
+    })
+  }
+
+  async #filterDshEventBlock(accountId: AccountId, block: string): Promise<string | null> {
+    const data = sseData(block)
+    if (data === null) return block
+    const message = parseJsonRecord(Buffer.from(data, 'utf8'))
+    if (message?.type !== 'server-request') return null
+    const payload = asRecord(message.payload)
+    if (payload === null || typeof payload.type !== 'string' || message.method !== payload.type) {
+      return null
+    }
+    if (typeof payload.sessionId === 'string') {
+      const denial = await this.#firstSessionScopeDenial(accountId, [payload.sessionId])
+      return denial === null ? block : null
+    }
+    const rewritten = await rewriteSessionIdArrays(payload, async (sessionId): Promise<boolean> => {
+      return (await this.#manager.dshSessionOwner(asSessionId(sessionId))) === accountId
+    })
+    if (!rewritten.changed) return block
+    return `data: ${JSON.stringify({ ...message, payload: rewritten.value })}`
+  }
+
   async #proxyHttp(
     request: IncomingMessage,
     response: ServerResponse,
@@ -586,6 +924,54 @@ export class AuthSidecar implements AuthGateway {
   }
 }
 
+class DshSseFilter extends Transform {
+  readonly #decoder = new StringDecoder('utf8')
+  readonly #filter: (block: string) => Promise<string | null>
+  #buffer = ''
+
+  public constructor(filter: (block: string) => Promise<string | null>) {
+    super()
+    this.#filter = filter
+  }
+
+  public override _transform(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: TransformCallback,
+  ): void {
+    this.#buffer += this.#decoder.write(chunk)
+    this.#drainCompleteBlocks().then(
+      (): void => callback(),
+      (error: unknown): void => callback(error instanceof Error ? error : new Error(String(error))),
+    )
+  }
+
+  public override _flush(callback: TransformCallback): void {
+    this.#buffer += this.#decoder.end()
+    void (async (): Promise<void> => {
+      await this.#drainCompleteBlocks()
+      if (this.#buffer === '') return
+      const filtered = await this.#filter(this.#buffer)
+      this.#buffer = ''
+      if (filtered !== null) this.push(filtered)
+    })().then(
+      (): void => callback(),
+      (error: unknown): void => callback(error instanceof Error ? error : new Error(String(error))),
+    )
+  }
+
+  async #drainCompleteBlocks(): Promise<void> {
+    let boundary = /\r?\n\r?\n/u.exec(this.#buffer)
+    while (boundary !== null) {
+      const block = this.#buffer.slice(0, boundary.index)
+      this.#buffer = this.#buffer.slice(boundary.index + boundary[0].length)
+      const filtered = await this.#filter(block)
+      if (filtered !== null) this.push(`${filtered}\n\n`)
+      boundary = /\r?\n\r?\n/u.exec(this.#buffer)
+    }
+  }
+}
+
 class BodyLimitTransform extends Transform {
   readonly #maximumBytes: number
   #receivedBytes = 0
@@ -614,6 +1000,186 @@ function requestTarget(request: IncomingMessage): URL {
     return new URL(request.url ?? '/', 'http://sidecar.invalid')
   } catch {
     throw new HttpError(400, 'E_INVALID_URL', 'Invalid request target')
+  }
+}
+
+async function readBoundedBody(
+  stream: AsyncIterable<Uint8Array>,
+  maximumBytes: number,
+): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let receivedBytes = 0
+  for await (const chunk of stream) {
+    const buffer = Buffer.from(chunk)
+    receivedBytes += buffer.length
+    if (receivedBytes > maximumBytes) {
+      throw new HttpError(413, 'E_BODY_TOO_LARGE', 'Request body exceeds the configured limit')
+    }
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks, receivedBytes)
+}
+
+function parseJsonRecord(body: Buffer): Record<string, unknown> | null {
+  try {
+    return asRecord(JSON.parse(body.toString('utf8')) as unknown)
+  } catch {
+    return null
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function methodFromDshPath(pathname: string): string | undefined {
+  if (!pathname.startsWith(DSH_API_ROOT)) return undefined
+  const method = pathname.slice(DSH_API_ROOT.length)
+  return method === '' || method.includes('/') ? undefined : method
+}
+
+function collectSessionIds(value: unknown): string[] {
+  const ids: string[] = []
+  const pending: unknown[] = [value]
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (Array.isArray(current)) {
+      for (const item of current as readonly unknown[]) pending.push(item)
+      continue
+    }
+    const record = asRecord(current)
+    if (record === null) continue
+    for (const [key, nested] of Object.entries(record)) {
+      if (/sessionid$/iu.test(key) && typeof nested === 'string' && nested !== '') {
+        ids.push(nested)
+        continue
+      }
+      if (/sessionids$/iu.test(key) && Array.isArray(nested)) {
+        for (const item of nested) if (typeof item === 'string' && item !== '') ids.push(item)
+        continue
+      }
+      pending.push(nested)
+    }
+  }
+  return ids
+}
+
+function sessionIdsFromSearchParams(params: URLSearchParams): string[] {
+  const ids: string[] = []
+  for (const [key, value] of params) {
+    if (/sessionids?$/iu.test(key) && value !== '') ids.push(value)
+  }
+  return ids
+}
+
+async function rewriteSessionIdArrays(
+  value: unknown,
+  keep: (sessionId: string) => Promise<boolean>,
+): Promise<{ readonly value: unknown; readonly changed: boolean }> {
+  if (Array.isArray(value)) {
+    const rewritten = await Promise.all(value.map((item) => rewriteSessionIdArrays(item, keep)))
+    const changed = rewritten.some((item) => item.changed)
+    return { value: changed ? rewritten.map((item) => item.value) : value, changed }
+  }
+  const record = asRecord(value)
+  if (record === null) return { value, changed: false }
+  let changed = false
+  const result: Record<string, unknown> = {}
+  for (const [key, nested] of Object.entries(record)) {
+    if (/sessionids$/iu.test(key) && Array.isArray(nested)) {
+      const decisions = await Promise.all(
+        nested.map(
+          async (item): Promise<boolean> => typeof item !== 'string' || (await keep(item)),
+        ),
+      )
+      const filtered = nested.filter((_item, index) => decisions[index] === true)
+      result[key] = filtered
+      changed ||= filtered.length !== nested.length
+      continue
+    }
+    const rewritten = await rewriteSessionIdArrays(nested, keep)
+    result[key] = rewritten.value
+    changed ||= rewritten.changed
+  }
+  return { value: changed ? result : value, changed }
+}
+
+function sseData(block: string): string | null {
+  const parts = block
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart())
+  return parts.length === 0 ? null : parts.join('')
+}
+
+function accountScopeHttpError(denial: SessionScopeDenial): HttpError {
+  return new HttpError(404, 'E_ACCOUNT_SCOPE_MISMATCH', accountScopeMessage(denial))
+}
+
+function accountScopeMessage(denial: SessionScopeDenial): string {
+  return denial.reason === 'unbound'
+    ? `DSH session ${JSON.stringify(denial.sessionId)} has no account owner`
+    : `DSH session ${JSON.stringify(denial.sessionId)} belongs to another account`
+}
+
+function dshScopeErrorBody(rpcId: string, denial: SessionScopeDenial): Buffer {
+  return Buffer.from(
+    JSON.stringify({
+      type: 'server-response',
+      rpcId,
+      result: {
+        ok: false,
+        error: {
+          code: 'session-not-found',
+          message: `E_ACCOUNT_SCOPE_MISMATCH: ${accountScopeMessage(denial)}`,
+          details: { sessionId: denial.sessionId },
+        },
+      },
+    }),
+    'utf8',
+  )
+}
+
+function sendDshScopeError(
+  response: ServerResponse,
+  rpcId: string,
+  denial: SessionScopeDenial,
+): void {
+  const body = dshScopeErrorBody(rpcId, denial)
+  response.writeHead(200, {
+    'cache-control': 'no-store',
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(body.length),
+  })
+  response.end(body)
+}
+
+function errorCode(error: unknown): string | undefined {
+  const record = asRecord(error)
+  return typeof record?.code === 'string' ? record.code : undefined
+}
+
+function writeProxyResponseHead(
+  response: ServerResponse,
+  upstreamResponse: IncomingMessage,
+  upstream: URL,
+  security: RequestSecurityContext,
+): void {
+  const responseHeaders = filterResponseHeaders(upstreamResponse.headers)
+  const location = responseHeaders.location
+  if (typeof location === 'string') {
+    responseHeaders.location = rewriteUpstreamLocation(location, upstream, security)
+  }
+  if (upstreamResponse.statusMessage === undefined) {
+    response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders)
+  } else {
+    response.writeHead(
+      upstreamResponse.statusCode ?? 502,
+      upstreamResponse.statusMessage,
+      responseHeaders,
+    )
   }
 }
 

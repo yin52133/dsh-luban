@@ -8,6 +8,7 @@ import {
 import { connect, type Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
+import { asAccountId, asSessionId } from 'dsh-luban-core'
 import { localHostnames, parseUpstream, resolveAuthConfig } from '../src/config.js'
 import { AuthSidecar } from '../src/sidecar.js'
 import type { LubanAuthConfig } from '../src/types.js'
@@ -20,6 +21,12 @@ interface IntegrationHarness {
   readonly baseUrl: string
   readonly publicPort: number
   close(): Promise<void>
+}
+
+interface TestRpcResponse {
+  readonly type: 'server-response'
+  readonly rpcId: string
+  readonly result: Readonly<Record<string, unknown>>
 }
 
 const upstreamUpgradeSockets = new WeakMap<Server, Set<Duplex>>()
@@ -230,6 +237,163 @@ describe('AuthSidecar integration', () => {
     expect((await fetch(`${baseUrl}/api/private`, { headers: { cookie } })).status).toBe(401)
   })
 
+  it('scopes native DSH session HTTP and fallback events by authenticated account', async () => {
+    harness = await createHarness()
+    const aliceCookie = await loginUser(harness.baseUrl, 'admin', 'correct horse')
+    const provision = await fetch(`${harness.baseUrl}/luban-auth/users`, {
+      method: 'POST',
+      headers: {
+        cookie: aliceCookie,
+        'content-type': 'application/json',
+        origin: harness.baseUrl,
+      },
+      body: JSON.stringify({ user: 'bob', password: 'bob password', role: 'operator' }),
+    })
+    expect(provision.status).toBe(201)
+    const bobCookie = await loginUser(harness.baseUrl, 'bob', 'bob password')
+    await harness.fixture.manager.bindDshSession(asAccountId('admin'), asSessionId('alice-session'))
+    await harness.fixture.manager.bindDshSession(asAccountId('bob'), asSessionId('bob-session'))
+
+    const aliceList = await dshRpc(harness.baseUrl, aliceCookie, 'session.list', {})
+    expect(sessionIdsFromRpc(aliceList)).toEqual(['alice-session'])
+    const bobList = await dshRpc(harness.baseUrl, bobCookie, 'session.list', {})
+    expect(sessionIdsFromRpc(bobList)).toEqual(['bob-session'])
+    const aliceSearch = await dshRpc(harness.baseUrl, aliceCookie, 'session.search', {
+      query: 'session',
+    })
+    expect(sessionIdsFromRpc(aliceSearch)).toEqual(['alice-session'])
+
+    for (const method of [
+      'session.history',
+      'session.models',
+      'session.selectModel',
+      'session.rename',
+      'session.fork',
+      'session.prompt',
+      'session.attachment',
+      'session.updateQueue',
+      'session.cancel',
+    ]) {
+      const denied = await dshRpc(harness.baseUrl, aliceCookie, method, {
+        sessionId: 'bob-session',
+      })
+      expect(denied.result).toMatchObject({
+        ok: false,
+        error: {
+          code: 'session-not-found',
+          details: { sessionId: 'bob-session' },
+        },
+      })
+      expect(asTestRecord(denied.result.error)?.message).toContain('E_ACCOUNT_SCOPE_MISMATCH')
+    }
+    const legacyDenied = await dshRpc(harness.baseUrl, aliceCookie, 'session.history', {
+      sessionId: 'legacy-session',
+    })
+    expect(legacyDenied.result).toMatchObject({
+      ok: false,
+      error: { details: { sessionId: 'legacy-session' } },
+    })
+    const ownHistory = await dshRpc(harness.baseUrl, aliceCookie, 'session.history', {
+      sessionId: 'alice-session',
+    })
+    expect(ownHistory.result).toMatchObject({ ok: true })
+
+    const created = await dshRpc(harness.baseUrl, aliceCookie, 'session.create', {})
+    expect(created.result).toMatchObject({
+      ok: true,
+      value: { sessionId: 'created-session' },
+    })
+    expect(await harness.fixture.manager.dshSessionOwner(asSessionId('created-session'))).toBe(
+      asAccountId('admin'),
+    )
+    const explicitLegacy = await dshRpc(harness.baseUrl, aliceCookie, 'session.create', {
+      sessionId: 'legacy-session',
+    })
+    expect(explicitLegacy.result).toMatchObject({
+      ok: false,
+      error: { details: { sessionId: 'legacy-session' } },
+    })
+    const explicitForeign = await dshRpc(harness.baseUrl, aliceCookie, 'session.create', {
+      sessionId: 'bob-session',
+    })
+    expect(explicitForeign.result).toMatchObject({
+      ok: false,
+      error: { details: { sessionId: 'bob-session' } },
+    })
+    const explicitOwn = await dshRpc(harness.baseUrl, aliceCookie, 'session.create', {
+      sessionId: 'alice-session',
+    })
+    expect(explicitOwn.result).toMatchObject({
+      ok: true,
+      value: { sessionId: 'alice-session' },
+    })
+    const forked = await dshRpc(harness.baseUrl, aliceCookie, 'session.fork', {
+      sessionId: 'alice-session',
+    })
+    expect(forked.result).toMatchObject({ ok: true, value: { sessionId: 'forked-session' } })
+    expect(await harness.fixture.manager.dshSessionOwner(asSessionId('forked-session'))).toBe(
+      asAccountId('admin'),
+    )
+    const partiallyForked = await dshRpc(harness.baseUrl, aliceCookie, 'session.fork', {
+      sessionId: 'alice-session',
+      atSeq: 999,
+    })
+    expect(partiallyForked.result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'workspace-attach-failed',
+        details: { sessionId: 'partial-fork-session' },
+      },
+    })
+    expect(await harness.fixture.manager.dshSessionOwner(asSessionId('partial-fork-session'))).toBe(
+      asAccountId('admin'),
+    )
+
+    const workspaceList = await dshRpc(harness.baseUrl, aliceCookie, 'workspace.list', {})
+    expect(workspaceList.result).toMatchObject({
+      ok: true,
+      value: {
+        workspaces: [{ sessionIds: ['alice-session'] }],
+        archivedSessionIds: ['alice-session'],
+      },
+    })
+    const genericDenied = await dshRpc(harness.baseUrl, aliceCookie, 'goal.create', {
+      sessionId: 'bob-session',
+    })
+    expect(genericDenied.result).toMatchObject({ ok: false })
+
+    const foreignExport = await fetch(
+      `${harness.baseUrl}/api/session.export?sessionId=bob-session`,
+      { headers: { cookie: aliceCookie } },
+    )
+    expect(foreignExport.status).toBe(404)
+    expect(await foreignExport.json()).toMatchObject({ error: 'E_ACCOUNT_SCOPE_MISMATCH' })
+    const foreignExportHead = await fetch(
+      `${harness.baseUrl}/api/session.export?sessionId=bob-session`,
+      { method: 'HEAD', headers: { cookie: aliceCookie } },
+    )
+    expect(foreignExportHead.status).toBe(404)
+    const ownExport = await fetch(`${harness.baseUrl}/api/session.export?sessionId=alice-session`, {
+      headers: { cookie: aliceCookie },
+    })
+    expect(await ownExport.text()).toBe('export:alice-session')
+
+    const mux = await fetch(`${harness.baseUrl}/api/events.mux`, {
+      headers: { cookie: aliceCookie },
+    })
+    const muxText = await mux.text()
+    expect(muxText).toContain('alice-session')
+    expect(muxText).not.toContain('bob-session')
+    expect(muxText).not.toContain('legacy-session')
+    const host = await fetch(`${harness.baseUrl}/api/events.host`, {
+      headers: { cookie: aliceCookie },
+    })
+    const hostText = await host.text()
+    expect(hostText).toContain('alice-session')
+    expect(hostText).not.toContain('bob-session')
+    expect(hostText).not.toContain('legacy-session')
+  })
+
   it('protects and tunnels WebSocket upgrades and closes upgraded resources', async () => {
     harness = await createHarness()
     const unauthorized = await openUpgrade(harness.publicPort)
@@ -388,6 +552,110 @@ async function handleUpstreamRequest(
     })
     return
   }
+  if (target.pathname === '/api/events.mux' || target.pathname === '/api/events.host') {
+    response.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+    })
+    const payloads =
+      target.pathname === '/api/events.mux'
+        ? [
+            { type: 'session/subscribed', sessionId: 'alice-session', lastSeq: 1 },
+            { type: 'session/subscribed', sessionId: 'bob-session', lastSeq: 2 },
+            { type: 'session/subscribed', sessionId: 'legacy-session', lastSeq: 3 },
+          ]
+        : [
+            { type: 'host/session-status', sessionId: 'alice-session', running: false },
+            { type: 'host/session-status', sessionId: 'bob-session', running: false },
+            { type: 'host/session-status', sessionId: 'legacy-session', running: false },
+            {
+              type: 'host/workspace-changed',
+              workspace: {
+                workspaceId: 'workspace',
+                sessionIds: ['alice-session', 'bob-session', 'legacy-session'],
+              },
+            },
+          ]
+    for (const [index, payload] of payloads.entries()) {
+      response.write(
+        `data: ${JSON.stringify({
+          type: 'server-request',
+          rpcId: `event-${String(index)}`,
+          method: payload.type,
+          payload,
+        })}\n\n`,
+      )
+    }
+    response.end()
+    return
+  }
+  if (target.pathname === '/api/session.export') {
+    response.writeHead(200, { 'content-type': 'application/octet-stream' })
+    response.end(`export:${target.searchParams.get('sessionId') ?? ''}`)
+    return
+  }
+  if (request.method === 'POST' && target.pathname.startsWith('/api/')) {
+    const body = await readRequestJson(request)
+    const rpcId = typeof body.rpcId === 'string' ? body.rpcId : 'invalid-rpc'
+    const payload = asTestRecord(body.payload) ?? {}
+    let value: unknown = { accepted: true }
+    if (target.pathname === '/api/session.list' || target.pathname === '/api/session.search') {
+      value = {
+        items: [
+          { sessionId: 'alice-session' },
+          { sessionId: 'bob-session' },
+          { sessionId: 'legacy-session' },
+        ],
+        ...(target.pathname === '/api/session.search' ? { hasMore: false } : {}),
+      }
+    } else if (target.pathname === '/api/session.create') {
+      value = {
+        sessionId: typeof payload.sessionId === 'string' ? payload.sessionId : 'created-session',
+      }
+    } else if (target.pathname === '/api/session.fork') {
+      if (payload.atSeq === 999) {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(
+          JSON.stringify({
+            type: 'server-response',
+            rpcId,
+            result: {
+              ok: false,
+              error: {
+                code: 'workspace-attach-failed',
+                message: 'forked session was published before workspace attachment failed',
+                details: {
+                  sessionId: 'partial-fork-session',
+                  workspaceId: 'workspace',
+                },
+              },
+            },
+          }),
+        )
+        return
+      }
+      value = { sessionId: 'forked-session' }
+    } else if (target.pathname === '/api/workspace.list') {
+      value = {
+        workspaces: [
+          {
+            workspaceId: 'workspace',
+            sessionIds: ['alice-session', 'bob-session', 'legacy-session'],
+          },
+        ],
+        archivedSessionIds: ['alice-session', 'bob-session', 'legacy-session'],
+      }
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(
+      JSON.stringify({
+        type: 'server-response',
+        rpcId,
+        result: { ok: true, value },
+      }),
+    )
+    return
+  }
   if (target.pathname === '/redirect') {
     response.writeHead(302, { location: `http://${request.headers.host ?? '127.0.0.1'}/target` })
     response.end()
@@ -404,6 +672,21 @@ async function handleUpstreamRequest(
       cookie: request.headers.cookie ?? '',
     }),
   )
+}
+
+async function readRequestJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(Buffer.from(chunk as Uint8Array))
+  const value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+  const record = asTestRecord(value)
+  if (record === null) throw new Error('test upstream expected a JSON object')
+  return record
+}
+
+function asTestRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
 }
 
 async function listen(server: Server): Promise<void> {
@@ -440,6 +723,44 @@ function cookieValue(cookie: string, name: string): string {
     .find((value) => value.startsWith(`${name}=`))
   if (found === undefined) throw new Error(`cookie ${name} is missing`)
   return found.slice(name.length + 1)
+}
+
+async function loginUser(baseUrl: string, user: string, password: string): Promise<string> {
+  const response = await fetch(`${baseUrl}/luban-auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: baseUrl },
+    body: JSON.stringify({ user, password }),
+  })
+  expect(response.status).toBe(200)
+  return cookieHeader(splitSetCookie(response.headers.get('set-cookie')))
+}
+
+async function dshRpc(
+  baseUrl: string,
+  cookie: string,
+  method: string,
+  payload: Readonly<Record<string, unknown>>,
+): Promise<TestRpcResponse> {
+  const rpcId = `rpc-${method}`
+  const response = await fetch(`${baseUrl}/api/${method}`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json', origin: baseUrl },
+    body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
+  })
+  expect(response.status).toBe(200)
+  const message = (await response.json()) as TestRpcResponse
+  expect(message).toMatchObject({ type: 'server-response', rpcId })
+  return message
+}
+
+function sessionIdsFromRpc(response: TestRpcResponse): string[] {
+  const value = asTestRecord(response.result.value)
+  const items = value?.items
+  if (!Array.isArray(items)) return []
+  return items.flatMap((item) => {
+    const sessionId = asTestRecord(item)?.sessionId
+    return typeof sessionId === 'string' ? [sessionId] : []
+  })
 }
 
 async function rawHttpRequest(
