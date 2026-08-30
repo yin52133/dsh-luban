@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type {
+  AccountId,
   Actor,
   ActorId,
   Clock,
@@ -68,13 +69,19 @@ class SessionMutex {
 }
 
 function sameActor(left: Actor | null | undefined, right: Actor): boolean {
-  return left?.kind === right.kind && left.id === right.id
+  return (
+    left?.kind === right.kind &&
+    left.id === right.id &&
+    left.accountId !== undefined &&
+    left.accountId === right.accountId
+  )
 }
 
 function cloneActor(actor: Actor): Actor {
   return {
     kind: actor.kind,
     id: actor.id,
+    ...(actor.accountId === undefined ? {} : { accountId: actor.accountId }),
     ...(actor.displayName === undefined ? {} : { displayName: actor.displayName }),
   }
 }
@@ -94,6 +101,7 @@ function rolesFor(
 
 function cloneView(view: SessionView): SessionView {
   return Object.freeze({
+    ...(view.accountId === undefined ? {} : { accountId: view.accountId }),
     id: view.id,
     host: view.host,
     ...(view.ownerTaskId === undefined ? {} : { ownerTaskId: view.ownerTaskId }),
@@ -130,7 +138,7 @@ export class SharedSessionRegistry implements SessionRegistry {
   readonly #remoteIds = new Map<string, Set<SessionId>>()
   readonly #requests = new Map<string, TakeoverRequestRecord>()
   readonly #pendingBySession = new Map<SessionId, string>()
-  readonly #registryListeners = new Set<(event: RegistryEvent) => void>()
+  readonly #registryListeners = new Map<AccountId, Set<(event: RegistryEvent) => void>>()
   readonly #listeners = new Set<(event: SessionShareEvent) => void>()
   readonly #mutex = new SessionMutex()
   readonly #events: SessionEventLog
@@ -154,8 +162,16 @@ export class SharedSessionRegistry implements SessionRegistry {
     return stored === undefined ? undefined : cloneView(stored.view)
   }
 
-  public async list(filter: RegistryListFilter = {}): Promise<readonly SharedSession[]> {
-    return (await this.listViews(filter)).map(shared)
+  public getViewFor(id: SessionId, accountId: AccountId): SessionView | undefined {
+    const view = this.getView(id)
+    return view?.accountId === accountId ? view : undefined
+  }
+
+  public async list(
+    accountId: AccountId,
+    filter: Omit<RegistryListFilter, 'accountId'> = {},
+  ): Promise<readonly SharedSession[]> {
+    return (await this.listViews({ ...filter, accountId })).map(shared)
   }
 
   public listViews(filter: RegistryListFilter = {}): Promise<readonly SessionView[]> {
@@ -164,6 +180,7 @@ export class SharedSessionRegistry implements SessionRegistry {
       .filter(
         (view): boolean =>
           (filter.host === undefined || view.host === filter.host) &&
+          (filter.accountId === undefined || view.accountId === filter.accountId) &&
           (filter.taskId === undefined || view.ownerTaskId === filter.taskId),
       )
       .sort((left, right): number =>
@@ -177,14 +194,24 @@ export class SharedSessionRegistry implements SessionRegistry {
     accountRole: AccountRole,
     filter: RegistryListFilter = {},
   ): Promise<readonly SessionAccessView[]> {
-    return (await this.listViews(filter)).map((view): SessionAccessView => ({
+    if (actor.accountId === undefined) {
+      throw new LubanError('E_AUTH_REQUIRED', 'Account context is required')
+    }
+    const scopedFilter = { ...filter, accountId: actor.accountId }
+    return (await this.listViews(scopedFilter)).map((view): SessionAccessView => ({
       ...view,
       role: this.roleFor(view.id, actor, accountRole),
     }))
   }
 
-  public subscribe(id: SessionId, _role: SessionRole): AsyncIterable<SessionEvent> {
-    this.#required(id)
+  public subscribe(
+    id: SessionId,
+    accountId: AccountId,
+    _role: SessionRole,
+  ): AsyncIterable<SessionEvent> {
+    if (this.getViewFor(id, accountId) === undefined) {
+      throw new LubanError('E_NOT_FOUND', `Session ${id} was not found`)
+    }
     const remote = this.#remote(id)
     if (remote === undefined) return this.#events.subscribe(id)
     if (this.#network === undefined) {
@@ -230,6 +257,7 @@ export class SharedSessionRegistry implements SessionRegistry {
   }
 
   public async requestTakeover(id: SessionId, by: Actor): Promise<TakeoverResult> {
+    this.#assertActorAccount(id, by)
     const remote = this.#remote(id)
     if (remote !== undefined) {
       if (this.#network === undefined)
@@ -284,6 +312,7 @@ export class SharedSessionRegistry implements SessionRegistry {
   ): Promise<TakeoverResult> {
     const initial = this.#requests.get(requestId)
     if (initial === undefined) throw new LubanError('E_NOT_FOUND', 'Takeover request was not found')
+    this.#assertActorAccount(initial.sessionId, by)
     return this.#mutex.run(initial.sessionId, (): TakeoverResult => {
       this.sweepExpired()
       const request = this.#requests.get(requestId)
@@ -338,6 +367,7 @@ export class SharedSessionRegistry implements SessionRegistry {
   }
 
   public async release(id: SessionId, by: Actor): Promise<void> {
+    this.#assertActorAccount(id, by)
     const remote = this.#remote(id)
     if (remote !== undefined) {
       if (this.#network === undefined)
@@ -393,16 +423,21 @@ export class SharedSessionRegistry implements SessionRegistry {
 
   public roleFor(id: SessionId, actor: Actor, accountRole: AccountRole): SessionRole {
     const session = this.#required(id).view
+    if (actor.accountId === undefined || session.accountId !== actor.accountId) {
+      throw new LubanError('E_NOT_FOUND', `Session ${id} was not found`)
+    }
     if (accountRole === 'observer' || accountRole === 'unknown') return 'observer'
     return session.roles[actor.id] ?? 'observer'
   }
 
   public takeoversFor(actor: Actor): readonly TakeoverRequestRecord[] {
+    if (actor.accountId === undefined) return []
     this.sweepExpired()
     return [...this.#requests.values()]
       .filter(
         (request): boolean =>
-          sameActor(request.owner, actor) || sameActor(request.requestedBy, actor),
+          this.#sessions.get(request.sessionId)?.view.accountId === actor.accountId &&
+          (sameActor(request.owner, actor) || sameActor(request.requestedBy, actor)),
       )
       .sort((left, right): number => right.createdAt - left.createdAt)
       .map((request): TakeoverRequestRecord => ({ ...request }))
@@ -421,15 +456,30 @@ export class SharedSessionRegistry implements SessionRegistry {
     }
     const now = this.#clock.now()
     const previous = existing?.origin === 'local' ? existing.view : undefined
-    const holder = previous?.lockHolder ?? input.owner
+    const accountId = input.accountId ?? input.owner.accountId
+    if (accountId === undefined) {
+      throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'Local session has no account ownership')
+    }
+    if (input.owner.accountId !== undefined && input.owner.accountId !== accountId) {
+      throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'Local session owner account does not match')
+    }
+    if (previous?.accountId !== undefined && previous.accountId !== accountId) {
+      throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'Local session account cannot change')
+    }
+    const owner =
+      input.owner.accountId === undefined
+        ? Object.freeze({ ...input.owner, accountId })
+        : input.owner
+    const holder = previous?.lockHolder ?? owner
     const view: SessionView = Object.freeze({
+      accountId,
       id: input.id,
       host: input.host,
       ...(input.ownerTaskId === undefined ? {} : { ownerTaskId: input.ownerTaskId }),
       lockHolder: cloneActor(holder),
-      roles: rolesFor(input.owner, holder, previous?.roles),
+      roles: rolesFor(owner, holder, previous?.roles),
       healthy: input.healthy,
-      owner: cloneActor(input.owner),
+      owner: cloneActor(owner),
       status: input.status,
       version: previous?.version ?? 1,
       updatedAt: now,
@@ -510,7 +560,11 @@ export class SharedSessionRegistry implements SessionRegistry {
       }
       this.#pendingBySession.delete(id)
     }
-    this.#emitRegistry({ type: 'removed', sessionId: id })
+    this.#emitRegistry({
+      type: 'removed',
+      sessionId: id,
+      ...(stored.view.accountId === undefined ? {} : { accountId: stored.view.accountId }),
+    })
   }
 
   public async refreshPeers(): Promise<readonly string[]> {
@@ -567,10 +621,19 @@ export class SharedSessionRegistry implements SessionRegistry {
     }
   }
 
-  public onRegistryChange(listener: (event: RegistryEvent) => void): Unsubscribe {
-    this.#registryListeners.add(listener)
+  public onRegistryChange(
+    accountId: AccountId,
+    listener: (event: RegistryEvent) => void,
+  ): Unsubscribe {
+    let listeners = this.#registryListeners.get(accountId)
+    if (listeners === undefined) {
+      listeners = new Set()
+      this.#registryListeners.set(accountId, listeners)
+    }
+    listeners.add(listener)
     return (): void => {
-      this.#registryListeners.delete(listener)
+      listeners.delete(listener)
+      if (listeners.size === 0) this.#registryListeners.delete(accountId)
     }
   }
 
@@ -612,7 +675,11 @@ export class SharedSessionRegistry implements SessionRegistry {
       const stored = this.#sessions.get(id)
       if (stored?.origin !== 'local' && stored?.origin.name === peer.name) {
         this.#sessions.delete(id)
-        this.#emitRegistry({ type: 'removed', sessionId: id })
+        this.#emitRegistry({
+          type: 'removed',
+          sessionId: id,
+          ...(stored.view.accountId === undefined ? {} : { accountId: stored.view.accountId }),
+        })
       }
     }
     this.#remoteIds.set(peer.name, nextIds)
@@ -664,6 +731,13 @@ export class SharedSessionRegistry implements SessionRegistry {
     return origin === undefined || origin === 'local' ? undefined : origin
   }
 
+  #assertActorAccount(id: SessionId, actor: Actor): void {
+    const session = this.#required(id).view
+    if (actor.accountId === undefined || session.accountId !== actor.accountId) {
+      throw new LubanError('E_NOT_FOUND', `Session ${id} was not found`)
+    }
+  }
+
   #required(id: SessionId): StoredSession {
     const stored = this.#sessions.get(id)
     if (stored === undefined) throw new LubanError('E_NOT_FOUND', `Session ${id} was not found`)
@@ -679,8 +753,15 @@ export class SharedSessionRegistry implements SessionRegistry {
   }
 
   #emitRegistry(event: RegistryEvent): void {
-    for (const listener of [...this.#registryListeners]) listener(event)
-    this.#emitShare({ type: 'registry', event })
+    const accountId = event.type === 'removed' ? event.accountId : event.session.accountId
+    if (accountId !== undefined) {
+      for (const listener of [...(this.#registryListeners.get(accountId) ?? [])]) listener(event)
+    }
+    this.#emitShare({
+      type: 'registry',
+      event,
+      ...(accountId === undefined ? {} : { accountId }),
+    })
   }
 
   #emitShare(event: SessionShareEvent): void {

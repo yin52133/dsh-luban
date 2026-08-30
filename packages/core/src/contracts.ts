@@ -299,17 +299,20 @@ export type TakeoverResult =
 export type RegistryEvent =
   | { readonly type: 'registered'; readonly session: SharedSession }
   | { readonly type: 'changed'; readonly session: SharedSession }
-  | { readonly type: 'removed'; readonly sessionId: SessionId }
+  | { readonly type: 'removed'; readonly sessionId: SessionId; readonly accountId?: AccountId }
 
 export interface SessionRegistry {
-  list(filter?: {
-    readonly host?: HostId
-    readonly taskId?: TaskId
-  }): Promise<readonly SharedSession[]>
-  subscribe(id: SessionId, role: SessionRole): AsyncIterable<SessionEvent>
-  requestTakeover(id: SessionId, by: Actor): Promise<TakeoverResult>
-  release(id: SessionId, by: Actor): Promise<void>
-  onRegistryChange(listener: (event: RegistryEvent) => void): Unsubscribe
+  list(
+    accountId: AccountId,
+    filter?: {
+      readonly host?: HostId
+      readonly taskId?: TaskId
+    },
+  ): Promise<readonly SharedSession[]>
+  subscribe(id: SessionId, accountId: AccountId, role: SessionRole): AsyncIterable<SessionEvent>
+  requestTakeover(id: SessionId, by: AccountActor): Promise<TakeoverResult>
+  release(id: SessionId, by: AccountActor): Promise<void>
+  onRegistryChange(accountId: AccountId, listener: (event: RegistryEvent) => void): Unsubscribe
 }
 
 export interface CleanupReport {

@@ -1,6 +1,7 @@
 import type { Actor, SessionEvent, SessionId, SessionRole, TakeoverResult } from 'dsh-luban-core'
 import {
   LubanError,
+  asAccountId,
   asActorId,
   asHostId,
   asSessionId,
@@ -52,6 +53,7 @@ function actor(value: unknown, label: string): Actor {
   return {
     kind: row.kind,
     id: asActorId(string(row.id, `${label}.id`)),
+    ...(typeof row.accountId === 'string' ? { accountId: asAccountId(row.accountId) } : {}),
     ...(typeof row.displayName === 'string' ? { displayName: row.displayName } : {}),
   }
 }
@@ -74,18 +76,40 @@ export function decodePeerSession(value: unknown): PeerSessionSnapshot {
     throw new LubanError('E_UNAVAILABLE', 'Peer returned invalid session.healthy')
   }
   const lockHolder = row.lockHolder
+  if (typeof row.accountId !== 'string') {
+    throw new LubanError('E_UNAVAILABLE', 'Peer session has no account ownership')
+  }
+  const accountId = asAccountId(row.accountId)
+  const owner = actor(row.owner, 'session.owner')
+  if (owner.accountId !== accountId) {
+    throw new LubanError('E_UNAVAILABLE', 'Peer session owner account does not match')
+  }
+  const parsedLockHolder =
+    lockHolder === null
+      ? null
+      : lockHolder === undefined
+        ? undefined
+        : actor(lockHolder, 'session.lockHolder')
+  if (
+    parsedLockHolder !== undefined &&
+    parsedLockHolder !== null &&
+    parsedLockHolder.accountId !== accountId
+  ) {
+    throw new LubanError('E_UNAVAILABLE', 'Peer session lock holder account does not match')
+  }
   const parsed: SessionView = {
+    accountId,
     id: asSessionId(string(row.id, 'session.id')),
     host: asHostId(string(row.host, 'session.host')),
     ...(typeof row.ownerTaskId === 'string' ? { ownerTaskId: asTaskId(row.ownerTaskId) } : {}),
-    ...(lockHolder === null
+    ...(parsedLockHolder === null
       ? { lockHolder: null }
-      : lockHolder === undefined
+      : parsedLockHolder === undefined
         ? {}
-        : { lockHolder: actor(lockHolder, 'session.lockHolder') }),
+        : { lockHolder: parsedLockHolder }),
     roles: roleMap(row.roles),
     healthy: row.healthy,
-    owner: actor(row.owner, 'session.owner'),
+    owner,
     status: string(row.status, 'session.status'),
     version: integer(row.version, 'session.version'),
     updatedAt: integer(row.updatedAt, 'session.updatedAt'),

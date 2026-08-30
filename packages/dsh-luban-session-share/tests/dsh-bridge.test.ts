@@ -1,12 +1,231 @@
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { asTaskId } from 'dsh-luban-core'
+import { asAccountId, asActorId, asTaskId, type AccountId, type Task } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { DshSessionBridge, DshSessionInputSink } from '../src/dsh-bridge.js'
 import { SharedSessionRegistry } from '../src/registry.js'
 import { host, session, user } from './helpers.js'
 
 describe('rc2 DSH bridge', (): void => {
+  it('registers only sessions with a persisted account owner', async (): Promise<void> => {
+    const bound = {
+      id: 'S-bound',
+      session: { id: 'S-bound', header: {} },
+      status: 'idle',
+    } as unknown as Agent
+    const legacy = {
+      id: 'S-legacy',
+      session: { id: 'S-legacy', header: {} },
+      status: 'idle',
+    } as unknown as Agent
+    const agents = {
+      roots: (): Agent[] => [bound, legacy],
+      get: (): Agent | undefined => undefined,
+    } as unknown as AgentRegistry
+    const ownerOf = vi.fn((id: ReturnType<typeof session>) =>
+      Promise.resolve(id === session('S-bound') ? asAccountId('alice') : null),
+    )
+    const registry = new SharedSessionRegistry({
+      localHost: host('ubuntu'),
+      takeoverTimeoutMs: 1_000,
+      replayLimit: 16,
+    })
+    const bridge = new DshSessionBridge({
+      agents,
+      registry,
+      host: host('ubuntu'),
+      accountSessions: {
+        bind: (): Promise<void> => Promise.resolve(),
+        ownerOf,
+      },
+    })
+
+    bridge.initialize([])
+
+    await vi.waitFor((): void => {
+      expect(registry.getView(session('S-bound'))).toMatchObject({
+        accountId: 'alice',
+        owner: { accountId: 'alice', id: 'alice' },
+      })
+      expect(ownerOf).toHaveBeenCalledTimes(2)
+    })
+    expect(registry.getView(session('S-legacy'))).toBeUndefined()
+  })
+
+  it('does not register a session after the bridge is disposed', async (): Promise<void> => {
+    const agent = {
+      id: 'S-disposed-owner-lookup',
+      session: { id: 'S-disposed-owner-lookup', header: {} },
+      status: 'idle',
+    } as unknown as Agent
+    const agents = {
+      roots: (): Agent[] => [agent],
+      get: (): Agent => agent,
+    } as unknown as AgentRegistry
+    let resolveOwner: ((accountId: AccountId) => void) | undefined
+    let ownerLookupStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve): void => {
+      ownerLookupStarted = resolve
+    })
+    const registry = new SharedSessionRegistry({
+      localHost: host('ubuntu'),
+      takeoverTimeoutMs: 1_000,
+      replayLimit: 16,
+    })
+    const bridge = new DshSessionBridge({
+      agents,
+      registry,
+      host: host('ubuntu'),
+      accountSessions: {
+        bind: (): Promise<void> => Promise.resolve(),
+        ownerOf: () =>
+          new Promise<AccountId>((resolveAccount): void => {
+            resolveOwner = resolveAccount
+            ownerLookupStarted?.()
+          }),
+      },
+    })
+    bridge.initialize([])
+    await started
+    bridge.dispose()
+    if (resolveOwner === undefined) throw new Error('owner lookup did not start')
+    resolveOwner(asAccountId('alice'))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(registry.getView(session('S-disposed-owner-lookup'))).toBeUndefined()
+  })
+
+  it('rechecks a late account binding before applying task links', async (): Promise<void> => {
+    const agent = {
+      id: 'S-late-bind',
+      session: { id: 'S-late-bind', header: {} },
+      status: 'idle',
+    } as unknown as Agent
+    const agents = {
+      roots: (): Agent[] => [agent],
+      get: (): Agent => agent,
+    } as unknown as AgentRegistry
+    let owner: AccountId | null = null
+    const registry = new SharedSessionRegistry({
+      localHost: host('ubuntu'),
+      takeoverTimeoutMs: 1_000,
+      replayLimit: 16,
+    })
+    const bridge = new DshSessionBridge({
+      agents,
+      registry,
+      host: host('ubuntu'),
+      accountSessions: {
+        bind: (): Promise<void> => Promise.resolve(),
+        ownerOf: (): Promise<AccountId | null> => Promise.resolve(owner),
+      },
+    })
+    bridge.initialize([])
+    await vi.waitFor((): void => {
+      expect(registry.getView(session('S-late-bind'))).toBeUndefined()
+    })
+
+    owner = asAccountId('alice')
+    const task: Task = {
+      accountId: owner,
+      id: asTaskId('T-late-bind'),
+      title: 'Late-bound session',
+      description: '',
+      status: 'doing',
+      hostScope: 'any',
+      priority: 'P2',
+      tags: [],
+      version: 1,
+      claim: {
+        actor: {
+          kind: 'agent',
+          id: asActorId('agent-late-bind'),
+          accountId: owner,
+        },
+        sessionId: session('S-late-bind'),
+        claimedAt: 1,
+      },
+      outputs: [],
+      createdAt: 1,
+      updatedAt: 1,
+    }
+
+    await bridge.syncTasks([task])
+
+    expect(registry.getView(session('S-late-bind'))).toMatchObject({
+      accountId: 'alice',
+      ownerTaskId: 'T-late-bind',
+    })
+  })
+
+  it('ignores managed task links from another or unknown account', (): void => {
+    const agent = {
+      id: 'S-managed-account',
+      session: { id: 'S-managed-account', header: {} },
+      status: 'idle',
+    } as unknown as Agent
+    const agents = {
+      roots: (): Agent[] => [agent],
+      get: (): Agent => agent,
+    } as unknown as AgentRegistry
+    const registry = new SharedSessionRegistry({
+      localHost: host('ubuntu'),
+      takeoverTimeoutMs: 1_000,
+      replayLimit: 16,
+    })
+    const bridge = new DshSessionBridge({
+      agents,
+      registry,
+      host: host('ubuntu'),
+      owner: user('alice'),
+    })
+    bridge.initialize([
+      {
+        accountId: asAccountId('bob'),
+        id: 'S-managed-account',
+        host: host('ubuntu'),
+        kind: 'tmux',
+        purpose: 'task',
+        ownerTaskId: asTaskId('T-initial-wrong-account'),
+        createdAt: 1,
+      },
+    ])
+    expect(registry.getView(session('S-managed-account'))?.ownerTaskId).toBeUndefined()
+
+    for (const accountId of [undefined, asAccountId('bob')]) {
+      bridge.keepaliveEvent({
+        type: 'started',
+        session: {
+          ...(accountId === undefined ? {} : { accountId }),
+          id: 'luban-S-managed-account',
+          host: host('ubuntu'),
+          kind: 'tmux',
+          purpose: 'task',
+          ownerTaskId: asTaskId('T-wrong-account'),
+          createdAt: 1,
+        },
+      })
+      expect(registry.getView(session('S-managed-account'))?.ownerTaskId).toBeUndefined()
+    }
+
+    bridge.keepaliveEvent({
+      type: 'started',
+      session: {
+        accountId: asAccountId('alice'),
+        id: 'luban-S-managed-account',
+        host: host('ubuntu'),
+        kind: 'tmux',
+        purpose: 'task',
+        ownerTaskId: asTaskId('T-alice'),
+        createdAt: 1,
+      },
+    })
+    expect(registry.getView(session('S-managed-account'))).toMatchObject({
+      ownerTaskId: 'T-alice',
+    })
+  })
+
   it('registers live agents, forwards status/output, and injects identified follow-ups', async (): Promise<void> => {
     const followup = vi.fn<Agent['followup']>()
     let agentStatus: 'idle' | 'running' = 'idle'
@@ -49,6 +268,7 @@ describe('rc2 DSH bridge', (): void => {
     bridge.keepaliveEvent({
       type: 'started',
       session: {
+        accountId: asAccountId('owner'),
         id: 'luban-S-agent',
         host: host('ubuntu'),
         kind: 'tmux',

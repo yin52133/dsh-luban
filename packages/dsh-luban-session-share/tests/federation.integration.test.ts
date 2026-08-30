@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import type { IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Actor, AuthService, SessionId, TakeoverResult } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { describe, expect, it } from 'vitest'
 import type { PeerConfig } from '../src/config.js'
 import { SessionShareHttpApi } from '../src/http-api.js'
@@ -71,13 +72,14 @@ function httpAuth(): AuthService {
     authenticateRequest(request: IncomingMessage) {
       const values = cookieValues(request)
       const id = values.user
+      const accountId = values.account ?? id
       const role = values.role
       if (id === undefined || (role !== 'admin' && role !== 'operator' && role !== 'observer')) {
         return Promise.resolve({ ok: false as const, reason: 'invalid' as const })
       }
       return Promise.resolve({
         ok: true as const,
-        actor: { kind: 'user' as const, id, displayName: id, role },
+        actor: { kind: 'user' as const, id, accountId, displayName: id, role },
       })
     },
   } as unknown as AuthService
@@ -165,14 +167,14 @@ describe('dual-host in-memory federation', (): void => {
     windows.registerLocal({
       id: session('S-win'),
       host: host('windows'),
-      owner: user('win-owner'),
+      owner: user('win-owner', 'shared'),
       healthy: true,
       status: 'idle',
     })
     ubuntu.registerLocal({
       id: session('S-ubuntu'),
       host: host('ubuntu'),
-      owner: user('ubuntu-owner'),
+      owner: user('ubuntu-owner', 'shared'),
       healthy: true,
       status: 'running',
     })
@@ -188,12 +190,17 @@ describe('dual-host in-memory federation', (): void => {
       'windows/S-win',
     ])
 
-    const operator = user('win-operator')
+    const operator = user('win-operator', 'shared')
     const requested = await windows.requestTakeover(session('S-ubuntu'), operator)
     expect(requested.status).toBe('pending')
-    const request = ubuntu.takeoversFor(user('ubuntu-owner'))[0]
+    const request = ubuntu.takeoversFor(user('ubuntu-owner', 'shared'))[0]
     if (request === undefined) throw new Error('remote request did not arrive')
-    await ubuntu.decideTakeover(request.id, 'approve', user('ubuntu-owner'), request.sessionVersion)
+    await ubuntu.decideTakeover(
+      request.id,
+      'approve',
+      user('ubuntu-owner', 'shared'),
+      request.sessionVersion,
+    )
     await windows.refreshPeers()
     expect(windows.getView(session('S-ubuntu'))).toMatchObject({
       lockHolder: { id: 'win-operator' },
@@ -233,8 +240,10 @@ describe('dual-host loopback HTTP federation', (): void => {
       startDeferredPeerServer(),
     ])
     const credentials: Readonly<Record<string, string>> = {
-      WINDOWS_TO_UBUNTU: 'user=win-operator; role=operator; luban_csrf=windows-csrf',
-      UBUNTU_TO_WINDOWS: 'user=ubuntu-operator; role=operator; luban_csrf=ubuntu-csrf',
+      WINDOWS_TO_UBUNTU:
+        'user=win-operator; account=shared; role=operator; luban_csrf=windows-csrf',
+      UBUNTU_TO_WINDOWS:
+        'user=ubuntu-operator; account=shared; role=operator; luban_csrf=ubuntu-csrf',
     }
     const readEnvironment = (name: string): string | undefined => credentials[name]
     const windowsInput: string[] = []
@@ -270,16 +279,18 @@ describe('dual-host loopback HTTP federation', (): void => {
     windowsServer.attach(windowsApi)
     ubuntuServer.attach(ubuntuApi)
     windows.registerLocal({
+      accountId: asAccountId('shared'),
       id: session('S-win-http'),
       host: host('windows'),
-      owner: user('win-owner'),
+      owner: user('win-owner', 'shared'),
       healthy: true,
       status: 'idle',
     })
     ubuntu.registerLocal({
+      accountId: asAccountId('shared'),
       id: session('S-ubuntu-http'),
       host: host('ubuntu'),
-      owner: user('ubuntu-owner'),
+      owner: user('ubuntu-owner', 'shared'),
       healthy: true,
       status: 'running',
     })
@@ -298,20 +309,20 @@ describe('dual-host loopback HTTP federation', (): void => {
         'windows/S-win-http',
       ])
 
-      const operator = user('win-operator')
+      const operator = { ...user('win-operator'), accountId: asAccountId('shared') }
       const [firstRequest, repeatedRequest] = await Promise.all([
         windows.requestTakeover(session('S-ubuntu-http'), operator),
         windows.requestTakeover(session('S-ubuntu-http'), operator),
       ])
       expect(firstRequest).toMatchObject({ status: 'pending' })
       expect(repeatedRequest).toEqual(firstRequest)
-      expect(ubuntu.takeoversFor(user('ubuntu-owner'))).toHaveLength(1)
-      const request = ubuntu.takeoversFor(user('ubuntu-owner'))[0]
+      expect(ubuntu.takeoversFor(user('ubuntu-owner', 'shared'))).toHaveLength(1)
+      const request = ubuntu.takeoversFor(user('ubuntu-owner', 'shared'))[0]
       if (request === undefined) throw new Error('remote HTTP request did not arrive')
       await ubuntu.decideTakeover(
         request.id,
         'approve',
-        user('ubuntu-owner'),
+        user('ubuntu-owner', 'shared'),
         request.sessionVersion,
       )
       await windows.refreshPeers()

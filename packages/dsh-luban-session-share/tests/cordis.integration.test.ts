@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { SessionId as DshSessionId, type Session } from '@deepseek-ai/dsh-session'
 import type { AuthService, KeepaliveService, Task, TaskStore } from 'dsh-luban-core'
-import { asActorId, asSessionId, asTaskId } from 'dsh-luban-core'
+import { asAccountId, asActorId, asSessionId, asTaskId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import plugin from '../src/index.js'
 import type { SharedSessionRegistry } from '../src/registry.js'
@@ -22,6 +22,7 @@ function keepalive(): KeepaliveService {
 
 function task(sessionId?: string): Task {
   return {
+    accountId: asAccountId('owner'),
     id: asTaskId('late-task'),
     title: 'Late task link',
     description: '',

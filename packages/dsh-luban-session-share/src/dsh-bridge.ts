@@ -6,6 +6,7 @@ import {
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
 import type {
+  AccountSessionRegistry,
   Actor,
   HostId,
   KeepaliveEvent,
@@ -14,7 +15,7 @@ import type {
   Task,
   TaskId,
 } from 'dsh-luban-core'
-import { LubanError, asSessionId } from 'dsh-luban-core'
+import { LubanError, asActorId, asSessionId } from 'dsh-luban-core'
 import type { SharedSessionRegistry } from './registry.js'
 import type { SessionInputSink } from './types.js'
 
@@ -31,6 +32,15 @@ interface TurnOutputBuffer {
   truncated: boolean
   at: number
 }
+
+export type DshSessionBridgeOptions = {
+  readonly agents: AgentRegistry
+  readonly registry: SharedSessionRegistry
+  readonly host: HostId
+} & (
+  | { readonly accountSessions: AccountSessionRegistry; readonly owner?: Actor }
+  | { readonly accountSessions?: undefined; readonly owner: Actor }
+)
 
 function trailingHighSurrogate(value: string): boolean {
   if (value.length === 0) return false
@@ -85,21 +95,23 @@ export class DshSessionBridge {
   readonly #agents: AgentRegistry
   readonly #registry: SharedSessionRegistry
   readonly #host: HostId
-  readonly #owner: Actor
+  readonly #owner: Actor | undefined
+  readonly #accountSessions: AccountSessionRegistry | undefined
   readonly #managed = new Map<string, ManagedSession>()
   readonly #shared = new Map<SessionId, Agent>()
+  readonly #registering = new Map<SessionId, Promise<void>>()
   readonly #turnOutput = new Map<SessionId, TurnOutputBuffer>()
+  #disposed = false
 
-  public constructor(options: {
-    readonly agents: AgentRegistry
-    readonly registry: SharedSessionRegistry
-    readonly host: HostId
-    readonly owner: Actor
-  }) {
+  public constructor(options: DshSessionBridgeOptions) {
     this.#agents = options.agents
     this.#registry = options.registry
     this.#host = options.host
     this.#owner = options.owner
+    this.#accountSessions = options.accountSessions
+    if (this.#owner === undefined && this.#accountSessions === undefined) {
+      throw new LubanError('E_INVALID_INPUT', 'A session owner resolver is required')
+    }
   }
 
   public initialize(managed: readonly ManagedSession[]): void {
@@ -108,14 +120,58 @@ export class DshSessionBridge {
   }
 
   public agentCreated(agent: Agent): void {
+    if (this.#disposed) return
     if (!isShareableRoot(this.#agents, agent)) return
     const id = asSessionId(agent.id)
+    if (this.#accountSessions !== undefined) {
+      if (this.#shared.get(id) === agent) return
+      const pending = this.#registering.get(id)
+      if (pending !== undefined) {
+        void pending.then((): void => this.agentCreated(agent))
+        return
+      }
+      const operation = this.#accountSessions
+        .ownerOf(id)
+        .then((accountId): void => {
+          if (this.#disposed || accountId === null || !isShareableRoot(this.#agents, agent)) return
+          this.#registerAgent(agent, {
+            kind: 'user',
+            id: asActorId(accountId),
+            accountId,
+            displayName: accountId,
+          })
+        })
+        .catch((error: unknown): void => {
+          process.emitWarning(
+            error instanceof Error ? error.message : 'Unable to resolve DSH session ownership',
+            { code: 'LUBAN_SESSION_OWNER' },
+          )
+        })
+        .finally((): void => {
+          if (this.#registering.get(id) === operation) this.#registering.delete(id)
+        })
+      this.#registering.set(id, operation)
+      return
+    }
+    const owner = this.#owner
+    if (owner === undefined) return
+    this.#registerAgent(agent, owner)
+  }
+
+  #registerAgent(agent: Agent, owner: Actor): void {
+    if (this.#disposed || !isShareableRoot(this.#agents, agent)) return
+    const id = asSessionId(agent.id)
     const managed = this.#managed.get(agent.id)
+    const ownerTaskId =
+      owner.accountId !== undefined && managed?.accountId === owner.accountId
+        ? managed.ownerTaskId
+        : undefined
     this.#registry.registerLocal({
       id,
       host: this.#host,
-      owner: this.#owner,
-      ...(managed?.ownerTaskId === undefined ? {} : { ownerTaskId: managed.ownerTaskId }),
+      ...(owner.accountId === undefined ? {} : { accountId: owner.accountId }),
+      owner,
+      ...(ownerTaskId === undefined ? {} : { ownerTaskId }),
       healthy: true,
       status: agent.status,
     })
@@ -154,7 +210,7 @@ export class DshSessionBridge {
   public keepaliveEvent(event: KeepaliveEvent): void {
     if (event.type === 'started' || event.type === 'restored') {
       this.#managed.set(event.session.id, event.session)
-      this.#updateTask(event.session.id, event.session.ownerTaskId)
+      this.#updateTask(event.session)
       return
     }
     for (const item of event.report.sessions) {
@@ -182,16 +238,37 @@ export class DshSessionBridge {
     }
   }
 
-  public syncTasks(tasks: readonly Task[]): void {
+  public async syncTasks(tasks: readonly Task[]): Promise<void> {
+    if (this.#disposed) return
+    await this.#refreshAccountOwnership()
     const links = new Map<SessionId, TaskId>()
     for (const task of tasks) {
       if (task.claim !== undefined && task.claim !== null) {
-        links.set(task.claim.sessionId, task.id)
+        const view = this.#registry.getView(task.claim.sessionId)
+        if (task.accountId !== undefined && view?.accountId === task.accountId) {
+          links.set(task.claim.sessionId, task.id)
+        }
       }
     }
     for (const id of this.#shared.keys()) {
       this.#registry.setOwnerTask(id, links.get(id) ?? null)
     }
+  }
+
+  async #refreshAccountOwnership(): Promise<void> {
+    if (this.#accountSessions === undefined) return
+    const roots = this.#agents.roots()
+    for (const agent of roots) this.agentCreated(agent)
+    await Promise.all([...this.#registering.values()])
+    // A lookup may have started just before M01 persisted the binding. Retry once after it settles.
+    for (const agent of roots) this.agentCreated(agent)
+    await Promise.all([...this.#registering.values()])
+  }
+
+  public dispose(): void {
+    this.#disposed = true
+    this.#registering.clear()
+    this.#turnOutput.clear()
   }
 
   #appendTurnOutput(id: SessionId, turn: number, text: string, at: number): void {
@@ -253,13 +330,15 @@ export class DshSessionBridge {
     buffer.truncated = true
   }
 
-  #updateTask(id: string, taskId: TaskId | undefined): void {
-    if (taskId === undefined) return
-    const candidates = id.startsWith('luban-') ? [id, id.slice('luban-'.length)] : [id]
+  #updateTask(session: ManagedSession): void {
+    if (session.accountId === undefined || session.ownerTaskId === undefined) return
+    const candidates = session.id.startsWith('luban-')
+      ? [session.id, session.id.slice('luban-'.length)]
+      : [session.id]
     for (const candidate of candidates) {
       const sessionId = asSessionId(candidate)
-      if (this.#shared.has(sessionId)) {
-        this.#registry.setOwnerTask(sessionId, taskId)
+      if (this.#registry.getView(sessionId)?.accountId === session.accountId) {
+        this.#registry.setOwnerTask(sessionId, session.ownerTaskId)
         return
       }
     }

@@ -10,12 +10,13 @@ const peer: PeerConfig = {
 }
 
 const snapshot = {
+  accountId: 'owner',
   id: 'S-peer',
   host: 'ubuntu',
-  lockHolder: { kind: 'user', id: 'owner', displayName: 'owner' },
+  lockHolder: { kind: 'user', id: 'owner', accountId: 'owner', displayName: 'owner' },
   roles: { owner: 'owner' },
   healthy: true,
-  owner: { kind: 'user', id: 'owner', displayName: 'owner' },
+  owner: { kind: 'user', id: 'owner', accountId: 'owner', displayName: 'owner' },
   status: 'idle',
   version: 1,
   updatedAt: 123,
@@ -220,6 +221,24 @@ describe('HttpPeerNetwork', (): void => {
 })
 
 describe('decodePeerSession', (): void => {
+  it('rejects legacy and mismatched peer account ownership', (): void => {
+    expect(() => decodePeerSession({ ...snapshot, accountId: undefined })).toThrow(
+      'no account ownership',
+    )
+    expect(() =>
+      decodePeerSession({
+        ...snapshot,
+        owner: { ...snapshot.owner, accountId: 'other' },
+      }),
+    ).toThrow('owner account does not match')
+    expect(() =>
+      decodePeerSession({
+        ...snapshot,
+        lockHolder: { ...snapshot.lockHolder, accountId: 'other' },
+      }),
+    ).toThrow('lock holder account does not match')
+  })
+
   it('rejects invalid role and version data', (): void => {
     expect(() => decodePeerSession({ ...snapshot, roles: { owner: 'root' } })).toThrow(
       'invalid session role',

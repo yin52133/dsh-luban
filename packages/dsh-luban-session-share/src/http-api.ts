@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService, SessionId } from 'dsh-luban-core'
+import type { AccountId, AuthService, SessionId } from 'dsh-luban-core'
 import {
   LubanError,
+  asAccountId,
   asActorId,
   asHostId,
   asSessionId,
@@ -28,6 +29,7 @@ interface DetailedAuthService extends AuthService {
         readonly actor: {
           readonly kind: 'user'
           readonly id: string
+          readonly accountId?: string
           readonly displayName?: string
           readonly role: 'admin' | 'operator' | 'observer'
         }
@@ -39,7 +41,14 @@ interface DetailedAuthService extends AuthService {
 interface StreamEnvelope {
   readonly id: number
   readonly event: 'registry' | 'baseline'
+  readonly accountId: AccountId
   readonly data: unknown
+}
+
+interface RegistryStreamClient {
+  readonly accountId: AccountId
+  readonly pending: StreamEnvelope[]
+  ready: boolean
 }
 
 function record(value: unknown, label = 'request body'): Readonly<Record<string, unknown>> {
@@ -155,10 +164,12 @@ async function requireIdentity(
       actor: {
         kind: 'user',
         id: asActorId(result.actor.id),
+        accountId: asAccountId(result.actor.accountId ?? result.actor.id),
         ...(result.actor.displayName === undefined
           ? {}
           : { displayName: result.actor.displayName }),
       },
+      accountId: asAccountId(result.actor.accountId ?? result.actor.id),
       accountRole: result.actor.role,
     }
   }
@@ -174,16 +185,23 @@ async function requireIdentity(
       details: { status: decision.status },
     })
   }
+  const accountId = decision.account?.accountId ?? asAccountId(decision.user)
   return {
-    actor: { kind: 'user', id: asActorId(decision.user), displayName: decision.user },
-    accountRole: 'unknown',
+    actor: {
+      kind: 'user',
+      id: asActorId(decision.user),
+      accountId,
+      displayName: decision.user,
+    },
+    accountId,
+    accountRole: decision.account?.role ?? 'unknown',
   }
 }
 
 /** Bounded registry/takeover SSE with actor-specific baseline recovery. */
 export class RegistryEventStream {
   readonly #registry: SharedSessionRegistry
-  readonly #clients = new Set<ServerResponse>()
+  readonly #clients = new Map<ServerResponse, RegistryStreamClient>()
   readonly #events: StreamEnvelope[] = []
   readonly #unsubscribe: () => void
   readonly #heartbeat: ReturnType<typeof setInterval>
@@ -196,8 +214,8 @@ export class RegistryEventStream {
     this.#limit = limit
     this.#unsubscribe = registry.onEvent((event): void => this.publish(event))
     this.#heartbeat = setInterval((): void => {
-      for (const response of [...this.#clients]) {
-        if (!response.write(': heartbeat\n\n')) this.#remove(response)
+      for (const [response, client] of [...this.#clients]) {
+        if (client.ready && !response.write(': heartbeat\n\n')) this.#remove(response)
       }
     }, 15_000)
     this.#heartbeat.unref()
@@ -205,14 +223,27 @@ export class RegistryEventStream {
 
   public publish(event: SessionShareEvent): void {
     if (this.#disposed) return
+    const accountId =
+      event.type === 'registry'
+        ? event.accountId
+        : this.#registry.getView(event.request.sessionId)?.accountId
+    if (accountId === undefined) return
     const envelope: StreamEnvelope = {
       id: ++this.#sequence,
       event: 'registry',
+      accountId,
       data: event.type === 'takeover' ? { type: 'takeover' } : event,
     }
     this.#events.push(envelope)
     if (this.#events.length > this.#limit) this.#events.shift()
-    for (const response of [...this.#clients]) this.#write(response, envelope)
+    for (const [response, client] of [...this.#clients]) {
+      if (client.accountId !== accountId) continue
+      if (client.ready) this.#write(response, envelope)
+      else {
+        client.pending.push(envelope)
+        if (client.pending.length > this.#limit) client.pending.shift()
+      }
+    }
   }
 
   public async connect(
@@ -223,34 +254,56 @@ export class RegistryEventStream {
     this.#assertAvailable()
     const raw = request.headers['last-event-id']
     const requested = Number.parseInt(Array.isArray(raw) ? (raw[0] ?? '') : (raw ?? ''), 10)
-    const oldest = this.#events[0]?.id ?? this.#sequence
+    const visibleEvents = this.#events.filter(
+      (event): boolean => event.accountId === identity.accountId,
+    )
+    const oldest = visibleEvents[0]?.id ?? this.#sequence
+    const initialSequence = this.#sequence
     const baselineRequired =
       !Number.isSafeInteger(requested) || requested < oldest - 1 || requested > this.#sequence
-    const pending: readonly StreamEnvelope[] = baselineRequired
-      ? [
-          {
-            id: this.#sequence,
-            event: 'baseline',
-            data: {
-              sessions: await this.#registry.listFor(identity.actor, identity.accountRole),
-              takeovers: this.#registry.takeoversFor(identity.actor),
+    const client: RegistryStreamClient = {
+      accountId: identity.accountId,
+      pending: [],
+      ready: false,
+    }
+    const close = (): void => this.#remove(response)
+    this.#clients.set(response, client)
+    response.once('close', close)
+    try {
+      const pending: readonly StreamEnvelope[] = baselineRequired
+        ? [
+            {
+              id: initialSequence,
+              event: 'baseline',
+              accountId: identity.accountId,
+              data: {
+                sessions: await this.#registry.listFor(identity.actor, identity.accountRole),
+                takeovers: this.#registry.takeoversFor(identity.actor),
+              },
             },
-          },
-        ]
-      : this.#events.filter((event): boolean => event.id > requested)
+          ]
+        : visibleEvents.filter((event): boolean => event.id > requested)
 
-    this.#assertAvailable()
-
-    response.statusCode = 200
-    securityHeaders(response)
-    response.setHeader('content-type', 'text/event-stream; charset=utf-8')
-    response.setHeader('connection', 'keep-alive')
-    response.setHeader('x-accel-buffering', 'no')
-    response.flushHeaders()
-    response.write('retry: 2000\n\n')
-    this.#clients.add(response)
-    response.once('close', (): void => this.#remove(response))
-    for (const envelope of pending) this.#write(response, envelope)
+      this.#assertAvailable()
+      if (this.#clients.get(response) !== client) return
+      response.statusCode = 200
+      securityHeaders(response)
+      response.setHeader('content-type', 'text/event-stream; charset=utf-8')
+      response.setHeader('connection', 'keep-alive')
+      response.setHeader('x-accel-buffering', 'no')
+      response.flushHeaders()
+      response.write('retry: 2000\n\n')
+      for (const envelope of pending) this.#write(response, envelope)
+      for (const envelope of client.pending) {
+        if (envelope.id > initialSequence) this.#write(response, envelope)
+      }
+      client.pending.length = 0
+      client.ready = true
+    } catch (error: unknown) {
+      this.#clients.delete(response)
+      response.off('close', close)
+      throw error
+    }
   }
 
   public dispose(): void {
@@ -258,7 +311,9 @@ export class RegistryEventStream {
     this.#disposed = true
     clearInterval(this.#heartbeat)
     this.#unsubscribe()
-    for (const response of [...this.#clients]) response.end()
+    for (const [response, client] of [...this.#clients]) {
+      if (client.ready) response.end()
+    }
     this.#clients.clear()
   }
 
@@ -358,7 +413,7 @@ export class SessionShareHttpApi {
       const id = decodedId(match[1])
       const action = match[2]
       if (method === 'GET' && action === undefined) {
-        const session = this.#registry.getView(id)
+        const session = this.#registry.getViewFor(id, identity.accountId)
         if (session === undefined)
           throw new LubanError('E_NOT_FOUND', `Session ${id} was not found`)
         sendJson(response, 200, {

@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 注册表、认证联邦与 SSE 验证证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐双 loopback peer 联邦与控制权链路验证 |
 | v0.4 | 2026-08-30 | Codex | 改为账号默认会话隔离，废弃三级权限功能 |
+| v0.5 | 2026-08-30 | Codex | 落实强制账号契约、late-bind 恢复与 SSE/peer 隔离验证 |
 
 ## 1. 概述与目标
 
@@ -55,9 +56,9 @@ sequenceDiagram
 export interface SessionRegistry {
   list(accountId: AccountId, filter?: { host?: HostId; taskId?: TaskId }): Promise<SharedSession[]>;
   subscribe(id: SessionId, accountId: AccountId): AsyncIterable<SessionEvent>; // 同账号观察流
-  requestTakeover(id: SessionId, by: Actor): Promise<TakeoverResult>;
-  release(id: SessionId, by: Actor): Promise<void>;
-  onRegistryChange(listener: (evt: RegistryEvent) => void): Unsubscribe;
+  requestTakeover(id: SessionId, by: AccountActor): Promise<TakeoverResult>;
+  release(id: SessionId, by: AccountActor): Promise<void>;
+  onRegistryChange(accountId: AccountId, listener: (evt: RegistryEvent) => void): Unsubscribe;
 }
 ```
 
@@ -73,7 +74,7 @@ export interface SessionRegistry {
       name: dsh-luban-session-share
       config:
         host: auto
-        ownerUser: owner          # 单账号兼容迁移；新会话归属来自 M01 accountId
+        ownerUser: owner          # 测试/旧装配 fallback；生产归属只读取 M01 session map
         takeoverTimeoutSec: 120
         peerRefreshSec: 10
         requestTimeoutSec: 10
@@ -106,14 +107,16 @@ M05-F001 ~ M05-F004 共 4 项；M05-F004 保留 ID 但状态为 `dropped`。
 ## 10. 实现与验证记录
 
 - `DshSessionBridge` 基于 rc2 `AgentRegistry`、`agent/status`、`session/event` 与
-  `Agent.followup` 投影顶层会话；M03 健康、M02 task claim 均合并到同一注册表。
+  `Agent.followup` 投影顶层会话；生产只注册 M01 session map 已绑定的会话，M02 task claim 触发
+  late-bind 重查；旧无归属会话保持不可见，M03 task link 仅在账号一致时合并。
 - 本机会话接管在 per-session mutex 内执行账号归属检查、对端确认、过期检查与 version CAS；peer mutation 使用真实 HTTP transport。
-- registry 与 per-session SSE 都有有界 replay/baseline；peer 建连有超时，单帧上限 1 MiB，
+- registry 与 per-session SSE 都有有界 replay/baseline；baseline 加载期间的同账号事件先排队再按序发送；
+  peer 建连有超时，缺失/冲突 `accountId` 的旧 peer snapshot 被拒绝，单帧上限 1 MiB，
   peer refresh single-flight，dispose/remove 会终止流并释放历史。
 - Session ID 在配置的主机间必须全局唯一；跨 registry origin 的碰撞会 fail closed，保留既有条目
   并报告 `session-id-collision`，避免将 stream 或 mutation 路由到错误主机。
 - 两个真实 loopback HTTP peer 已跑通 federation 注册、控制权请求/批准和输出同步；
-  本地 Prettier、严格类型、ESLint、构建、37 项 M05 测试、release metadata 与 pack dry-run
+  本地 Prettier、严格类型、ESLint、构建、45 项 M05 测试、release metadata 与 pack dry-run
   通过。真实 Windows/Ubuntu 双主机断线与接管仍保留为目标环境验收。
 
 ## 11. 开放问题

@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   Actor,
   ActorId,
   HostId,
@@ -16,6 +17,7 @@ export type AccountRole = 'admin' | 'operator' | 'observer' | 'unknown'
 
 export interface AuthenticatedActor {
   readonly actor: Actor
+  readonly accountId: AccountId
   readonly accountRole: AccountRole
 }
 
@@ -31,6 +33,8 @@ export interface SessionAccessView extends SessionView {
 }
 
 export interface LocalSessionInput {
+  /** Explicit owner for tests/imports; production resolves this from M01 session ownership. */
+  readonly accountId?: AccountId
   readonly id: SessionId
   readonly host: HostId
   readonly owner: Actor
@@ -55,7 +59,7 @@ export interface TakeoverRequestRecord {
 }
 
 export type SessionShareEvent =
-  | { readonly type: 'registry'; readonly event: RegistryEvent }
+  | { readonly type: 'registry'; readonly event: RegistryEvent; readonly accountId?: AccountId }
   | { readonly type: 'takeover'; readonly request: TakeoverRequestRecord }
 
 export type SessionStreamEnvelope =
@@ -88,6 +92,7 @@ export interface SessionInputSink {
 }
 
 export interface RegistryListFilter {
+  readonly accountId?: AccountId
   readonly host?: HostId
   readonly taskId?: TaskId
 }

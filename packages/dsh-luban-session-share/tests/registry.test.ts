@@ -1,10 +1,71 @@
 import { describe, expect, it, vi } from 'vitest'
+import { asAccountId } from 'dsh-luban-core'
 import type { PeerConfig } from '../src/config.js'
 import { SharedSessionRegistry } from '../src/registry.js'
 import type { PeerNetwork, PeerSessionSnapshot } from '../src/types.js'
 import { MutableClock, host, session, user } from './helpers.js'
 
 describe('SharedSessionRegistry', (): void => {
+  it('filters sessions and rejects guessed identifiers across account contexts', async (): Promise<void> => {
+    const registry = new SharedSessionRegistry({
+      localHost: host('ubuntu'),
+      takeoverTimeoutMs: 5_000,
+      replayLimit: 16,
+    })
+    const alice = { ...user('alice'), accountId: asAccountId('alice') }
+    const aliceHelper = { ...user('alice-helper'), accountId: asAccountId('alice') }
+    const bob = { ...user('bob'), accountId: asAccountId('bob') }
+    expect((): void => {
+      registry.registerLocal({
+        id: session('S-legacy'),
+        host: host('ubuntu'),
+        owner: { kind: 'user', id: alice.id, displayName: 'legacy' },
+        healthy: true,
+        status: 'idle',
+      })
+    }).toThrow('no account ownership')
+    registry.registerLocal({
+      id: session('S-alice'),
+      host: host('ubuntu'),
+      owner: alice,
+      healthy: true,
+      status: 'idle',
+    })
+    registry.registerLocal({
+      id: session('S-bob'),
+      host: host('ubuntu'),
+      owner: bob,
+      healthy: true,
+      status: 'idle',
+    })
+
+    await expect(registry.listFor(alice, 'admin')).resolves.toMatchObject([{ id: 'S-alice' }])
+    await expect(registry.listFor(bob, 'admin')).resolves.toMatchObject([{ id: 'S-bob' }])
+    await expect(registry.list(asAccountId('alice'))).resolves.toMatchObject([{ id: 'S-alice' }])
+    expect(registry.getViewFor(session('S-alice'), asAccountId('bob'))).toBeUndefined()
+    expect((): void => {
+      registry.subscribe(session('S-alice'), asAccountId('bob'), 'observer')
+    }).toThrow('was not found')
+    expect((): void => {
+      registry.roleFor(session('S-alice'), bob, 'admin')
+    }).toThrow('was not found')
+    await expect(registry.requestTakeover(session('S-alice'), bob)).rejects.toMatchObject({
+      code: 'E_NOT_FOUND',
+    })
+    await expect(registry.release(session('S-alice'), bob)).rejects.toMatchObject({
+      code: 'E_NOT_FOUND',
+    })
+
+    const pending = await registry.requestTakeover(session('S-alice'), aliceHelper)
+    if (pending.status !== 'pending') throw new Error('same-account takeover was not pending')
+    const request = registry.takeoversFor(alice)[0]
+    if (request === undefined) throw new Error('same-account takeover request is missing')
+    expect(registry.takeoversFor(bob)).toEqual([])
+    await expect(
+      registry.decideTakeover(request.id, 'approve', bob, request.sessionVersion),
+    ).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+  })
+
   it('requires two distinct actors and a versioned CAS for exclusive takeover', async (): Promise<void> => {
     const clock = new MutableClock()
     const injected: string[] = []
@@ -25,8 +86,8 @@ describe('SharedSessionRegistry', (): void => {
       },
     })
     const owner = user('alice')
-    const requester = user('bob')
-    const competitor = user('carol')
+    const requester = user('bob', 'alice')
+    const competitor = user('carol', 'alice')
     registry.registerLocal({
       id: session('S-1'),
       host: host('ubuntu'),
@@ -112,17 +173,17 @@ describe('SharedSessionRegistry', (): void => {
       healthy: true,
       status: 'idle',
     })
-    const pending = await registry.requestTakeover(session('S-timeout'), user('first'))
+    const pending = await registry.requestTakeover(session('S-timeout'), user('first', 'owner'))
     expect(pending.status).toBe('pending')
     clock.advance(1_001)
     registry.sweepExpired()
-    expect(registry.takeoversFor(user('first'))[0]).toMatchObject({
+    expect(registry.takeoversFor(user('first', 'owner'))[0]).toMatchObject({
       status: 'expired',
       reason: 'Takeover approval timed out',
     })
     expect(registry.getView(session('S-timeout'))?.lockHolder).toMatchObject({ id: 'owner' })
     await expect(
-      registry.requestTakeover(session('S-timeout'), user('second')),
+      registry.requestTakeover(session('S-timeout'), user('second', 'owner')),
     ).resolves.toMatchObject({ status: 'pending' })
   })
 
@@ -379,7 +440,7 @@ describe('SharedSessionRegistry', (): void => {
       replayLimit: 16,
     })
     const listener = vi.fn()
-    const unsubscribe = registry.onRegistryChange(listener)
+    const unsubscribe = registry.onRegistryChange(asAccountId('owner'), listener)
     registry.registerLocal({
       id: session('S-observer'),
       host: host('ubuntu'),

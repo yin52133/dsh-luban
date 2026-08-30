@@ -10,7 +10,7 @@ import type {
   SessionRegistry,
   TaskStore,
 } from 'dsh-luban-core'
-import { LubanError, asActorId, modulePrefix } from 'dsh-luban-core'
+import { LubanError, asAccountId, asActorId, modulePrefix } from 'dsh-luban-core'
 import {
   Config as ConfigSchema,
   type Config as SessionShareConfig,
@@ -48,6 +48,7 @@ export type Config = SessionShareConfig
 export { parseConfig, resolveHostId } from './config.js'
 export type { PeerConfig } from './config.js'
 export { DshSessionBridge, DshSessionInputSink } from './dsh-bridge.js'
+export type { DshSessionBridgeOptions } from './dsh-bridge.js'
 export { RegistryEventStream, SessionShareHttpApi } from './http-api.js'
 export { decodePeerSession, HttpPeerNetwork } from './peer.js'
 export { SharedSessionRegistry } from './registry.js'
@@ -86,6 +87,7 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
     input: new DshSessionInputSink(ctx.agents),
     publishLock: (session, role): void => {
       ctx.emit('luban.session.lock', {
+        ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
         sessionId: session.id,
         holder: session.lockHolder ?? null,
         role,
@@ -95,9 +97,16 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
   const owner = {
     kind: 'user' as const,
     id: asActorId(config.ownerUser),
+    accountId: asAccountId(config.ownerUser),
     displayName: config.ownerUser,
   }
-  const bridge = new DshSessionBridge({ agents: ctx.agents, registry, host, owner })
+  const bridge = new DshSessionBridge({
+    agents: ctx.agents,
+    registry,
+    host,
+    owner,
+    accountSessions: auth.accountSessions,
+  })
   bridge.initialize([])
   const api = new SessionShareHttpApi(registry, auth, config.replayLimit)
   ctx.provide('lubanSessionRegistry', registry)
@@ -112,8 +121,8 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
       if (!active) return
       void taskStore
         .query({})
-        .then((tasks): void => {
-          if (active) bridge.syncTasks(tasks)
+        .then(async (tasks): Promise<void> => {
+          if (active) await bridge.syncTasks(tasks)
         })
         .catch((): void => {
           if (active) ctx.logger.warn('luban-session-share: task link refresh failed')
@@ -163,6 +172,7 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
       unregisterDisposed()
       unregisterCreated()
       unregisterRoute()
+      bridge.dispose()
       api.dispose()
     }
   }, 'luban-session-share: registry, peer mirror, and authenticated streams')
