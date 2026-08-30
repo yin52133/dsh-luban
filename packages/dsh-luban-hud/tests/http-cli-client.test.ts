@@ -2,12 +2,17 @@ import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import { resolve } from 'node:path'
+import { AgentRegistry, Inbox, type Agent } from '@deepseek-ai/dsh-agent'
+import { Context, type Context as ClientContext } from '@deepseek-ai/cordis'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { AuthService } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import { runCli } from '../src/cli.js'
 import { apply as applyClient, keepaliveIndicator } from '../src/client/index.js'
+import { DshSessionTelemetryProvider } from '../src/dsh-telemetry.js'
 import { HudEventStream, HudHttpApi } from '../src/http-api.js'
 import { HudKeepaliveHealthStore } from '../src/keepalive-health.js'
 import { HUD_TELEMETRY_EVENT, type HudSnapshotResponse } from '../src/types.js'
@@ -70,6 +75,72 @@ function auth(): AuthService {
           : { allowed: false, status: 401 },
       ),
   } as AuthService
+}
+
+function telemetrySession(idValue: string, cwd: string): Session {
+  const id = SessionId(idValue)
+  return Session.create(id, [], {
+    version: SESSION_FORMAT_VERSION,
+    id,
+    createdAt: Date.now(),
+    cwd,
+  })
+}
+
+function appendRoute(
+  session: Session,
+  model: string,
+  reasoningEffort: 'low' | 'medium' | 'high',
+  reason: 'initial' | 'change',
+): void {
+  session.append('request/context', {
+    provider: 'deepseek',
+    model,
+    contextWindow: 128_000,
+  })
+  session.append('request/header', {
+    header: {
+      config: {
+        provider: 'deepseek',
+        model,
+        reasoningEffort: ReasoningEffortId(reasoningEffort),
+      },
+    },
+    reason,
+  })
+}
+
+function registeredAgent(context: Context, session: Session, model: string): Agent {
+  const inbox = new Inbox(session, {
+    inserted: (): void => undefined,
+    discarded: (): void => undefined,
+    claimed: (): void => undefined,
+  })
+  return {
+    id: session.id,
+    options: { provider: 'deepseek', model },
+    session,
+    inbox,
+    status: 'idle',
+    ctx: context,
+    cancel: (): void => undefined,
+    whenIdle: (): Promise<void> => Promise.resolve(),
+    runMaintenance<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+      return task(new AbortController().signal)
+    },
+    send(message, target, _wakeup): void {
+      inbox.append(target, message)
+    },
+    followup(message): void {
+      inbox.append('next-turn', message)
+    },
+    steer(message): void {
+      inbox.append('next-step', message)
+    },
+    inject(message): void {
+      inbox.append('next-step', message)
+    },
+  }
 }
 
 const publicConfig = {
@@ -189,21 +260,24 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     ).rejects.toThrow('upstream failed [31m')
   })
 
-  it('reads refreshed providers through the real loopback HTTP API', async (): Promise<void> => {
-    const telemetry = new DefaultTelemetryAggregator({ refreshMs: 1_000, providerTimeoutMs: 100 })
-    const registerProvider = (used: number, model: string): (() => void) =>
-      telemetry.register({
-        id: 'loopback-provider',
-        capabilities: () => ['context', 'workspace', 'model', 'rates'],
-        sample: () =>
-          Promise.resolve({
-            context: { used, max: 100, ratio: used / 100 },
-            workspace: { name: 'loopback-workspace' },
-            model: { name: model, thinkingDepth: 'medium' },
-            rates: { tpm1m: used, tpm5m: used / 5, rpm1m: 1, rpm5m: 0.2 },
-          }),
-      })
-    let unregisterProvider = registerProvider(25, 'model-a')
+  it('refreshes rc2 session environment changes through the real loopback API and CLI', async (): Promise<void> => {
+    const context = new Context()
+    const agentsFiber = context.plugin(AgentRegistry)
+    await agentsFiber
+    const workspaceRoot = resolve('workspace-root')
+    const initialWorkspace = resolve(workspaceRoot, 'firmware', 'alpha')
+    const initialSession = telemetrySession('hud-loopback-alpha', initialWorkspace)
+    appendRoute(initialSession, 'model-a', 'low', 'initial')
+    let unregisterAgent = context.agents.register(
+      registeredAgent(context, initialSession, 'model-a'),
+    )
+    let monotonicNow = 0
+    const telemetry = new DefaultTelemetryAggregator({
+      refreshMs: 1_000,
+      providerTimeoutMs: 100,
+      monotonicClock: { now: (): number => monotonicNow },
+    })
+    telemetry.register(new DshSessionTelemetryProvider(context.agents, workspaceRoot))
     const api = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig })
     const server = createServer((request, response): void => {
       void api.handler(request, response)
@@ -219,24 +293,44 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     }
 
     try {
-      await expect(runCli([], environment)).resolves.toContain(
-        'Luban HUD [NORMAL] | ctx 25/100 (25.0%)',
+      const initial = await runCli([], environment)
+      expect(context.agents.get(initialSession.id)?.session).toBe(initialSession)
+      expect(initial).toContain('workspace firmware/alpha')
+      expect(initial).toContain('model model-a')
+      expect(initial).toContain('thinking low')
+
+      appendRoute(initialSession, 'model-b', 'high', 'change')
+      monotonicNow += 1_000
+      const changedRoute = await runCli([], environment)
+      expect(context.agents.get(initialSession.id)?.session).toBe(initialSession)
+      expect(changedRoute).toContain('workspace firmware/alpha')
+      expect(changedRoute).toContain('model model-b')
+      expect(changedRoute).toContain('thinking high')
+
+      unregisterAgent()
+      const switchedSession = telemetrySession(
+        'hud-loopback-beta',
+        resolve(workspaceRoot, 'firmware', 'beta'),
       )
-      await expect(runCli([], environment)).resolves.toContain('model model-a')
+      appendRoute(switchedSession, 'model-c', 'medium', 'initial')
+      unregisterAgent = context.agents.register(
+        registeredAgent(context, switchedSession, 'model-c'),
+      )
+      monotonicNow += 1_000
 
-      unregisterProvider()
-      unregisterProvider = registerProvider(96, 'model-b')
-
-      const refreshed = await runCli([], environment)
-      expect(refreshed).toContain('Luban HUD [CRITICAL] | ctx 96/100 (96.0%)')
-      expect(refreshed).toContain('model model-b')
+      const switched = JSON.parse(await runCli(['--json'], environment)) as HudSnapshotResponse
+      expect(switched.snapshot).toMatchObject({
+        workspace: { name: 'firmware/beta' },
+        model: { name: 'model-c', thinkingDepth: 'medium' },
+      })
     } finally {
-      unregisterProvider()
+      unregisterAgent()
       api.dispose()
       telemetry.dispose()
       await new Promise<void>((resolve, reject): void => {
         server.close((error): void => (error === undefined ? resolve() : reject(error)))
       })
+      await agentsFiber.dispose()
     }
   })
 
