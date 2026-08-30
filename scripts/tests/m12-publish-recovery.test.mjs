@@ -1,5 +1,4 @@
 import { Buffer } from 'node:buffer'
-import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
@@ -105,12 +104,10 @@ function response(status, content) {
   }
 }
 
-function trustedNpm(record, options) {
+function matchingNpm(record) {
   return {
     status: 'matching',
-    trusted: true,
     registryTarballSha256: record.sha256,
-    provenance: { verified: true, ...options.provenance },
   }
 }
 
@@ -230,7 +227,6 @@ describe('M12 append-only npm publish ledger', () => {
       release,
       async ({ name }) => ({
         status: name === 'dsh-luban-core' ? 'matching' : 'absent',
-        trusted: name === 'dsh-luban-core',
         registryTarballSha256: name === 'dsh-luban-core' ? release.packages[0].sha256 : undefined,
       }),
       { clock: ledgerClock },
@@ -297,7 +293,6 @@ describe('M12 append-only npm publish ledger', () => {
       release,
       async ({ name }) => ({
         status: name === 'dsh-luban-core' ? 'absent' : 'matching',
-        trusted: name === 'dsh-luban-sample',
       }),
       { clock: ledgerClock },
     )
@@ -593,7 +588,7 @@ describe('M12 append-only npm publish ledger', () => {
     const reconciliation = await reconcilePublishLedger(
       recoveredPath,
       release,
-      async () => ({ status: 'matching', trusted: true }),
+      async () => ({ status: 'matching' }),
       { clock: ledgerClock },
     )
     expect(reconciliation.ledger.status).toBe('published')
@@ -629,7 +624,7 @@ describe('M12 append-only npm publish ledger', () => {
       ledgerPath,
       release,
       async ({ name }) =>
-        name === 'dsh-luban-core' ? { status: 'matching', trusted: true } : { status: 'absent' },
+        name === 'dsh-luban-core' ? { status: 'matching' } : { status: 'absent' },
       { clock: ledgerClock },
     )
     await resumePublishLedger(ledgerPath, release, async () => undefined, {
@@ -702,7 +697,7 @@ describe('M12 read-only registry and three-way verification', () => {
         artifacts: root,
         fetcher: async () => response(404),
       }),
-    ).resolves.toMatchObject({ status: 'absent', simulated: true, trusted: false })
+    ).resolves.toMatchObject({ status: 'absent', simulated: true })
 
     const urls = []
     await expect(
@@ -715,7 +710,6 @@ describe('M12 read-only registry and three-way verification', () => {
       }),
     ).resolves.toMatchObject({
       status: 'matching',
-      trusted: false,
       simulated: true,
       registryTarballSha256: sha256(artifact),
     })
@@ -740,7 +734,6 @@ describe('M12 read-only registry and three-way verification', () => {
       status: 'unknown',
       reason: 'metadata-request-failed',
       simulated: true,
-      trusted: false,
     })
   })
 
@@ -820,141 +813,6 @@ describe('M12 read-only registry and three-way verification', () => {
     ).rejects.toThrow(/publishConfig.*registry/u)
   })
 
-  it('requires a cryptographically verified SLSA statement bound to this tag workflow', async () => {
-    const root = await temporaryRoot()
-    const artifact = Buffer.from('provenance-bound tarball')
-    await writeFile(join(root, 'package.tgz'), artifact)
-    const record = {
-      name: '@scope/example',
-      version: '1.0.0',
-      file: 'package.tgz',
-      sha256: sha256(artifact),
-    }
-    const provenance = {
-      ...RELEASE_AUTHORITY,
-      ...attemptAuthority('5678', '2'),
-    }
-    const attestationsUrl = `https://registry.npmjs.org/-/npm/v1/attestations/${encodeURIComponent(`${record.name}@${record.version}`)}`
-    const metadata = {
-      name: record.name,
-      version: record.version,
-      dist: {
-        tarball: 'https://registry.npmjs.org/@scope/example/-/example-1.0.0.tgz',
-        attestations: {
-          url: attestationsUrl,
-          provenance: { predicateType: 'https://slsa.dev/provenance/v1' },
-        },
-      },
-    }
-    const statement = {
-      _type: 'https://in-toto.io/Statement/v1',
-      subject: [
-        {
-          name: 'pkg:npm/%40scope/example@1.0.0',
-          digest: { sha512: createHash('sha512').update(artifact).digest('hex') },
-        },
-      ],
-      predicateType: 'https://slsa.dev/provenance/v1',
-      predicate: {
-        buildDefinition: {
-          buildType: 'https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1',
-          externalParameters: {
-            workflow: {
-              repository: 'https://github.com/owner/repository',
-              path: '.github/workflows/release.yml',
-              ref: 'refs/tags/v1.0.0',
-            },
-          },
-          internalParameters: {
-            github: {
-              event_name: 'push',
-              repository_id: '1234',
-              repository_owner_id: '123',
-            },
-          },
-          resolvedDependencies: [
-            {
-              uri: 'git+https://github.com/owner/repository@refs/tags/v1.0.0',
-              digest: { gitCommit: 'a'.repeat(40) },
-            },
-          ],
-        },
-        runDetails: {
-          builder: { id: 'https://github.com/actions/runner/github-hosted' },
-          metadata: {
-            invocationId: 'https://github.com/owner/repository/actions/runs/5678/attempts/2',
-          },
-        },
-      },
-    }
-    const attestations = {
-      attestations: [
-        {
-          predicateType: 'https://slsa.dev/provenance/v1',
-          bundle: {
-            dsseEnvelope: {
-              payload: Buffer.from(JSON.stringify(statement)).toString('base64'),
-              signatures: [{ sig: 'signed' }],
-            },
-          },
-        },
-      ],
-    }
-    let verifiedBundle
-    let verificationOptions
-    const inspect = (expectedProvenance = provenance) => {
-      const replies = [
-        response(200, JSON.stringify(metadata)),
-        response(200, artifact),
-        response(200, JSON.stringify(attestations)),
-      ]
-      return inspectNpmArtifactForTest(record, {
-        artifacts: root,
-        provenance: expectedProvenance,
-        verifyBundle: async (bundle, options) => {
-          verifiedBundle = bundle
-          verificationOptions = options
-          return true
-        },
-        fetcher: async () => replies.shift(),
-      })
-    }
-    await expect(inspect()).resolves.toMatchObject({
-      status: 'matching',
-      trusted: false,
-      wouldTrust: true,
-      simulated: true,
-      provenance,
-    })
-    expect(verifiedBundle).toEqual(attestations.attestations[0].bundle)
-    expect(verificationOptions).toMatchObject({ provenance })
-    await expect(inspect({ ...provenance, commitSha: 'b'.repeat(40) })).resolves.toMatchObject({
-      status: 'conflict',
-      reason: 'provenance-expectation',
-    })
-    const wrongAttempt = JSON.parse(JSON.stringify(statement))
-    wrongAttempt.predicate.runDetails.metadata.invocationId =
-      'https://github.com/owner/repository/actions/runs/9999/attempts/2'
-    attestations.attestations[0].bundle.dsseEnvelope.payload = Buffer.from(
-      JSON.stringify(wrongAttempt),
-    ).toString('base64')
-    await expect(inspect()).resolves.toMatchObject({
-      status: 'conflict',
-      reason: 'provenance-binding',
-    })
-    const mismatchedStatement = JSON.parse(JSON.stringify(statement))
-    mismatchedStatement.subject[0].name = 'pkg:npm/other-package@1.0.0'
-    mismatchedStatement.predicate.buildDefinition.internalParameters.github.event_name =
-      'workflow_dispatch'
-    attestations.attestations[0].bundle.dsseEnvelope.payload = Buffer.from(
-      JSON.stringify(mismatchedStatement),
-    ).toString('base64')
-    await expect(inspect()).resolves.toMatchObject({
-      status: 'conflict',
-      reason: 'provenance-binding',
-    })
-  })
-
   it('binds the workflow SHA, public GitHub assets, and exact npm tarballs before verification', async () => {
     const fixture = await publishedFixture()
     const expectedSha = 'a'.repeat(40)
@@ -973,7 +831,7 @@ describe('M12 read-only registry and three-way verification', () => {
         size: content.length,
       })),
     })
-    const npm = async (record, options) => trustedNpm(record, options)
+    const npm = async (record) => matchingNpm(record)
 
     await expect(
       simulatePublishedRelease(
@@ -1125,7 +983,7 @@ describe('M12 read-only registry and three-way verification', () => {
       repositoryOwnerId: '123',
       expectedSha,
     }
-    const inspectNpm = async (record, inspectionOptions) => trustedNpm(record, inspectionOptions)
+    const inspectNpm = async (record) => matchingNpm(record)
 
     await expect(
       simulatePublishedRelease(options, {

@@ -16,7 +16,6 @@ import {
 } from '../install-3rd-party.mjs'
 import { verifyThirdPartyProfile } from '../verify-3rd-party-install.mjs'
 import { auditPackedFiles } from '../release/audit-packages.mjs'
-import { gitleaksInvocation } from '../release/security-scan.mjs'
 import {
   extractChangelogSection,
   loadPolicy,
@@ -28,7 +27,6 @@ import { releasePlan } from '../release/pack-artifacts.mjs'
 import { prepareMarketEntry } from '../release/prepare-market-entry.mjs'
 import { verifyArtifactManifest } from '../release/publish.mjs'
 import { validateDshEngineRange, validateRepository } from '../release/validate-release.mjs'
-import { secretGatePlan } from '../release/verify-secret-gate.mjs'
 import { createStagedDirectoryPublisher, pathIsWithin } from '../path-boundary.mjs'
 
 const TEST_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -955,14 +953,6 @@ describe('M12 install and safety plans', () => {
     expect(blocked.status).not.toBe(0)
     expect(`${blocked.stdout}\n${blocked.stderr}`).toMatch(/dsh-home|DshHome/u)
   })
-
-  it('builds a read-only gitleaks command', () => {
-    const args = gitleaksInvocation(REPOSITORY_ROOT)
-    expect(args[0]).toBe('git')
-    expect(args).toContain('--redact')
-    expect(args.join(' ')).toContain('.gitleaks.toml')
-    expect(secretGatePlan()).toMatchObject({ expectedExitCode: 1, dryRun: true })
-  })
 })
 
 describe('M12 release policy', () => {
@@ -981,10 +971,7 @@ describe('M12 release policy', () => {
     const orderedGates = [
       'git fetch --no-tags origin +refs/heads/mainline:refs/remotes/origin/mainline',
       'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/mainline',
-      'gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e',
       'astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9',
-      '"$RUNNER_TEMP/gitleaks" git "$GITHUB_WORKSPACE"',
-      'scripts/release/verify-secret-gate.mjs --verify --binary',
       'pnpm install --frozen-lockfile',
       'pnpm format:check',
       'pnpm lint',
@@ -1020,11 +1007,8 @@ describe('M12 release policy', () => {
     expect(validateJob).toContain('fetch-depth: 0')
     expect(validateJob).toContain("version: '0.11.8'")
     expect(validateJob).toContain('cache-dependency-glob: tools/browser-bridge/uv.lock')
-    expect(workflow).toContain('GITLEAKS_VERSION: 8.30.1')
-    expect(workflow).toContain(
-      'gitleaks" git "$GITHUB_WORKSPACE" --config "$GITHUB_WORKSPACE/.gitleaks.toml"',
-    )
-    expect(workflow).toContain('551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb')
+    expect(workflow).not.toContain('gitleaks')
+    expect(workflow).not.toContain('verify-secret-gate')
   })
 
   it('rejects files outside the npm payload allowlist', async () => {

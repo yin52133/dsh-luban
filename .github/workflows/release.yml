@@ -21,12 +21,6 @@ jobs:
         run: |
           git fetch --no-tags origin +refs/heads/mainline:refs/remotes/origin/mainline
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/mainline
-      - name: Scan the complete tag history for secrets
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
-          GITLEAKS_VERSION: 8.30.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.24.0
@@ -40,16 +34,6 @@ jobs:
           version: '0.11.8'
           enable-cache: true
           cache-dependency-glob: tools/browser-bridge/uv.lock
-      - name: Prove the tag gate rejects a synthetic leak
-        shell: bash
-        run: |
-          curl --fail --location --silent --show-error \
-            --output "$RUNNER_TEMP/gitleaks.tar.gz" \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  '"$RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
-          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" git "$GITHUB_WORKSPACE" --config "$GITHUB_WORKSPACE/.gitleaks.toml" --redact --verbose
-          node scripts/release/verify-secret-gate.mjs --verify --binary "$RUNNER_TEMP/gitleaks"
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint

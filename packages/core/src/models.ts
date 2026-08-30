@@ -291,9 +291,9 @@ export interface ReleaseRecord {
   readonly dshBaseline: string
   readonly changelog: string
   readonly marketPrUrl?: string
-  readonly securityScan: {
-    readonly gitleaks: 'clean' | 'findings'
-    readonly filesAudit: 'pass' | 'fail'
+  readonly packageAudit: {
+    readonly pack: 'pass' | 'fail'
+    readonly dryRun: 'pass' | 'fail'
   }
   readonly at: EpochMs
 }

@@ -46,8 +46,6 @@ const PRODUCTION_ADAPTER_OPTIONS = [
   'id',
   'inspectNpm',
   'publishPackage',
-  'verifyBundle',
-  'verifySignatures',
 ]
 const PROCESS_ENV_ALLOWLIST = [
   'APPDATA',
@@ -74,31 +72,6 @@ const PROCESS_ENV_ALLOWLIST = [
   'https_proxy',
   'no_proxy',
 ]
-const PROVENANCE_ENV_ALLOWLIST = [
-  'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
-  'ACTIONS_ID_TOKEN_REQUEST_URL',
-  'CI',
-  'GITHUB_ACTION',
-  'GITHUB_ACTIONS',
-  'GITHUB_EVENT_NAME',
-  'GITHUB_JOB',
-  'GITHUB_REF',
-  'GITHUB_REF_NAME',
-  'GITHUB_REF_TYPE',
-  'GITHUB_REPOSITORY',
-  'GITHUB_REPOSITORY_ID',
-  'GITHUB_REPOSITORY_OWNER_ID',
-  'GITHUB_RUN_ATTEMPT',
-  'GITHUB_RUN_ID',
-  'GITHUB_RUN_NUMBER',
-  'GITHUB_SERVER_URL',
-  'GITHUB_SHA',
-  'GITHUB_WORKFLOW',
-  'GITHUB_WORKFLOW_REF',
-  'GITHUB_WORKFLOW_SHA',
-  'RUNNER_ENVIRONMENT',
-]
-
 function selectedEnvironment(source, keys) {
   const environment = {}
   for (const key of keys) {
@@ -446,7 +419,6 @@ async function publishPackage(artifacts, record) {
       join(artifacts, record.file),
       '--access=public',
       '--dry-run=false',
-      '--provenance',
       '--ignore-scripts',
       '--tag=latest',
       `--registry=${NPM_REGISTRY}`,
@@ -456,7 +428,6 @@ async function publishPackage(artifacts, record) {
     ])
     const environment = {
       ...selectedEnvironment(process.env, PROCESS_ENV_ALLOWLIST),
-      ...selectedEnvironment(process.env, PROVENANCE_ENV_ALLOWLIST),
       NODE_AUTH_TOKEN: process.env.NODE_AUTH_TOKEN,
       NPM_CONFIG_CACHE: cache,
       NPM_CONFIG_GLOBALCONFIG: globalConfig,
@@ -549,19 +520,8 @@ export async function publishRelease(options = {}) {
     workflowSha: context.workflowSha,
   }
   const checkpoint = githubReleaseCheckpoint(release.tag, context)
-  const inspect = (record) => {
-    const packageAttempt =
-      record.state === 'attempting' ? record.activeAttemptAuthority : record.publishAuthority
-    const provenance =
-      packageAttempt === null || packageAttempt === undefined
-        ? undefined
-        : { ...releaseAuthority, ...packageAttempt }
-    return inspectNpmArtifact(record, {
-      artifacts,
-      timeoutMs: options.timeoutMs,
-      provenance,
-    })
-  }
+  const inspect = (record) =>
+    inspectNpmArtifact(record, { artifacts, timeoutMs: options.timeoutMs })
 
   if (action !== 'publish') await repairPublishLedgerTail(ledgerPath, identity)
 
@@ -606,7 +566,7 @@ export async function publishRelease(options = {}) {
   const confirmation = await reconcilePublishLedger(ledgerPath, identity, inspect, { checkpoint })
   if (!confirmation.ready || confirmation.ledger.status !== 'published') {
     throw new Error(
-      `Published packages could not be confirmed with trusted provenance: ${confirmation.issues.join('; ')}`,
+      `Published packages could not be confirmed by registry tarball: ${confirmation.issues.join('; ')}`,
     )
   }
   const ledger = confirmation.ledger

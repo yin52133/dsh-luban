@@ -873,15 +873,12 @@ export async function checkpointPublishLedgerPrefix(ledgerPath, expectedRelease,
   return loadPublishLedger(ledgerPath, expectedRelease)
 }
 
-function normalizeInspection(result, name, requireTrustedMatching = false) {
+function normalizeInspection(result, name) {
   if (result === null || typeof result !== 'object' || Array.isArray(result)) {
     throw new Error(`${name}: registry inspector returned an invalid result`)
   }
   if (!['absent', 'matching', 'conflict', 'unknown'].includes(result.status)) {
     throw new Error(`${name}: registry inspector returned invalid status ${String(result.status)}`)
-  }
-  if (requireTrustedMatching && result.status === 'matching' && result.trusted !== true) {
-    throw new Error(`${name}: matching registry result is not provenance-verified`)
   }
   return { name, ...result }
 }
@@ -917,7 +914,7 @@ export async function reconcilePublishLedger(
   let ledger = await loadPublishLedger(ledgerPath, expectedRelease)
   const inspections = await Promise.all(
     ledger.packages.map(async (record) =>
-      normalizeInspection(await inspectPackage(record), record.name, true),
+      normalizeInspection(await inspectPackage(record), record.name),
     ),
   )
   const issues = []

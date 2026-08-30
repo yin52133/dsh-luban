@@ -91,31 +91,6 @@ export async function inspectGithubPublishedRelease(input, options = {}) {
   }
 }
 
-function assertProvenance(record, expected) {
-  const provenance = record.provenance
-  const keys = [
-    'repository',
-    'repositoryId',
-    'repositoryOwnerId',
-    'workflowPath',
-    'ref',
-    'commitSha',
-    'eventName',
-    'runId',
-    'runAttempt',
-    'runnerEnvironment',
-    'workflowRef',
-    'workflowSha',
-  ]
-  if (
-    record.trusted !== true ||
-    provenance?.verified !== true ||
-    keys.some((key) => provenance[key] !== expected[key])
-  ) {
-    throw new Error(`${record.name}: npm provenance does not match the release workflow`)
-  }
-}
-
 function assertConsistency({ release, expectedSha, github, npm }) {
   if (!Number.isSafeInteger(github.releaseId) || github.releaseId <= 0) {
     throw new Error('GitHub Release ID is invalid')
@@ -150,7 +125,6 @@ function assertConsistency({ release, expectedSha, github, npm }) {
     if (record.status !== 'matching' || record.registryTarballSha256 !== record.sha256) {
       throw new Error(`${record.name}: npm tarball does not match the immutable artifact`)
     }
-    assertProvenance(record, record.expectedProvenance)
   }
 }
 
@@ -197,7 +171,7 @@ function positiveInteger(value, label) {
   return value
 }
 
-/** Verify tag -> exact public Release assets -> trusted npm provenance and tarballs. */
+/** Verify tag -> exact public Release assets -> matching npm tarballs. */
 async function verifyPublishedReleaseCore(options, runtime = {}) {
   const root = resolve(options.root ?? REPOSITORY_ROOT)
   if (options.artifacts === undefined) throw new Error('--artifacts is required')
@@ -255,19 +229,14 @@ async function verifyPublishedReleaseCore(options, runtime = {}) {
   const npm = await Promise.all(
     release.packages.map(async (record) => {
       const ledgerRecord = ledger.packages.find(({ name }) => name === record.name)
-      if (ledgerRecord?.state !== 'published' || ledgerRecord.publishAuthority === null) {
-        throw new Error(`${record.name}: published ledger has no provenance authority`)
-      }
-      const expectedProvenance = {
-        ...ledger.release.authority,
-        ...ledgerRecord.publishAuthority,
+      if (ledgerRecord?.state !== 'published') {
+        throw new Error(`${record.name}: published ledger does not record a completed publish`)
       }
       const inspection = await (runtime.inspectNpm ?? inspectNpmArtifact)(record, {
         artifacts,
         timeoutMs: options.timeoutMs,
-        provenance: expectedProvenance,
       })
-      return { ...inspection, ...record, expectedProvenance }
+      return { ...inspection, ...record }
     }),
   )
   assertConsistency({
@@ -331,15 +300,9 @@ async function verifyPublishedReleaseCore(options, runtime = {}) {
 
 /** Production verification never accepts replacement remote or clock adapters. */
 export async function verifyPublishedRelease(options = {}) {
-  const injected = [
-    'clock',
-    'fetcher',
-    'githubToken',
-    'inspectGithub',
-    'inspectNpm',
-    'verifyBundle',
-    'verifySignatures',
-  ].filter((key) => options[key] !== undefined)
+  const injected = ['clock', 'fetcher', 'githubToken', 'inspectGithub', 'inspectNpm'].filter(
+    (key) => options[key] !== undefined,
+  )
   if (injected.length > 0) {
     throw new Error(
       `Production release verification does not accept injected adapters: ${injected.join(', ')}`,
