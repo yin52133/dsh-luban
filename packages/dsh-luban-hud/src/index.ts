@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type {} from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {
   AccountId,
   AuthService,
@@ -219,6 +219,39 @@ export function apply(
     monotonicClock: systemMonotonicClock,
     rateLedger,
   })
+  const adoptedSessions = new Map<string, AccountId>()
+  let acceptingEvents = true
+  const collectOwnedSession = async (session: Session, event?: SessionEvent): Promise<void> => {
+    const sessionId = asSessionId(String(session.id))
+    const accountId = await resolveSessionAccount(sessionId)
+    if (!acceptingEvents || accountId === null) return
+    const adoptedAccount = adoptedSessions.get(String(sessionId))
+    if (adoptedAccount !== undefined && adoptedAccount !== accountId) {
+      throw new LubanError(
+        'E_ACCOUNT_SCOPE_MISMATCH',
+        `HUD session ${String(sessionId)} changed owner from ${String(adoptedAccount)} to ${String(accountId)}`,
+      )
+    }
+    if (adoptedAccount === undefined) {
+      collector.adoptForAccount(accountId, session)
+      adoptedSessions.set(String(sessionId), accountId)
+      return
+    }
+    if (event !== undefined) collector.observeForAccount(accountId, session, event)
+  }
+  const disposeOwnedSession = async (session: Session): Promise<void> => {
+    await collectOwnedSession(session)
+    const sessionId = String(session.id)
+    const accountId = adoptedSessions.get(sessionId)
+    if (accountId === undefined) return
+    collector.disposeForAccount(accountId, session)
+    adoptedSessions.delete(sessionId)
+  }
+  const refreshOwnedSessions = async (): Promise<void> => {
+    await Promise.all(
+      ctx.agents.list().map(async (agent): Promise<void> => collectOwnedSession(agent.session)),
+    )
+  }
   const telemetry = new DefaultTelemetryAggregator({
     refreshMs: config.refreshSec * 1_000,
     providerTimeoutMs: Math.max(500, Math.min(5_000, config.refreshSec * 1_000)),
@@ -258,7 +291,20 @@ export function apply(
     auth,
     config: publicConfig,
     keepalive,
-    rateCapture: rateLedger,
+    rateCapture: {
+      capture: async (windowValue, challenge, accountId) => {
+        try {
+          await refreshOwnedSessions()
+        } catch (error: unknown) {
+          throw new LubanError(
+            'E_UNAVAILABLE',
+            `HUD session ownership refresh failed: ${diagnostic(error)}`,
+            { retriable: true, cause: error },
+          )
+        }
+        return rateLedger.capture(windowValue, challenge, accountId)
+      },
+    },
     onError: (error: unknown): void =>
       ctx.logger.warn(`luban-hud: stream refresh failed: ${diagnostic(error)}`),
   })
@@ -287,21 +333,24 @@ export function apply(
   })
 
   ctx.effect(() => {
-    let acceptingEvents = true
     const pendingOwnership = new Set<Promise<void>>()
+    const trackOwnership = (operation: Promise<void>): void => {
+      const pending = operation
+        .catch((error: unknown): void =>
+          ctx.logger.warn(`luban-hud: session ownership collection failed: ${diagnostic(error)}`),
+        )
+        .finally((): void => void pendingOwnership.delete(pending))
+      pendingOwnership.add(pending)
+    }
     const withSessionOwner = (
       sessionId: string,
       operation: (accountId: AccountId) => void,
     ): void => {
-      const pending = resolveSessionAccount(asSessionId(sessionId))
-        .then((accountId): void => {
+      trackOwnership(
+        resolveSessionAccount(asSessionId(sessionId)).then((accountId): void => {
           if (acceptingEvents && accountId !== null) operation(accountId)
-        })
-        .catch((error: unknown): void =>
-          ctx.logger.warn(`luban-hud: account lookup failed: ${diagnostic(error)}`),
-        )
-        .finally((): void => void pendingOwnership.delete(pending))
-      pendingOwnership.add(pending)
+        }),
+      )
     }
     const unregisterRoute = ctx.webServer.register({
       kind: 'prefix',
@@ -309,19 +358,13 @@ export function apply(
       handler: api.handler,
     })
     const unregisterCreated = ctx.on('session/created', (session): void =>
-      withSessionOwner(String(session.id), (accountId): void =>
-        collector.adoptForAccount(accountId, session),
-      ),
+      trackOwnership(collectOwnedSession(session)),
     )
     const unregisterDisposed = ctx.on('session/disposed', (session): void =>
-      withSessionOwner(String(session.id), (accountId): void =>
-        collector.disposeForAccount(accountId, session),
-      ),
+      trackOwnership(disposeOwnedSession(session)),
     )
     const unregisterEvent = ctx.on('session/event', (session, event): void =>
-      withSessionOwner(String(session.id), (accountId): void =>
-        collector.observeForAccount(accountId, session, event),
-      ),
+      trackOwnership(collectOwnedSession(session, event)),
     )
     const unregisterKeepalive = ctx.on('luban.keepalive.health', (payload): void =>
       withSessionOwner(payload.sessionId, (accountId): void =>
@@ -329,13 +372,17 @@ export function apply(
       ),
     )
     for (const agent of ctx.agents.list()) {
-      withSessionOwner(String(agent.session.id), (accountId): void =>
-        collector.adoptForAccount(accountId, agent.session),
-      )
+      trackOwnership(collectOwnedSession(agent.session))
     }
+    const ownerRetryTimer = setInterval(
+      (): void => trackOwnership(refreshOwnedSessions()),
+      config.refreshSec * 1_000,
+    )
+    ownerRetryTimer.unref()
     telemetry.start()
     return async (): Promise<void> => {
       acceptingEvents = false
+      clearInterval(ownerRetryTimer)
       unregisterRoute()
       unregisterKeepalive()
       unregisterEvent()

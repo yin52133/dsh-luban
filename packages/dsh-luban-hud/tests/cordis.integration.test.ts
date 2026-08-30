@@ -60,6 +60,94 @@ function alertTask(input: TaskCreateInput): Task {
 }
 
 describe('HUD Cordis integration', (): void => {
+  it('replays assistant history when a session owner is bound after the event', async (): Promise<void> => {
+    const context = new Context()
+    const accountId = asAccountId('late-owner')
+    const id = SessionId('hud-late-owner')
+    const value = Session.create(id, [], {
+      version: SESSION_FORMAT_VERSION,
+      id,
+      createdAt: Date.now(),
+      cwd: process.cwd(),
+    })
+    const agent = { id, session: value, status: 'idle', options: {} } as unknown as Agent
+    const agents = {
+      currentInitiator: (): undefined => undefined,
+      get: (candidate: SessionId): Agent | undefined => (candidate === id ? agent : undefined),
+      list: (): readonly Agent[] => [agent],
+    } as unknown as AgentRegistry
+    let owner: AccountId | null = null
+    const ownerOf = vi.fn((): Promise<AccountId | null> => Promise.resolve(owner))
+    const auth = {
+      middleware: () => () =>
+        Promise.resolve({
+          allowed: true,
+          status: 200,
+          user: 'late-owner',
+          account: { accountId, username: 'late-owner', role: 'operator' },
+        }),
+      accountSessions: {
+        bind: (_accountId: AccountId, sessionId: ReturnType<typeof asSessionId>): Promise<void> => {
+          if (sessionId === asSessionId(id)) owner = accountId
+          return Promise.resolve()
+        },
+        ownerOf,
+      },
+    } as unknown as AuthService
+    const webFiber = context.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    const agentsFiber = context.plugin({
+      name: 'luban-hud-late-owner-agents',
+      apply(ctx: Context): void {
+        ctx.provide('agents', agents)
+      },
+    })
+    const authFiber = context.plugin({
+      name: 'luban-hud-late-owner-auth',
+      apply(ctx: Context): void {
+        ctx.provide('lubanAuth', auth)
+      },
+    })
+
+    try {
+      await Promise.all([webFiber, agentsFiber, authFiber])
+      const hudFiber = context.plugin(hudPlugin)
+      await hudFiber
+      try {
+        const assistant = value.append(
+          'assistant/message',
+          {
+            turn: 0,
+            step: 0,
+            message: createAssistantMessage({
+              content: [{ type: 'text', text: 'late owner response' }],
+              source: { provider: 'deepseek', model: 'deepseek-chat' },
+            }),
+            usage: { inputTokens: 8, outputTokens: 2 },
+          },
+          { surfaceOp: 'append' },
+        )
+        context.emit('session/event', value, assistant)
+        await vi.waitFor((): void => expect(ownerOf).toHaveBeenCalled())
+        owner = accountId
+
+        const snapshotUrl = `http://127.0.0.1:${String(context.webServer.port)}/luban-hud/snapshot`
+        await vi.waitFor(
+          async (): Promise<void> => {
+            const response = await fetch(snapshotUrl)
+            expect(response.status).toBe(200)
+            const envelope = (await response.json()) as HudSnapshotResponse
+            expect(envelope.snapshot.rates).toMatchObject({ tpm1m: 10, rpm1m: 1 })
+          },
+          { timeout: 4_000, interval: 100 },
+        )
+      } finally {
+        await hudFiber.dispose()
+      }
+    } finally {
+      await Promise.allSettled([authFiber.dispose(), agentsFiber.dispose(), webFiber.dispose()])
+    }
+  }, 30_000)
+
   it('discovers the optional projection service and falls back after it unloads', async (): Promise<void> => {
     const context = new Context()
     const id = SessionId('hud-cordis-projection')
