@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "verifiedAt": "2026-08-30",
   "registry": "https://registry.npmjs.org/",
   "packages": [
@@ -23,6 +23,15 @@
       "integrity": "sha512-mr5AmdR2ecf/cWVHEM5BYncXJNi/E/EMMOMTzVEvr7PMtk0ws9RW398FQhZZTOzNP4gExrBz/NXduxslsTwqqg==",
       "license": "MIT",
       "repository": "git+https://github.com/FuRongJun-1999/dsh-memory.git"
+    }
+  ],
+  "buildPackages": [
+    {
+      "name": "node-pty",
+      "version": "1.1.0",
+      "integrity": "sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==",
+      "license": "MIT",
+      "repository": "git://github.com/microsoft/node-pty.git"
     }
   ]
 }

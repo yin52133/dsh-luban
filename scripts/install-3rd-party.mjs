@@ -8,7 +8,9 @@ import { fileURLToPath, pathToFileURL, URL } from 'node:url'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const LOCK_PATH = resolve(SCRIPT_DIR, 'install-3rd-party.versions.json')
+const VERIFIER_PATH = resolve(SCRIPT_DIR, 'verify-3rd-party-install.mjs')
 const REGISTRY = 'https://registry.npmjs.org/'
+const PNPM_VERSION = '11.24.0'
 const EXPECTED_IDENTITIES = Object.freeze([
   Object.freeze({
     name: 'dshmarket',
@@ -23,12 +25,20 @@ const EXPECTED_IDENTITIES = Object.freeze([
     repository: 'git+https://github.com/FuRongJun-1999/dsh-memory.git',
   }),
 ])
-const LOCK_KEYS = ['packages', 'registry', 'schemaVersion', 'verifiedAt']
+const EXPECTED_BUILD_IDENTITIES = Object.freeze([
+  Object.freeze({
+    name: 'node-pty',
+    version: '1.1.0',
+    repository: 'git://github.com/microsoft/node-pty.git',
+  }),
+])
+const LOCK_KEYS = ['buildPackages', 'packages', 'registry', 'schemaVersion', 'verifiedAt']
 const PACKAGE_KEYS = ['integrity', 'license', 'name', 'repository', 'version']
 const PROFILE = /^[a-z0-9][a-z0-9-]*$/
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const INTEGRITY = /^sha512-([A-Za-z0-9+/]+={0,2})$/
 const MAX_REGISTRY_METADATA_BYTES = 1_000_000
+const MAX_COMMAND_OUTPUT_BYTES = 1_000_000
 
 function parseArgs(argv) {
   const options = { apply: false, version: 'pinned' }
@@ -85,7 +95,12 @@ function validIntegrity(value) {
 
 export async function loadVersionLock(path = LOCK_PATH) {
   const lock = JSON.parse(await readFile(path, 'utf8'))
-  if (!exactKeys(lock, LOCK_KEYS) || lock.schemaVersion !== 2 || !Array.isArray(lock.packages)) {
+  if (
+    !exactKeys(lock, LOCK_KEYS) ||
+    lock.schemaVersion !== 3 ||
+    !Array.isArray(lock.packages) ||
+    !Array.isArray(lock.buildPackages)
+  ) {
     throw new Error('Unsupported third-party version lock')
   }
   if (lock.registry !== REGISTRY) {
@@ -97,25 +112,38 @@ export async function loadVersionLock(path = LOCK_PATH) {
   if (lock.packages.length !== EXPECTED_IDENTITIES.length) {
     throw new Error(`Version lock must contain exactly ${EXPECTED_IDENTITIES.length} packages`)
   }
-  for (let index = 0; index < EXPECTED_IDENTITIES.length; index += 1) {
-    const record = lock.packages[index]
-    const expected = EXPECTED_IDENTITIES[index]
-    if (!exactKeys(record, PACKAGE_KEYS)) {
-      throw new Error(`Version lock package ${index + 1} has unsupported fields`)
-    }
-    if (record.name !== expected.name || record.repository !== expected.repository) {
-      throw new Error(`Version lock package identity mismatch at position ${index + 1}`)
-    }
-    if (!SEMVER.test(record.version)) {
-      throw new Error(`Invalid locked version for ${record.name}: ${String(record.version)}`)
-    }
-    if (!validIntegrity(record.integrity)) {
-      throw new Error(`Invalid locked integrity for ${record.name}`)
-    }
-    if (record.license !== 'MIT') {
-      throw new Error(`Locked license for ${record.name} must be MIT`)
+  if (lock.buildPackages.length !== EXPECTED_BUILD_IDENTITIES.length) {
+    throw new Error(
+      `Version lock must contain exactly ${EXPECTED_BUILD_IDENTITIES.length} build packages`,
+    )
+  }
+  const validateRecords = (records, expectedRecords, label) => {
+    for (let index = 0; index < expectedRecords.length; index += 1) {
+      const record = records[index]
+      const expected = expectedRecords[index]
+      if (!exactKeys(record, PACKAGE_KEYS)) {
+        throw new Error(`Version lock ${label} ${index + 1} has unsupported fields`)
+      }
+      if (
+        record.name !== expected.name ||
+        record.repository !== expected.repository ||
+        (expected.version !== undefined && record.version !== expected.version)
+      ) {
+        throw new Error(`Version lock ${label} identity mismatch at position ${index + 1}`)
+      }
+      if (!SEMVER.test(record.version)) {
+        throw new Error(`Invalid locked version for ${record.name}: ${String(record.version)}`)
+      }
+      if (!validIntegrity(record.integrity)) {
+        throw new Error(`Invalid locked integrity for ${record.name}`)
+      }
+      if (record.license !== 'MIT') {
+        throw new Error(`Locked license for ${record.name} must be MIT`)
+      }
     }
   }
+  validateRecords(lock.packages, EXPECTED_IDENTITIES, 'package')
+  validateRecords(lock.buildPackages, EXPECTED_BUILD_IDENTITIES, 'build package')
   return lock
 }
 
@@ -186,9 +214,7 @@ export async function verifyRegistryPackages(
     throw new Error('Version must be pinned, latest, or an explicit semantic version')
   }
   if (typeof fetcher !== 'function') throw new Error('A registry fetch implementation is required')
-  const verified = []
-  for (const record of lock.packages) {
-    const requestedVersion = versionMode === 'pinned' ? record.version : versionMode
+  const verifyRecord = async (record, requestedVersion, requireBundle, requireLockedIntegrity) => {
     const metadata = await fetchRegistryMetadata(fetcher, record, requestedVersion)
     if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) {
       throw new Error(`Registry metadata for ${record.name} must be an object`)
@@ -213,18 +239,37 @@ export async function verifyRegistryPackages(
     if (!validIntegrity(integrity)) {
       throw new Error(`Registry integrity is invalid for ${record.name}`)
     }
-    if (versionMode === 'pinned' && integrity !== record.integrity) {
+    if (requireLockedIntegrity && integrity !== record.integrity) {
       throw new Error(`Registry integrity mismatch for ${record.name}`)
     }
-    verified.push({
+    if (
+      requireBundle &&
+      (typeof metadata.dsh?.bundle?.patch !== 'string' || metadata.dsh.bundle.patch.trim() === '')
+    ) {
+      throw new Error(`Registry package ${record.name} does not declare dsh.bundle.patch`)
+    }
+    if (record.name === 'dsh-better-sidebar' && metadata.dependencies?.['node-pty'] !== '^1.1.0') {
+      throw new Error('dsh-better-sidebar no longer has the reviewed node-pty build boundary')
+    }
+    return {
       name: record.name,
       version: metadata.version,
       integrity,
       license: record.license,
       repository: record.repository,
-    })
+    }
   }
-  return verified
+
+  const verified = []
+  for (const record of lock.packages) {
+    const requestedVersion = versionMode === 'pinned' ? record.version : versionMode
+    verified.push(await verifyRecord(record, requestedVersion, true, versionMode === 'pinned'))
+  }
+  const verifiedBuilds = []
+  for (const record of lock.buildPackages) {
+    verifiedBuilds.push(await verifyRecord(record, record.version, false, true))
+  }
+  return { packages: verified, buildPackages: verifiedBuilds }
 }
 
 export function dshInvocation(args, targetPlatform, comSpec = process.env.ComSpec) {
@@ -236,6 +281,127 @@ export function dshInvocation(args, targetPlatform, comSpec = process.env.ComSpe
   }
   if (targetPlatform === 'ubuntu') return { command: 'dsh', args }
   throw new Error('Platform must be windows or ubuntu')
+}
+
+export function pnpmVersionInvocation(targetPlatform, comSpec = process.env.ComSpec) {
+  if (targetPlatform === 'windows') {
+    return {
+      command: comSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', 'pnpm.cmd', '--version'],
+    }
+  }
+  if (targetPlatform === 'ubuntu') return { command: 'pnpm', args: ['--version'] }
+  throw new Error('Platform must be windows or ubuntu')
+}
+
+function installArgs(profile, specs, buildPackages) {
+  return [
+    'plugin',
+    '--profile',
+    profile,
+    'add',
+    '--save-exact',
+    ...buildPackages.map((record) => `--allow-build=${record.name}@${record.version}`),
+    ...specs,
+  ]
+}
+
+function boundedOutput(value, label) {
+  const output = value === undefined || value === null ? '' : String(value)
+  if (Buffer.byteLength(output, 'utf8') > MAX_COMMAND_OUTPUT_BYTES) {
+    throw new Error(`${label} output exceeds the size limit`)
+  }
+  return output
+}
+
+function runChecked(runner, invocation, env, label) {
+  const result = runner(invocation.command, invocation.args, {
+    encoding: 'utf8',
+    env,
+    maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
+    shell: false,
+    stdio: 'pipe',
+    windowsHide: true,
+  })
+  if (result?.error?.code === 'ENOENT') {
+    throw new Error(`${label} executable was not found on PATH`)
+  }
+  if (result?.error !== undefined) throw new Error(`${label} failed to start`)
+  if (!Number.isInteger(result?.status) || result.status !== 0) {
+    throw new Error(`${label} failed with exit code ${String(result?.status ?? 'unknown')}`)
+  }
+  boundedOutput(result.stderr, label)
+  return boundedOutput(result.stdout, label)
+}
+
+function parseJsonOutput(output, label) {
+  try {
+    return JSON.parse(output)
+  } catch {
+    throw new Error(`${label} returned invalid JSON`)
+  }
+}
+
+function verifyListedPackages(output, expected) {
+  const listed = parseJsonOutput(output, 'dsh plugin list')
+  if (!Array.isArray(listed) || listed.length !== 1) {
+    throw new Error('dsh plugin list returned an unexpected project list')
+  }
+  const dependencies = listed[0]?.dependencies
+  if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) {
+    throw new Error('dsh plugin list did not return installed dependencies')
+  }
+  for (const record of expected) {
+    if (dependencies[record.name]?.version !== record.version) {
+      throw new Error(`dsh plugin list did not attest ${record.name}@${record.version}`)
+    }
+  }
+  return expected.map(({ name, version }) => Object.freeze({ name, version }))
+}
+
+function verifyDumpConfig(output, expected) {
+  for (const record of expected) {
+    if (!output.includes(record.name)) {
+      throw new Error(`dsh --dump-config did not compose ${record.name}`)
+    }
+  }
+}
+
+function verifyPostInstallReport(output, expected, buildExpected) {
+  const report = parseJsonOutput(output, 'third-party post-install verifier')
+  if (
+    report === null ||
+    typeof report !== 'object' ||
+    Array.isArray(report) ||
+    report.schemaVersion !== 1 ||
+    !Array.isArray(report.installed) ||
+    report.installed.length !== expected.length ||
+    report.build?.loaded !== true
+  ) {
+    throw new Error('Third-party post-install verifier returned an invalid report')
+  }
+  for (let index = 0; index < expected.length; index += 1) {
+    const actual = report.installed[index]
+    const wanted = expected[index]
+    if (
+      actual?.name !== wanted.name ||
+      actual?.version !== wanted.version ||
+      actual?.bundle !== true ||
+      actual?.license?.sha256?.length !== 64
+    ) {
+      throw new Error(`Third-party post-install verifier did not attest ${wanted.name}`)
+    }
+  }
+  const build = buildExpected[0]
+  if (
+    buildExpected.length !== 1 ||
+    report.build.name !== build?.name ||
+    report.build.version !== build?.version ||
+    report.build.license?.sha256?.length !== 64
+  ) {
+    throw new Error('Third-party post-install verifier did not attest the native build')
+  }
+  return report
 }
 
 export function canonicalDshHome(value) {
@@ -282,7 +448,7 @@ export async function installThirdParty(options = {}) {
   const lock = await loadVersionLock(options.lockPath ?? LOCK_PATH)
   const versionMode = options.version ?? 'pinned'
   const requestedSpecs = resolvePackageSpecs(lock, versionMode)
-  const requestedArgs = ['plugin', '--profile', profile, 'add', ...requestedSpecs]
+  const requestedArgs = installArgs(profile, requestedSpecs, lock.buildPackages)
   const dshHome = options.dshHome === undefined ? undefined : canonicalDshHome(options.dshHome)
   const approvedBy = approvalActor(options.approvedBy, options.apply === true)
   const dryRunPlan = {
@@ -290,10 +456,13 @@ export async function installThirdParty(options = {}) {
     profile,
     registry: lock.registry,
     packages: lock.packages,
+    buildPackages: lock.buildPackages,
+    pnpmVersion: PNPM_VERSION,
     specs: requestedSpecs,
     command: 'dsh',
     args: requestedArgs,
     invocation: dshInvocation(requestedArgs, options.platform, options.comSpec),
+    pnpmInvocation: pnpmVersionInvocation(options.platform, options.comSpec),
     dshHome,
     approvedBy,
     approveUnpinned: options.approveUnpinned === true,
@@ -311,32 +480,92 @@ export async function installThirdParty(options = {}) {
   if (versionMode !== 'pinned' && options.approveUnpinned !== true) {
     throw new Error('--approve-unpinned is required to apply latest or an explicit version')
   }
-  const packages = await verifyRegistryPackages(lock, versionMode, options.fetcher)
+  const verified = await verifyRegistryPackages(lock, versionMode, options.fetcher)
+  const packages = verified.packages
+  const buildPackages = verified.buildPackages
   const specs = packages.map((record) => `${record.name}@${record.version}`)
-  const args = ['plugin', '--profile', profile, 'add', ...specs]
+  const args = installArgs(profile, specs, buildPackages)
   const invocation = dshInvocation(args, options.platform, options.comSpec)
+  const pnpmInvocation = pnpmVersionInvocation(options.platform, options.comSpec)
   const plan = {
     ...dryRunPlan,
     packages,
+    buildPackages,
     specs,
     args,
     invocation,
+    pnpmInvocation,
     supplyChain: {
       mode: versionMode === 'pinned' ? 'pinned' : 'registry-resolved',
       verified: true,
     },
   }
   const runner = options.runner ?? spawnSync
-  const result = runner(invocation.command, invocation.args, {
-    stdio: 'inherit',
-    windowsHide: true,
-    shell: false,
-    env: { ...process.env, DSH_HOME: dshHome, npm_config_registry: lock.registry },
-  })
-  if (result.error?.code === 'ENOENT') throw new Error('dsh executable was not found on PATH')
-  if (result.status !== 0)
-    throw new Error(`dsh plugin add failed with exit code ${String(result.status)}`)
-  return { ...plan, dryRun: false }
+  const childEnvironment = {
+    ...process.env,
+    DSH_HOME: dshHome,
+    LUBAN_THIRD_PARTY_BUILD_EXPECTED: JSON.stringify(
+      buildPackages.map(({ name, version }) => ({ name, version })),
+    ),
+    LUBAN_THIRD_PARTY_EXPECTED: JSON.stringify(
+      packages.map(({ name, version }) => ({ name, version })),
+    ),
+    npm_config_registry: lock.registry,
+  }
+
+  const installedPnpmVersion = runChecked(
+    runner,
+    pnpmInvocation,
+    childEnvironment,
+    'pnpm version check',
+  ).trim()
+  if (installedPnpmVersion !== PNPM_VERSION) {
+    throw new Error(`pnpm ${PNPM_VERSION} is required for the reviewed install policy`)
+  }
+
+  runChecked(runner, invocation, childEnvironment, 'first dsh plugin add')
+  runChecked(runner, invocation, childEnvironment, 'second dsh plugin add')
+
+  const listInvocation = dshInvocation(
+    ['plugin', '--profile', profile, 'list', '--depth=0', '--json'],
+    options.platform,
+    options.comSpec,
+  )
+  const listed = verifyListedPackages(
+    runChecked(runner, listInvocation, childEnvironment, 'dsh plugin list'),
+    packages,
+  )
+
+  const dumpInvocation = dshInvocation(
+    ['--profile', profile, '--dump-config'],
+    options.platform,
+    options.comSpec,
+  )
+  const dumped = runChecked(runner, dumpInvocation, childEnvironment, 'dsh config composition')
+  verifyDumpConfig(dumped, packages)
+
+  const verifierInvocation = dshInvocation(
+    ['plugin', '--profile', profile, 'exec', 'node', VERIFIER_PATH],
+    options.platform,
+    options.comSpec,
+  )
+  const acceptance = verifyPostInstallReport(
+    runChecked(runner, verifierInvocation, childEnvironment, 'third-party post-install verifier'),
+    packages,
+    buildPackages,
+  )
+
+  return {
+    ...plan,
+    acceptance: {
+      attempts: 2,
+      configComposed: true,
+      listed,
+      pnpmVersion: installedPnpmVersion,
+      verifier: acceptance,
+    },
+    dryRun: false,
+  }
 }
 
 async function main() {

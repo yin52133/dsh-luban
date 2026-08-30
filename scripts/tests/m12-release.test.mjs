@@ -12,6 +12,7 @@ import {
   loadVersionLock,
   resolvePackageSpecs,
 } from '../install-3rd-party.mjs'
+import { verifyThirdPartyProfile } from '../verify-3rd-party-install.mjs'
 import { auditPackedFiles } from '../release/audit-packages.mjs'
 import { gitleaksInvocation } from '../release/security-scan.mjs'
 import {
@@ -71,6 +72,8 @@ function registryFetcher(packages, mutate) {
         license: record.license,
         repository: { type: 'git', url: record.repository },
         dist: { integrity: record.integrity },
+        ...(record.name === 'node-pty' ? {} : { dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+        ...(record.name === 'dsh-better-sidebar' ? { dependencies: { 'node-pty': '^1.1.0' } } : {}),
       }
       metadata = mutate === undefined ? metadata : mutate(cloneJson(metadata), index)
       index += 1
@@ -84,6 +87,82 @@ function registryFetcher(packages, mutate) {
       }
     },
   }
+}
+
+function allLockedPackages(lock) {
+  return [...lock.packages, ...lock.buildPackages]
+}
+
+function successfulInstallRunner(packages, buildPackages, mutate) {
+  const calls = []
+  const dependencies = Object.fromEntries(packages.map(({ name, version }) => [name, { version }]))
+  const license = { filename: 'LICENSE', sha256: 'a'.repeat(64) }
+  const report = {
+    schemaVersion: 1,
+    profile: 'acceptance-profile',
+    installed: packages.map(({ name, version }) => ({
+      name,
+      version,
+      bundle: true,
+      license,
+    })),
+    build: {
+      name: buildPackages[0].name,
+      version: buildPackages[0].version,
+      loaded: true,
+      license,
+    },
+  }
+  const outputs = [
+    { status: 0, stdout: '11.24.0\n', stderr: '' },
+    { status: 0, stdout: '', stderr: '' },
+    { status: 0, stdout: '', stderr: '' },
+    { status: 0, stdout: JSON.stringify([{ dependencies }]), stderr: '' },
+    { status: 0, stdout: packages.map(({ name }) => name).join('\n'), stderr: '' },
+    { status: 0, stdout: JSON.stringify(report), stderr: '' },
+  ]
+  return {
+    calls,
+    runner: (command, args, options) => {
+      const index = calls.length
+      calls.push({ command, args, options })
+      const output = outputs[index] ?? { status: 1, stdout: '', stderr: '' }
+      return mutate === undefined ? output : mutate({ ...output }, index)
+    },
+  }
+}
+
+async function thirdPartyProfileFixture() {
+  const lock = await loadVersionLock()
+  const root = await temporaryRoot()
+  const profileRoot = join(root, 'profile')
+  const manifests = new Map()
+  await mkdir(profileRoot, { recursive: true })
+  await json(join(profileRoot, 'package.json'), {
+    name: 'acceptance-profile',
+    dependencies: Object.fromEntries(lock.packages.map(({ name, version }) => [name, version])),
+    dsh: { profile: { bundles: lock.packages.map(({ name }) => name) } },
+  })
+  await writeFile(
+    join(profileRoot, 'pnpm-workspace.yaml'),
+    `allowBuilds:\n  node-pty@${lock.buildPackages[0].version}: true\n`,
+    'utf8',
+  )
+  for (const record of allLockedPackages(lock)) {
+    const packageRoot = join(root, 'installed', record.name.replaceAll('/', '__'))
+    const manifestPath = join(packageRoot, 'package.json')
+    await mkdir(packageRoot, { recursive: true })
+    await json(manifestPath, {
+      name: record.name,
+      version: record.version,
+      license: record.license,
+      ...(record.name === 'node-pty' ? {} : { dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+      ...(record.name === 'dsh-better-sidebar' ? { dependencies: { 'node-pty': '^1.1.0' } } : {}),
+    })
+    await writeFile(join(packageRoot, 'LICENSE'), `${record.name} MIT license\n`, 'utf8')
+    manifests.set(record.name, manifestPath)
+  }
+  return { lock, manifests, profileRoot }
 }
 
 function runNode(script, args, cwd) {
@@ -309,8 +388,20 @@ describe('M12 install and safety plans', () => {
       },
     })
     expect(plan).toMatchObject({ profile: 'win-debug', dryRun: true })
-    expect(plan.args).toEqual(['plugin', '--profile', 'win-debug', 'add', ...plan.specs])
+    expect(plan.args).toEqual([
+      'plugin',
+      '--profile',
+      'win-debug',
+      'add',
+      '--save-exact',
+      '--allow-build=node-pty@1.1.0',
+      ...plan.specs,
+    ])
     expect(plan.packages).toHaveLength(3)
+    expect(plan.buildPackages).toEqual([
+      expect.objectContaining({ name: 'node-pty', version: '1.1.0', license: 'MIT' }),
+    ])
+    expect(plan.pnpmVersion).toBe('11.24.0')
     expect(plan.packages[2]).toMatchObject({
       name: '@furongjun1999/dsh-memory',
       version: '0.4.0',
@@ -359,18 +450,15 @@ describe('M12 install and safety plans', () => {
     const targetPlatform = process.platform === 'win32' ? 'windows' : 'ubuntu'
     const parentDshHome = process.env.DSH_HOME
     const lock = await loadVersionLock()
-    const registry = registryFetcher(lock.packages)
-    const calls = []
+    const registry = registryFetcher(allLockedPackages(lock))
+    const execution = successfulInstallRunner(lock.packages, lock.buildPackages)
     const result = await installThirdParty({
       platform: targetPlatform,
       dshHome,
       approvedBy: ' release-maintainer ',
       apply: true,
       fetcher: registry.fetcher,
-      runner: (command, args, options) => {
-        calls.push({ command, args, options })
-        return { status: 0 }
-      },
+      runner: execution.runner,
     })
 
     expect(result).toMatchObject({
@@ -378,18 +466,30 @@ describe('M12 install and safety plans', () => {
       dshHome,
       approvedBy: 'release-maintainer',
     })
-    expect(calls).toHaveLength(1)
-    expect(calls[0].command).toBe(result.invocation.command)
-    expect(calls[0].args).toEqual(result.invocation.args)
-    expect(calls[0].options).toMatchObject({ shell: false, windowsHide: true })
-    expect(calls[0].options.env.DSH_HOME).toBe(dshHome)
-    expect(calls[0].options.env.npm_config_registry).toBe('https://registry.npmjs.org/')
+    expect(execution.calls).toHaveLength(6)
+    expect(execution.calls[1].command).toBe(result.invocation.command)
+    expect(execution.calls[1].args).toEqual(result.invocation.args)
+    expect(execution.calls[2].args).toEqual(result.invocation.args)
+    expect(execution.calls[1].options).toMatchObject({
+      encoding: 'utf8',
+      shell: false,
+      stdio: 'pipe',
+      windowsHide: true,
+    })
+    expect(execution.calls[1].options.env.DSH_HOME).toBe(dshHome)
+    expect(execution.calls[1].options.env.npm_config_registry).toBe('https://registry.npmjs.org/')
+    expect(execution.calls[1].options.env.LUBAN_THIRD_PARTY_EXPECTED).not.toContain('integrity')
     expect(process.env.DSH_HOME).toBe(parentDshHome)
-    expect(registry.requests).toHaveLength(3)
+    expect(registry.requests).toHaveLength(4)
     expect(
       registry.requests.every(({ url }) => url.startsWith('https://registry.npmjs.org/')),
     ).toBe(true)
     expect(result.supplyChain).toEqual({ mode: 'pinned', verified: true })
+    expect(result.acceptance).toMatchObject({
+      attempts: 2,
+      configComposed: true,
+      pnpmVersion: '11.24.0',
+    })
   })
 
   it('verifies every pinned registry identity field before spawn', async () => {
@@ -430,7 +530,7 @@ describe('M12 install and safety plans', () => {
     ]
 
     for (const testCase of cases) {
-      const registry = registryFetcher(lock.packages, (metadata, index) =>
+      const registry = registryFetcher(allLockedPackages(lock), (metadata, index) =>
         index === 0 ? testCase.mutate(metadata) : metadata,
       )
       let invoked = false
@@ -450,6 +550,59 @@ describe('M12 install and safety plans', () => {
       ).rejects.toThrow(testCase.error)
       expect(invoked, testCase.label).toBe(false)
       expect(registry.requests, testCase.label).toHaveLength(1)
+    }
+  })
+
+  it('fails closed when a bundle or native-build boundary changes in the registry', async () => {
+    const root = await temporaryRoot()
+    const dshHome = resolve(root, 'acceptance-home')
+    const targetPlatform = process.platform === 'win32' ? 'windows' : 'ubuntu'
+    const lock = await loadVersionLock()
+    const cases = [
+      {
+        label: 'bundle declaration',
+        index: 0,
+        mutate: (metadata) => ({ ...metadata, dsh: undefined }),
+        error: /dsh\.bundle\.patch/u,
+      },
+      {
+        label: 'native dependency',
+        index: 1,
+        mutate: (metadata) => ({ ...metadata, dependencies: { 'node-pty': '^2.0.0' } }),
+        error: /node-pty build boundary/u,
+      },
+      {
+        label: 'native integrity',
+        index: 3,
+        mutate: (metadata) => ({
+          ...metadata,
+          dist: { integrity: `sha512-${Buffer.alloc(64, 0x44).toString('base64')}` },
+        }),
+        error: /integrity mismatch/u,
+      },
+    ]
+
+    for (const testCase of cases) {
+      const registry = registryFetcher(allLockedPackages(lock), (metadata, index) =>
+        index === testCase.index ? testCase.mutate(metadata) : metadata,
+      )
+      let invoked = false
+      await expect(
+        installThirdParty({
+          platform: targetPlatform,
+          dshHome,
+          approvedBy: 'maintainer',
+          apply: true,
+          fetcher: registry.fetcher,
+          runner: () => {
+            invoked = true
+            return { status: 0 }
+          },
+        }),
+        testCase.label,
+      ).rejects.toThrow(testCase.error)
+      expect(invoked, testCase.label).toBe(false)
+      expect(registry.requests, testCase.label).toHaveLength(testCase.index + 1)
     }
   })
 
@@ -478,12 +631,20 @@ describe('M12 install and safety plans', () => {
     expect(fetchedWithoutApproval).toBe(false)
 
     const versions = ['1.37.0', '0.18.0', '0.4.1']
-    const registry = registryFetcher(lock.packages, (metadata, index) => ({
-      ...metadata,
+    const registry = registryFetcher(allLockedPackages(lock), (metadata, index) =>
+      index < lock.packages.length
+        ? {
+            ...metadata,
+            version: versions[index],
+            dist: { integrity: `sha512-${Buffer.alloc(64, index + 1).toString('base64')}` },
+          }
+        : metadata,
+    )
+    const resolvedPackages = lock.packages.map((record, index) => ({
+      ...record,
       version: versions[index],
-      dist: { integrity: `sha512-${Buffer.alloc(64, index + 1).toString('base64')}` },
     }))
-    const calls = []
+    const execution = successfulInstallRunner(resolvedPackages, lock.buildPackages)
     const result = await installThirdParty({
       platform: targetPlatform,
       version: 'latest',
@@ -492,10 +653,7 @@ describe('M12 install and safety plans', () => {
       approvedBy: 'maintainer',
       apply: true,
       fetcher: registry.fetcher,
-      runner: (command, args, options) => {
-        calls.push({ command, args, options })
-        return { status: 0 }
-      },
+      runner: execution.runner,
     })
 
     expect(result.specs).toEqual([
@@ -505,8 +663,124 @@ describe('M12 install and safety plans', () => {
     ])
     expect(result.specs).not.toContain(expect.stringContaining('@latest'))
     expect(result.supplyChain).toEqual({ mode: 'registry-resolved', verified: true })
-    expect(calls).toHaveLength(1)
-    expect(calls[0].args.join(' ')).not.toContain('@latest')
+    expect(execution.calls).toHaveLength(6)
+    expect(execution.calls[1].args.join(' ')).not.toContain('@latest')
+  })
+
+  it('requires the reviewed pnpm and every independent post-install attestation', async () => {
+    const root = await temporaryRoot()
+    const dshHome = resolve(root, 'acceptance-home')
+    const targetPlatform = process.platform === 'win32' ? 'windows' : 'ubuntu'
+    const lock = await loadVersionLock()
+    const cases = [
+      {
+        label: 'pnpm version',
+        mutate: (output, index) => (index === 0 ? { ...output, stdout: '11.23.0\n' } : output),
+        error: /pnpm 11\.24\.0 is required/u,
+        calls: 1,
+      },
+      {
+        label: 'repeat install',
+        mutate: (output, index) => (index === 2 ? { ...output, status: 1 } : output),
+        error: /second dsh plugin add failed/u,
+        calls: 3,
+      },
+      {
+        label: 'installed list',
+        mutate: (output, index) =>
+          index === 3
+            ? {
+                ...output,
+                stdout: JSON.stringify([{ dependencies: { dshmarket: { version: '9.9.9' } } }]),
+              }
+            : output,
+        error: /did not attest dshmarket/u,
+        calls: 4,
+      },
+      {
+        label: 'post-install verifier',
+        mutate: (output, index) => (index === 5 ? { ...output, stdout: '{not-json' } : output),
+        error: /invalid JSON/u,
+        calls: 6,
+      },
+    ]
+
+    for (const testCase of cases) {
+      const registry = registryFetcher(allLockedPackages(lock))
+      const execution = successfulInstallRunner(lock.packages, lock.buildPackages, testCase.mutate)
+      await expect(
+        installThirdParty({
+          platform: targetPlatform,
+          dshHome,
+          approvedBy: 'maintainer',
+          apply: true,
+          fetcher: registry.fetcher,
+          runner: execution.runner,
+        }),
+        testCase.label,
+      ).rejects.toThrow(testCase.error)
+      expect(execution.calls, testCase.label).toHaveLength(testCase.calls)
+    }
+  })
+
+  it('independently verifies the installed profile, native build, and licenses', async () => {
+    const fixture = await thirdPartyProfileFixture()
+    const expected = fixture.lock.packages.map(({ name, version }) => ({ name, version }))
+    const buildExpected = fixture.lock.buildPackages.map(({ name, version }) => ({ name, version }))
+    const dependencies = {
+      loadPackage: async (name) => (name === 'node-pty' ? { spawn: () => ({}) } : {}),
+      resolveManifest: async (name) => fixture.manifests.get(name),
+    }
+    const report = await verifyThirdPartyProfile(
+      { profileRoot: fixture.profileRoot, expected, buildExpected },
+      dependencies,
+    )
+
+    expect(report).toMatchObject({
+      schemaVersion: 1,
+      profile: 'acceptance-profile',
+      build: { name: 'node-pty', version: '1.1.0', loaded: true },
+    })
+    expect(report.installed).toHaveLength(3)
+    expect(report.installed.every(({ license }) => license.sha256.length === 64)).toBe(true)
+  })
+
+  it('rejects broad build approval, duplicate bundles, and missing license evidence', async () => {
+    const fixture = await thirdPartyProfileFixture()
+    const expected = fixture.lock.packages.map(({ name, version }) => ({ name, version }))
+    const buildExpected = fixture.lock.buildPackages.map(({ name, version }) => ({ name, version }))
+    const dependencies = {
+      loadPackage: async () => ({ spawn: () => ({}) }),
+      resolveManifest: async (name) => fixture.manifests.get(name),
+    }
+    const verify = () =>
+      verifyThirdPartyProfile(
+        { profileRoot: fixture.profileRoot, expected, buildExpected },
+        dependencies,
+      )
+
+    await writeFile(
+      join(fixture.profileRoot, 'pnpm-workspace.yaml'),
+      'allowBuilds:\n  node-pty@1.1.0: true\n  node-pty: true\n',
+      'utf8',
+    )
+    await expect(verify()).rejects.toThrow(/approve only the exact/u)
+
+    await writeFile(
+      join(fixture.profileRoot, 'pnpm-workspace.yaml'),
+      'allowBuilds:\n  node-pty@1.1.0: true\n',
+      'utf8',
+    )
+    const profile = JSON.parse(await readFile(join(fixture.profileRoot, 'package.json'), 'utf8'))
+    profile.dsh.profile.bundles.push('dshmarket')
+    await json(join(fixture.profileRoot, 'package.json'), profile)
+    await expect(verify()).rejects.toThrow(/exactly once/u)
+
+    profile.dsh.profile.bundles.pop()
+    await json(join(fixture.profileRoot, 'package.json'), profile)
+    const marketManifest = fixture.manifests.get('dshmarket')
+    await rm(join(resolve(marketManifest, '..'), 'LICENSE'))
+    await expect(verify()).rejects.toThrow(/no installed LICENSE/u)
   })
 
   it('fails before spawn on host mismatch, missing authority, or unsafe DSH_HOME', async () => {
