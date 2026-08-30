@@ -19,23 +19,33 @@ export function posixCommand(command: string, args: readonly string[]): string {
 }
 
 /** Quote one argv vector using the CommandLineToArgvW escaping convention. */
-export function windowsCommand(command: string, args: readonly string[]): string {
-  const quote = (value: string): string => {
-    if (value !== '' && !/[\s"]/u.test(value)) return value
-    let result = '"'
-    let backslashes = 0
-    for (const character of value) {
-      if (character === '\\') {
-        backslashes += 1
-      } else if (character === '"') {
-        result += `${'\\'.repeat(backslashes * 2 + 1)}"`
-        backslashes = 0
-      } else {
-        result += `${'\\'.repeat(backslashes)}${character}`
-        backslashes = 0
-      }
-    }
-    return `${result}${'\\'.repeat(backslashes * 2)}"`
+function windowsArgument(value: string): string {
+  if (value.includes('\0') || /[\r\n]/u.test(value)) {
+    throw new LubanError('E_INVALID_INPUT', 'Windows command argument contains a control character')
   }
-  return [command, ...args].map(quote).join(' ')
+  if (value !== '' && !/[\s"]/u.test(value)) return value
+  let result = '"'
+  let backslashes = 0
+  for (const character of value) {
+    if (character === '\\') {
+      backslashes += 1
+    } else if (character === '"') {
+      result += `${'\\'.repeat(backslashes * 2 + 1)}"`
+      backslashes = 0
+    } else {
+      result += `${'\\'.repeat(backslashes)}${character}`
+      backslashes = 0
+    }
+  }
+  return `${result}${'\\'.repeat(backslashes * 2)}"`
+}
+
+export function windowsArguments(args: readonly string[]): string {
+  return args.map(windowsArgument).join(' ')
+}
+
+export function windowsCommand(command: string, args: readonly string[]): string {
+  return [windowsArgument(command), windowsArguments(args)]
+    .filter((value) => value !== '')
+    .join(' ')
 }

@@ -1,5 +1,6 @@
 import type { Checkpoint, Clock, JsonCodec, ManagedSession, SessionSpec, TaskId } from '@luban/core'
 import { asHostId, asTaskId, AtomicJsonStore, LubanError, systemClock } from '@luban/core'
+import { managedSessionId } from './session-id.js'
 
 export interface KeepaliveRecord {
   readonly spec: SessionSpec
@@ -91,6 +92,49 @@ function decodeCheckpoint(value: unknown, name: string): Checkpoint {
   }
 }
 
+function consistencyIssue(
+  key: string,
+  spec: SessionSpec,
+  session: ManagedSession,
+  checkpoint?: Checkpoint,
+): string | null {
+  try {
+    if (managedSessionId(key) !== key) return 'session key is outside the managed namespace'
+  } catch {
+    return 'session key is outside the managed namespace'
+  }
+  if (spec.id !== key) return 'spec id does not match the session key'
+  if (session.id !== key) return 'session id does not match the session key'
+  if (spec.purpose !== session.purpose) return 'spec and session purposes do not match'
+  if (spec.ownerTaskId !== session.ownerTaskId) return 'spec and session owners do not match'
+  if (checkpoint !== undefined) {
+    if (spec.ownerTaskId === undefined) return 'checkpoint requires an owned session'
+    if (checkpoint.taskId !== spec.ownerTaskId) return 'checkpoint task does not own the session'
+  }
+  return null
+}
+
+function assertDecodedConsistency(
+  key: string,
+  spec: SessionSpec,
+  session: ManagedSession,
+  checkpoint?: Checkpoint,
+): void {
+  const issue = consistencyIssue(key, spec, session, checkpoint)
+  if (issue !== null) throw new TypeError(`ledger session ${key} is invalid: ${issue}`)
+}
+
+function assertWritableConsistency(
+  key: string,
+  spec: SessionSpec,
+  session: ManagedSession,
+  checkpoint?: Checkpoint,
+): void {
+  const issue = consistencyIssue(key, spec, session, checkpoint)
+  if (issue !== null)
+    throw new LubanError('E_INVALID_INPUT', `Managed session is invalid: ${issue}`)
+}
+
 export function emptyLedger(clock: Clock = systemClock): KeepaliveLedger {
   return { schemaVersion: 1, sessions: {}, updatedAt: clock.now() }
 }
@@ -105,14 +149,15 @@ export const keepaliveLedgerCodec: JsonCodec<KeepaliveLedger> = Object.freeze({
       const row = objectValue(raw, `ledger.sessions.${id}`)
       const spec = decodeSpec(row.spec, `ledger.sessions.${id}.spec`)
       const session = decodeSession(row.session, `ledger.sessions.${id}.session`)
-      if (id !== session.id)
-        throw new TypeError(`ledger session key ${id} does not match session id`)
+      const checkpoint =
+        row.checkpoint === undefined
+          ? undefined
+          : decodeCheckpoint(row.checkpoint, `ledger.sessions.${id}.checkpoint`)
+      assertDecodedConsistency(id, spec, session, checkpoint)
       sessions[id] = {
         spec,
         session,
-        ...(row.checkpoint === undefined
-          ? {}
-          : { checkpoint: decodeCheckpoint(row.checkpoint, `ledger.sessions.${id}.checkpoint`) }),
+        ...(checkpoint === undefined ? {} : { checkpoint }),
       }
     }
     return {
@@ -144,9 +189,11 @@ export class KeepaliveLedgerStore {
   }
 
   public async upsert(spec: SessionSpec, session: ManagedSession): Promise<KeepaliveRecord> {
+    assertWritableConsistency(session.id, spec, session)
     let saved: KeepaliveRecord | undefined
     await this.#store.update((current): KeepaliveLedger => {
       const prior = current.sessions[session.id]
+      assertWritableConsistency(session.id, spec, session, prior?.checkpoint)
       saved = {
         spec,
         session,
@@ -168,7 +215,7 @@ export class KeepaliveLedgerStore {
       if (record === undefined)
         throw new LubanError('E_NOT_FOUND', `Managed session ${id} was not found`)
       const owner: TaskId | undefined = record.spec.ownerTaskId
-      if (owner !== undefined && owner !== checkpoint.taskId) {
+      if (owner === undefined || owner !== checkpoint.taskId) {
         throw new LubanError('E_INVALID_INPUT', 'checkpoint task does not own this session')
       }
       return {

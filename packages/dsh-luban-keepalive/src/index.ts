@@ -50,11 +50,29 @@ export { emptyLedger, keepaliveLedgerCodec, KeepaliveLedgerStore } from './ledge
 export type { KeepaliveLedger, KeepaliveRecord } from './ledger.js'
 export { ManagedKeepaliveService } from './service.js'
 export type { ManagedKeepaliveOptions } from './service.js'
-export { managedSessionId, posixCommand, windowsCommand } from './session-id.js'
+export { managedSessionId, posixCommand, windowsArguments, windowsCommand } from './session-id.js'
 export { TmuxKeepaliveAdapter } from './tmux-adapter.js'
 export type { TmuxAdapterOptions } from './tmux-adapter.js'
 export { WindowsTaskKeepaliveAdapter } from './windows-adapter.js'
 export type { WindowsAdapterOptions } from './windows-adapter.js'
+export { WindowsHostTaskOperator } from './windows-host.js'
+export type { WindowsHostPlan, WindowsHostStatus, WindowsHostTaskOptions } from './windows-host.js'
+export {
+  childTaskDefinition,
+  hostTaskDefinition,
+  isManagedChildTaskXml,
+  matchesWindowsTaskXml,
+  renderWindowsTaskXml,
+  WINDOWS_HOST_TASK_NAME,
+  WINDOWS_SESSION_TASK_PREFIX,
+  windowsSessionTaskName,
+} from './windows-task.js'
+export type {
+  WindowsTaskDefinition,
+  WindowsTaskRepositoryOptions,
+  WindowsTaskState,
+  WindowsTaskTrigger,
+} from './windows-task.js'
 
 export interface AdapterFactoryOptions {
   readonly platform: NodeJS.Platform

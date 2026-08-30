@@ -152,6 +152,31 @@ describe('ManagedKeepaliveService', (): void => {
     await service.dispose()
   })
 
+  it('rejects spec drift and never adopts an untracked same-name session', async (): Promise<void> => {
+    const { adapter, service } = await fixture()
+    await service.ensureAlive({ id: 'bound', purpose: 'task', command: 'dsh', args: ['one'] })
+    await expect(
+      service.ensureAlive({ id: 'bound', purpose: 'task', command: 'dsh', args: ['two'] }),
+    ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    expect(adapter.creates).toBe(1)
+    await service.dispose()
+
+    const orphanFixture = await fixture()
+    orphanFixture.adapter.sessions.set('luban-orphan', {
+      id: 'luban-orphan',
+      host: asHostId('fake'),
+      kind: 'tmux',
+      purpose: 'task',
+      createdAt: 1,
+    })
+    await expect(
+      orphanFixture.service.ensureAlive({ id: 'orphan', purpose: 'task', command: 'dsh' }),
+    ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    expect(orphanFixture.adapter.creates).toBe(0)
+    expect(orphanFixture.adapter.sessions.has('luban-orphan')).toBe(true)
+    await orphanFixture.service.dispose()
+  })
+
   it('reports dead sessions to event and alert consumers within one patrol', async (): Promise<void> => {
     const { adapter, alerts, events, service } = await fixture()
     await service.ensureAlive({ id: 'job', purpose: 'build', command: 'node' })
@@ -194,6 +219,44 @@ describe('ManagedKeepaliveService', (): void => {
     await service.dispose()
   })
 
+  it('treats a semantically inconsistent ledger as wholly unreadable', async (): Promise<void> => {
+    const { adapter, ledgerPath, service } = await fixture()
+    adapter.sessions.set('luban-owned', {
+      id: 'luban-owned',
+      host: asHostId('fake'),
+      kind: 'tmux',
+      purpose: 'task',
+      createdAt: 1,
+    })
+    await writeFile(
+      ledgerPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: 1,
+        sessions: {
+          'luban-owned': {
+            spec: { id: 'luban-other', purpose: 'task', command: 'dsh' },
+            session: {
+              id: 'luban-owned',
+              host: 'fake',
+              kind: 'tmux',
+              purpose: 'task',
+              createdAt: 1,
+            },
+          },
+        },
+      }),
+      'utf8',
+    )
+
+    await expect(service.restore()).resolves.toMatchObject({
+      healthy: false,
+      sessions: [{ id: 'luban-owned', alive: false, detail: 'ledger unreadable; orphan retained' }],
+    })
+    expect(adapter.creates).toBe(0)
+    await service.dispose()
+  })
+
   it('validates checkpoint ownership and bounds', async (): Promise<void> => {
     const { service } = await fixture()
     await service.ensureAlive({
@@ -216,6 +279,16 @@ describe('ManagedKeepaliveService', (): void => {
         taskId: asTaskId('A'),
         stepList: ['one'],
         currentStep: 2,
+        artifacts: [],
+        savedAt: 1,
+      }),
+    ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    await service.ensureAlive({ id: 'unowned', purpose: 'task', command: 'dsh' })
+    await expect(
+      service.saveCheckpoint('unowned', {
+        taskId: asTaskId('A'),
+        stepList: ['one'],
+        currentStep: 1,
         artifacts: [],
         savedAt: 1,
       }),

@@ -2,21 +2,26 @@ import { hostname } from 'node:os'
 import type { Clock, KeepaliveAdapter, ManagedSession, SessionSpec } from '@luban/core'
 import { asHostId, LubanError, systemClock } from '@luban/core'
 import type { CommandRunner } from './command-runner.js'
-import { assertSuccess } from './command-runner.js'
-import { managedSessionId, windowsCommand } from './session-id.js'
-
-const TASK_FOLDER = '\\dsh-luban\\'
+import { managedSessionId, windowsArguments } from './session-id.js'
+import {
+  childTaskDefinition,
+  isManagedChildTaskXml,
+  matchesWindowsTaskXml,
+  WINDOWS_SESSION_TASK_PREFIX,
+  WindowsTaskRepository,
+  windowsSessionTaskName,
+  type WindowsTaskDefinition,
+} from './windows-task.js'
 
 export interface WindowsAdapterOptions {
   readonly runner: CommandRunner
   readonly timeoutMs: number
   readonly clock?: Clock
   readonly host?: string
+  readonly currentUser?: string
+  readonly currentUserSid?: string
+  readonly temporaryDirectory?: string
   readonly signal?: AbortSignal
-}
-
-function taskName(id: string): string {
-  return `${TASK_FOLDER}${managedSessionId(id)}`
 }
 
 function csvFirstField(line: string): string | null {
@@ -24,49 +29,52 @@ function csvFirstField(line: string): string | null {
   return match?.[1]?.replaceAll('""', '"') ?? null
 }
 
-/** Native Windows Scheduled Tasks HAL; it deliberately avoids an NSSM dependency. */
+/** Current-user, on-demand Scheduled Tasks HAL for runtime child sessions only. */
 export class WindowsTaskKeepaliveAdapter implements KeepaliveAdapter {
-  readonly #runner: CommandRunner
-  readonly #timeoutMs: number
+  readonly #tasks: WindowsTaskRepository
   readonly #clock: Clock
   readonly #host: string
-  readonly #signal: AbortSignal | undefined
 
   public constructor(options: WindowsAdapterOptions) {
-    this.#runner = options.runner
-    this.#timeoutMs = options.timeoutMs
+    this.#tasks = new WindowsTaskRepository(options)
     this.#clock = options.clock ?? systemClock
     this.#host = options.host ?? hostname()
-    this.#signal = options.signal
   }
 
   public async create(spec: SessionSpec): Promise<ManagedSession> {
     const id = managedSessionId(spec.id)
-    if (!(await this.#registered(id))) {
-      const create = await this.#runner.run(
-        'schtasks.exe',
-        [
-          '/Create',
-          '/TN',
-          taskName(id),
-          '/TR',
-          windowsCommand(spec.command, spec.args ?? []),
-          '/SC',
-          'ONSTART',
-          '/RL',
-          'LIMITED',
-          '/F',
-        ],
-        { timeoutMs: this.#timeoutMs, signal: this.#signal },
-      )
-      assertSuccess(create, `register scheduled task ${id}`)
+    const definition = childTaskDefinition({
+      id,
+      principalSid: await this.#tasks.principalSid(),
+      command: spec.command,
+      arguments: windowsArguments(spec.args ?? []),
+    })
+    const state = await this.#tasks.inspect(definition)
+    if (state === 'conflict') {
+      throw new LubanError('E_INVALID_INPUT', 'Windows child task conflicts with an unmanaged task')
     }
-    if (!(await this.isAlive(id))) {
-      const start = await this.#runner.run('schtasks.exe', ['/Run', '/TN', taskName(id)], {
-        timeoutMs: this.#timeoutMs,
-        signal: this.#signal,
-      })
-      assertSuccess(start, `start scheduled task ${id}`)
+
+    let created = false
+    if (state === 'missing') {
+      try {
+        created = (await this.#tasks.createOrReuse(definition)) === 'created'
+        if ((await this.#tasks.inspect(definition)) !== 'exact') {
+          throw new LubanError('E_IO', 'Windows child task failed post-registration verification')
+        }
+      } catch (error: unknown) {
+        if (created) await this.#rollbackCreated(definition, error)
+        throw error
+      }
+    }
+
+    if (!(await this.#tasks.isRunning(definition.name))) {
+      try {
+        await this.#tasks.runTask(definition.name)
+        await this.#tasks.waitUntilRunning(definition.name)
+      } catch (error: unknown) {
+        if (created) await this.#rollbackCreated(definition, error)
+        throw error
+      }
     }
     return {
       id,
@@ -88,62 +96,69 @@ export class WindowsTaskKeepaliveAdapter implements KeepaliveAdapter {
   }
 
   public async list(): Promise<readonly ManagedSession[]> {
-    const result = await this.#runner.run('schtasks.exe', ['/Query', '/FO', 'CSV', '/NH'], {
-      timeoutMs: this.#timeoutMs,
-      signal: this.#signal,
-    })
-    assertSuccess(result, 'list scheduled tasks')
-    return result.stdout.split(/\r?\n/u).flatMap((line): readonly ManagedSession[] => {
+    const csv = await this.#tasks.listCsv()
+    const prefix = WINDOWS_SESSION_TASK_PREFIX.toLocaleLowerCase('en-US')
+    const candidates = new Map<string, string>()
+    for (const line of csv.split(/\r?\n/u)) {
       const name = csvFirstField(line)
-      if (!name?.toLocaleLowerCase().startsWith(TASK_FOLDER)) return []
-      const id = name.slice(TASK_FOLDER.length).toLocaleLowerCase()
+      if (!name?.toLocaleLowerCase('en-US').startsWith(prefix)) continue
+      const id = name.slice(WINDOWS_SESSION_TASK_PREFIX.length).toLocaleLowerCase('en-US')
       try {
-        return [
-          {
-            id: managedSessionId(id),
-            host: asHostId(this.#host),
-            kind: 'service',
-            purpose: 'task',
-            createdAt: this.#clock.now(),
-          },
-        ]
+        candidates.set(name.toLocaleLowerCase('en-US'), managedSessionId(id))
       } catch {
-        return []
+        // A namespace lookalike is not owned by this adapter.
       }
-    })
+    }
+    const principalSid = await this.#tasks.principalSid()
+    const inspected = await Promise.all(
+      [...candidates.entries()].map(async ([name, id]): Promise<ManagedSession | null> => {
+        const query = await this.#tasks.query(name)
+        if (query.state !== 'present' || !isManagedChildTaskXml(query.xml ?? '', principalSid)) {
+          return null
+        }
+        return {
+          id,
+          host: asHostId(this.#host),
+          kind: 'service',
+          purpose: 'task',
+          createdAt: this.#clock.now(),
+        }
+      }),
+    )
+    return inspected.filter((session): session is ManagedSession => session !== null)
   }
 
   public async isAlive(id: string): Promise<boolean> {
-    const result = await this.#runner.run(
-      'schtasks.exe',
-      ['/Query', '/TN', taskName(id), '/FO', 'LIST', '/V'],
-      { timeoutMs: this.#timeoutMs, signal: this.#signal },
-    )
-    if (result.exitCode !== 0) return false
-    return /(?:^|:\s*)(?:running|正在运行|en cours|wird ausgef.hr|en ejecuci.n)(?:\s*$)/imu.test(
-      result.stdout,
-    )
+    const name = windowsSessionTaskName(managedSessionId(id))
+    const query = await this.#tasks.query(name)
+    if (query.state === 'missing') return false
+    if (!isManagedChildTaskXml(query.xml ?? '', await this.#tasks.principalSid())) return false
+    return await this.#tasks.isRunning(name)
   }
 
   public async destroy(id: string): Promise<void> {
-    await this.#runner.run('schtasks.exe', ['/End', '/TN', taskName(id)], {
-      timeoutMs: this.#timeoutMs,
-      signal: this.#signal,
-    })
-    const result = await this.#runner.run('schtasks.exe', ['/Delete', '/TN', taskName(id), '/F'], {
-      timeoutMs: this.#timeoutMs,
-      signal: this.#signal,
-    })
-    if (result.exitCode !== 0 && !/cannot find|找不到/u.test(result.stderr)) {
-      assertSuccess(result, `delete scheduled task ${managedSessionId(id)}`)
+    const name = windowsSessionTaskName(managedSessionId(id))
+    const query = await this.#tasks.query(name)
+    if (query.state === 'missing') return
+    if (!isManagedChildTaskXml(query.xml ?? '', await this.#tasks.principalSid())) {
+      throw new LubanError('E_INVALID_INPUT', 'Refusing to delete an unmanaged Windows task')
     }
+    const principalSid = await this.#tasks.principalSid()
+    await this.#tasks.endAndDelete(name, (xml): boolean => isManagedChildTaskXml(xml, principalSid))
   }
 
-  async #registered(id: string): Promise<boolean> {
-    const result = await this.#runner.run('schtasks.exe', ['/Query', '/TN', taskName(id)], {
-      timeoutMs: this.#timeoutMs,
-      signal: this.#signal,
-    })
-    return result.exitCode === 0
+  async #rollbackCreated(definition: WindowsTaskDefinition, original: unknown): Promise<never> {
+    try {
+      if ((await this.#tasks.inspect(definition)) === 'exact') {
+        await this.#tasks.endAndDelete(definition.name, (xml): boolean =>
+          matchesWindowsTaskXml(xml, definition),
+        )
+      }
+    } catch (rollbackError: unknown) {
+      throw new LubanError('E_IO', 'Unable to safely roll back the Windows child task', {
+        cause: rollbackError,
+      })
+    }
+    throw original
   }
 }

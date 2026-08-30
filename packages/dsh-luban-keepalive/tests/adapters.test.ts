@@ -1,8 +1,22 @@
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { CommandOptions, CommandResult, CommandRunner } from '../src/command-runner.js'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { managedSessionId, posixCommand, windowsCommand } from '../src/session-id.js'
 import { TmuxKeepaliveAdapter } from '../src/tmux-adapter.js'
 import { WindowsTaskKeepaliveAdapter } from '../src/windows-adapter.js'
+import {
+  childTaskDefinition,
+  hostTaskDefinition,
+  renderWindowsTaskXml,
+  WINDOWS_HOST_TASK_NAME,
+  windowsSessionTaskName,
+} from '../src/windows-task.js'
+import { FakeScheduledTaskRunner } from './windows-task-fixture.js'
+
+const directories = new Set<string>()
 
 interface Call {
   readonly command: string
@@ -35,6 +49,21 @@ class FakeRunner implements CommandRunner {
   }
 }
 
+function temporaryDirectory(): string {
+  const directory = join(tmpdir(), `luban-windows-task-${randomUUID()}`)
+  directories.add(directory)
+  return directory
+}
+
+afterEach(async (): Promise<void> => {
+  await Promise.all(
+    [...directories].map(async (directory): Promise<void> => {
+      await rm(directory, { recursive: true, force: true })
+      directories.delete(directory)
+    }),
+  )
+})
+
 describe('session command encoding', (): void => {
   it('uses one collision-resistant namespace and shell-safe command encoders', (): void => {
     expect(managedSessionId('task-17')).toBe('luban-task-17')
@@ -45,6 +74,7 @@ describe('session command encoding', (): void => {
     expect(windowsCommand('C:\\Program Files\\dsh.exe', ['--patch', 'a "b"'])).toBe(
       '"C:\\Program Files\\dsh.exe" --patch "a \\"b\\""',
     )
+    expect(() => windowsCommand('dsh', ['line-one\nline-two'])).toThrow(/control character/u)
   })
 })
 
@@ -108,14 +138,16 @@ describe('TmuxKeepaliveAdapter', (): void => {
 })
 
 describe('WindowsTaskKeepaliveAdapter', (): void => {
-  it('registers and starts a native ONSTART task without invoking a shell', async (): Promise<void> => {
-    const runner = new FakeRunner([
-      { exitCode: 1 },
-      { exitCode: 0 },
-      { exitCode: 0, stdout: 'Status: Ready' },
-      { exitCode: 0 },
-    ])
-    const adapter = new WindowsTaskKeepaliveAdapter({ runner, timeoutMs: 5_000, host: 'win01' })
+  it('registers one idempotent, triggerless S4U child task and starts it on demand', async (): Promise<void> => {
+    const runner = new FakeScheduledTaskRunner()
+    const adapter = new WindowsTaskKeepaliveAdapter({
+      runner,
+      timeoutMs: 5_000,
+      host: 'win01',
+      currentUser: 'builder',
+      currentUserSid: 'S-1-5-21-1000',
+      temporaryDirectory: temporaryDirectory(),
+    })
     const session = await adapter.create({
       id: 'main',
       purpose: 'dsh-main',
@@ -124,45 +156,188 @@ describe('WindowsTaskKeepaliveAdapter', (): void => {
     })
 
     expect(session).toMatchObject({ id: 'luban-main', kind: 'service' })
-    const create = runner.calls[1]
-    expect(create?.command).toBe('schtasks.exe')
-    expect(create?.args).toContain('/SC')
-    expect(create?.args).toContain('ONSTART')
-    expect(create?.args[create.args.indexOf('/TR') + 1]).toBe(
-      '"C:\\Program Files\\dsh.exe" web --patch "C:\\profile path\\cordis.yml"',
-    )
-    expect(runner.calls[3]?.args).toEqual(['/Run', '/TN', '\\dsh-luban\\luban-main'])
+    const name = windowsSessionTaskName('luban-main')
+    const xml = runner.tasks.get(name)
+    expect(xml).toContain('<LogonType>S4U</LogonType>')
+    expect(xml).toContain('<RunLevel>LeastPrivilege</RunLevel>')
+    expect(xml).toContain('<Command>C:\\Program Files\\dsh.exe</Command>')
+    expect(xml).toContain('web --patch &quot;C:\\profile path\\cordis.yml&quot;')
+    expect(xml).not.toContain('<BootTrigger>')
+    expect(xml).not.toContain('<Triggers>')
+    expect(runner.running.has(name)).toBe(true)
+    expect(
+      runner.calls.every(
+        (call): boolean =>
+          !call.args.some((arg) => ['/RP', '/RU', '/NP', '/SC', 'ONSTART'].includes(arg)),
+      ),
+    ).toBe(true)
+    expect(
+      runner.calls.every(
+        (call): boolean => !call.args.some((arg) => arg.startsWith('\\dsh-luban\\')),
+      ),
+    ).toBe(true)
+
+    await adapter.create({
+      id: 'main',
+      purpose: 'dsh-main',
+      command: 'C:\\Program Files\\dsh.exe',
+      args: ['web', '--patch', 'C:\\profile path\\cordis.yml'],
+    })
+    expect(runner.calls.filter((call) => call.args[0] === '/Create')).toHaveLength(1)
+    expect(runner.calls.filter((call) => call.args[0] === '/Run')).toHaveLength(1)
   })
 
-  it('recognizes running state and rejects interactive attach', async (): Promise<void> => {
-    const runner = new FakeRunner([{ stdout: '状态: 正在运行' }])
-    const adapter = new WindowsTaskKeepaliveAdapter({ runner, timeoutMs: 1_000 })
+  it('resolves and pins the current user SID without a password-bearing schtasks call', async (): Promise<void> => {
+    const runner = new FakeScheduledTaskRunner()
+    const adapter = new WindowsTaskKeepaliveAdapter({
+      runner,
+      timeoutMs: 1_000,
+      currentUser: 'builder',
+      temporaryDirectory: temporaryDirectory(),
+    })
+
+    await adapter.create({ id: 'sid', purpose: 'task', command: 'dsh', args: ['resume'] })
+
+    expect(runner.calls[0]).toMatchObject({
+      command: 'whoami.exe',
+      args: ['/user', '/fo', 'csv', '/nh'],
+    })
+    expect(runner.createdXml[0]).toContain('<UserId>S-1-5-21-1000</UserId>')
+    expect(
+      runner.calls
+        .filter((call) => call.command === 'schtasks.exe')
+        .every((call) => !call.args.includes('/RP') && !call.args.includes('/RU')),
+    ).toBe(true)
+  })
+
+  it('recognizes only a running managed child and rejects interactive attach', async (): Promise<void> => {
+    const runner = new FakeScheduledTaskRunner()
+    const definition = childTaskDefinition({
+      id: 'luban-main',
+      principalSid: 'S-1-5-21-1000',
+      command: 'dsh',
+      arguments: 'resume',
+    })
+    runner.tasks.set(definition.name, renderWindowsTaskXml(definition))
+    runner.running.add(definition.name)
+    const adapter = new WindowsTaskKeepaliveAdapter({
+      runner,
+      timeoutMs: 1_000,
+      currentUser: 'builder',
+      currentUserSid: 'S-1-5-21-1000',
+    })
+    await expect(adapter.isAlive('luban-main')).resolves.toBe(true)
     await expect(adapter.isAlive('luban-main')).resolves.toBe(true)
     await expect(adapter.attach('luban-main')).rejects.toMatchObject({
       code: 'E_PLATFORM_UNSUPPORTED',
     })
+
+    runner.tasks.set(definition.name, '<Task><BootTrigger /></Task>')
+    await expect(adapter.isAlive('luban-main')).resolves.toBe(false)
   })
 
-  it('lists, stops, and deletes only scheduled tasks in the managed folder', async (): Promise<void> => {
-    const runner = new FakeRunner([
-      {
-        stdout:
-          '"\\dsh-luban\\luban-main","N/A","Ready"\r\n"\\Microsoft\\foreign","N/A","Ready"\r\n',
-      },
-      { exitCode: 1 },
-      { exitCode: 0 },
-    ])
-    const adapter = new WindowsTaskKeepaliveAdapter({ runner, timeoutMs: 1_000, host: 'win01' })
+  it('lists and destroys only structurally owned child tasks, never lookalikes or the host', async (): Promise<void> => {
+    const runner = new FakeScheduledTaskRunner()
+    const child = childTaskDefinition({
+      id: 'luban-main',
+      principalSid: 'S-1-5-21-1000',
+      command: 'dsh',
+      arguments: 'resume',
+    })
+    runner.tasks.set(child.name, renderWindowsTaskXml(child))
+    runner.tasks.set(
+      WINDOWS_HOST_TASK_NAME,
+      renderWindowsTaskXml(hostTaskDefinition('S-1-5-21-1000')),
+    )
+    runner.tasks.set('\\foreign', '<Task />')
+    runner.tasks.set(windowsSessionTaskName('luban-spoof'), '<Task />')
+    const adapter = new WindowsTaskKeepaliveAdapter({
+      runner,
+      timeoutMs: 1_000,
+      host: 'win01',
+      currentUser: 'builder',
+      currentUserSid: 'S-1-5-21-1000',
+    })
 
     await expect(adapter.list()).resolves.toEqual([
       expect.objectContaining({ id: 'luban-main', kind: 'service' }),
     ])
+    await expect(adapter.list()).resolves.toEqual([
+      expect.objectContaining({ id: 'luban-main', kind: 'service' }),
+    ])
+    await adapter.destroy('luban-main')
     await adapter.destroy('luban-main')
 
-    expect(runner.calls.map(({ args }) => args)).toEqual([
-      ['/Query', '/FO', 'CSV', '/NH'],
-      ['/End', '/TN', '\\dsh-luban\\luban-main'],
-      ['/Delete', '/TN', '\\dsh-luban\\luban-main', '/F'],
+    expect(runner.tasks.has(child.name)).toBe(false)
+    expect(runner.tasks.has(WINDOWS_HOST_TASK_NAME)).toBe(true)
+    expect(runner.calls.filter((call) => call.args[0] === '/Delete')).toHaveLength(1)
+  })
+
+  it('rejects conflicting tasks and rolls back registration or start failures', async (): Promise<void> => {
+    const conflictRunner = new FakeScheduledTaskRunner()
+    const conflictName = windowsSessionTaskName('luban-conflict')
+    conflictRunner.tasks.set(conflictName, '<Task><BootTrigger /></Task>')
+    const conflict = new WindowsTaskKeepaliveAdapter({
+      runner: conflictRunner,
+      timeoutMs: 1_000,
+      currentUser: 'builder',
+      currentUserSid: 'S-1-5-21-1000',
+      temporaryDirectory: temporaryDirectory(),
+    })
+    await expect(
+      conflict.create({ id: 'conflict', purpose: 'task', command: 'dsh', args: [] }),
+    ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    await expect(conflict.destroy('luban-conflict')).rejects.toMatchObject({
+      code: 'E_INVALID_INPUT',
+    })
+    expect(conflictRunner.tasks.has(conflictName)).toBe(true)
+
+    const concurrentRunner = new FakeScheduledTaskRunner()
+    concurrentRunner.failNextCreateAfterStore = true
+    const concurrent = new WindowsTaskKeepaliveAdapter({
+      runner: concurrentRunner,
+      timeoutMs: 1_000,
+      currentUser: 'builder',
+      currentUserSid: 'S-1-5-21-1000',
+      temporaryDirectory: temporaryDirectory(),
+    })
+    await expect(
+      concurrent.create({ id: 'create', purpose: 'task', command: 'dsh', args: ['resume'] }),
+    ).resolves.toMatchObject({ id: 'luban-create' })
+    expect(concurrentRunner.tasks.has(windowsSessionTaskName('luban-create'))).toBe(true)
+    expect(concurrentRunner.calls.some((call) => call.args[0] === '/Delete')).toBe(false)
+
+    for (const failure of ['run'] as const) {
+      const runner = new FakeScheduledTaskRunner()
+      runner.failNextRun = true
+      const adapter = new WindowsTaskKeepaliveAdapter({
+        runner,
+        timeoutMs: 1_000,
+        currentUser: 'builder',
+        currentUserSid: 'S-1-5-21-1000',
+        temporaryDirectory: temporaryDirectory(),
+      })
+      await expect(
+        adapter.create({ id: failure, purpose: 'task', command: 'dsh', args: ['resume'] }),
+      ).rejects.toMatchObject({ code: 'E_UNAVAILABLE' })
+      expect(runner.tasks.has(windowsSessionTaskName(`luban-${failure}`))).toBe(false)
+    }
+  })
+
+  it('fails closed on a query error instead of treating it as a missing task', async (): Promise<void> => {
+    const runner = new FakeRunner([
+      { exitCode: 1, stderr: 'ERROR: Access is denied.' },
+      { exitCode: 1, stderr: 'ERROR: Access is denied.' },
     ])
+    const adapter = new WindowsTaskKeepaliveAdapter({
+      runner,
+      timeoutMs: 1_000,
+      currentUser: 'builder',
+      currentUserSid: 'S-1-5-21-1000',
+    })
+    await expect(
+      adapter.create({ id: 'denied', purpose: 'task', command: 'dsh', args: [] }),
+    ).rejects.toMatchObject({ code: 'E_UNAVAILABLE' })
+    expect(runner.calls).toHaveLength(2)
   })
 })

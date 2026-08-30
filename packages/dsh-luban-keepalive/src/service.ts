@@ -24,6 +24,29 @@ export interface ManagedKeepaliveOptions {
   readonly publish?: (event: KeepaliveEvent) => void
 }
 
+function normalizeSessionSpec(spec: SessionSpec): SessionSpec {
+  return {
+    id: managedSessionId(spec.id),
+    purpose: spec.purpose,
+    command: spec.command,
+    args: [...(spec.args ?? [])],
+    ...(spec.ownerTaskId === undefined ? {} : { ownerTaskId: spec.ownerTaskId }),
+  }
+}
+
+function sameSessionSpec(left: SessionSpec, right: SessionSpec): boolean {
+  const leftArgs = left.args ?? []
+  const rightArgs = right.args ?? []
+  return (
+    left.id === right.id &&
+    left.purpose === right.purpose &&
+    left.command === right.command &&
+    left.ownerTaskId === right.ownerTaskId &&
+    leftArgs.length === rightArgs.length &&
+    leftArgs.every((argument, index): boolean => argument === rightArgs[index])
+  )
+}
+
 /** Durable L2 keepalive service with idempotent recovery and non-destructive corruption handling. */
 export class ManagedKeepaliveService implements KeepaliveService {
   readonly #adapter: KeepaliveAdapter
@@ -53,11 +76,27 @@ export class ManagedKeepaliveService implements KeepaliveService {
 
   public async ensureAlive(spec: SessionSpec): Promise<ManagedSession> {
     return this.#serialize(async (): Promise<ManagedSession> => {
-      const normalized = { ...spec, id: managedSessionId(spec.id) }
+      const normalized = normalizeSessionSpec(spec)
       const ledger = await this.#ledger.read()
       const existing = ledger.sessions[normalized.id]
-      if (existing !== undefined && (await this.#adapter.isAlive(normalized.id))) {
-        return existing.session
+      if (existing !== undefined) {
+        if (!sameSessionSpec(existing.spec, normalized)) {
+          throw new LubanError(
+            'E_INVALID_INPUT',
+            'Managed session id is already bound to a different specification',
+          )
+        }
+        if (await this.#adapter.isAlive(normalized.id)) return existing.session
+      } else {
+        const orphan = (await this.#adapter.list()).some(
+          (session): boolean => session.id === normalized.id,
+        )
+        if (orphan) {
+          throw new LubanError(
+            'E_INVALID_INPUT',
+            'Refusing to adopt an untracked managed session with the same id',
+          )
+        }
       }
       const session = await this.#adapter.create(normalized)
       await this.#ledger.upsert(normalized, session)
