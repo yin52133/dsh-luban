@@ -49,6 +49,10 @@ function sameSessionSpec(left: SessionSpec, right: SessionSpec): boolean {
   )
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /** Durable L2 keepalive service with idempotent recovery and non-destructive corruption handling. */
 export class ManagedKeepaliveService implements KeepaliveService {
   readonly #adapter: KeepaliveAdapter
@@ -101,7 +105,30 @@ export class ManagedKeepaliveService implements KeepaliveService {
         }
       }
       const session = await this.#adapter.create(normalized)
-      await this.#ledger.upsert(normalized, session)
+      try {
+        await this.#ledger.upsert(normalized, session)
+      } catch (persistenceError: unknown) {
+        try {
+          await this.#adapter.destroy(normalized)
+        } catch (rollbackError: unknown) {
+          throw new LubanError(
+            'E_IO',
+            `Managed session ${normalized.id} could not be persisted or rolled back`,
+            {
+              retriable: true,
+              cause: new AggregateError(
+                [persistenceError, rollbackError],
+                `Managed session ${normalized.id} persistence rollback failed`,
+              ),
+              details: {
+                persistenceError: errorMessage(persistenceError),
+                rollbackError: errorMessage(rollbackError),
+              },
+            },
+          )
+        }
+        throw persistenceError
+      }
       this.#emit({ type: 'started', session })
       return session
     })

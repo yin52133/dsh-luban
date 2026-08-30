@@ -12,7 +12,7 @@ import type {
   SessionSpec,
 } from 'dsh-luban-core'
 import { asAccountId, asHostId, asTaskId } from 'dsh-luban-core'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { KeepaliveAlertSink } from '../src/alerts.js'
 import { KeepaliveLedgerStore } from '../src/ledger.js'
 import { ManagedKeepaliveService } from '../src/service.js'
@@ -33,6 +33,7 @@ class FakeAdapter implements KeepaliveAdapter {
   public destroys = 0
   public readonly destroyedSpecs: SessionSpec[] = []
   public isAliveHook: ((id: string) => Promise<boolean>) | undefined
+  public destroyHook: ((spec: SessionSpec) => Promise<void>) | undefined
 
   public create(spec: SessionSpec): Promise<ManagedSession> {
     this.creates += 1
@@ -66,6 +67,7 @@ class FakeAdapter implements KeepaliveAdapter {
   public destroy(spec: SessionSpec): Promise<void> {
     this.destroys += 1
     this.destroyedSpecs.push({ ...spec, args: [...(spec.args ?? [])] })
+    if (this.destroyHook !== undefined) return this.destroyHook(spec)
     this.sessions.delete(spec.id)
     return Promise.resolve()
   }
@@ -86,6 +88,7 @@ async function fixture(patrolIntervalMs = 60_000): Promise<{
   readonly adapter: FakeAdapter
   readonly alerts: CapturingAlerts
   readonly events: KeepaliveEvent[]
+  readonly ledger: KeepaliveLedgerStore
   readonly service: ManagedKeepaliveService
 }> {
   const directory = join(tmpdir(), `luban-keepalive-${randomUUID()}`)
@@ -95,9 +98,10 @@ async function fixture(patrolIntervalMs = 60_000): Promise<{
   const adapter = new FakeAdapter()
   const alerts = new CapturingAlerts()
   const events: KeepaliveEvent[] = []
+  const ledger = new KeepaliveLedgerStore(ledgerPath, new StaticClock())
   const service = new ManagedKeepaliveService({
     adapter,
-    ledger: new KeepaliveLedgerStore(ledgerPath, new StaticClock()),
+    ledger,
     patrolIntervalMs,
     clock: new StaticClock(),
     alerts,
@@ -105,7 +109,7 @@ async function fixture(patrolIntervalMs = 60_000): Promise<{
       events.push(event)
     },
   })
-  return { directory, ledgerPath, adapter, alerts, events, service }
+  return { directory, ledgerPath, adapter, alerts, events, ledger, service }
 }
 
 afterEach(async (): Promise<void> => {
@@ -118,6 +122,46 @@ afterEach(async (): Promise<void> => {
 })
 
 describe('ManagedKeepaliveService', (): void => {
+  it('destroys only the newly created runtime when its first ledger write fails', async (): Promise<void> => {
+    const { adapter, ledger, service } = await fixture()
+    const persistenceError = new Error('ledger disk is unavailable')
+    vi.spyOn(ledger, 'upsert').mockRejectedValueOnce(persistenceError)
+    const spec: SessionSpec = {
+      accountId: ALICE,
+      id: 'rollback',
+      purpose: 'task',
+      command: 'dsh',
+      args: ['resume'],
+      ownerTaskId: asTaskId('TASK-ROLLBACK'),
+    }
+
+    await expect(service.ensureAlive(spec)).rejects.toBe(persistenceError)
+    expect(adapter.creates).toBe(1)
+    expect(adapter.destroyedSpecs).toEqual([{ ...spec, id: 'luban-rollback', args: ['resume'] }])
+    expect(adapter.sessions.has('luban-rollback')).toBe(false)
+    await service.dispose()
+  })
+
+  it('reports both persistence and rollback failures without hiding either cause', async (): Promise<void> => {
+    const { adapter, ledger, service } = await fixture()
+    vi.spyOn(ledger, 'upsert').mockRejectedValueOnce(new Error('ledger write failed'))
+    adapter.destroyHook = (): Promise<void> => Promise.reject(new Error('runtime destroy failed'))
+
+    await expect(
+      service.ensureAlive({ id: 'stuck', purpose: 'task', command: 'dsh' }),
+    ).rejects.toMatchObject({
+      code: 'E_IO',
+      message: 'Managed session luban-stuck could not be persisted or rolled back',
+      retriable: true,
+      details: {
+        persistenceError: 'ledger write failed',
+        rollbackError: 'runtime destroy failed',
+      },
+    })
+    expect(adapter.sessions.has('luban-stuck')).toBe(true)
+    await service.dispose()
+  })
+
   it('creates once, persists a checkpoint, and restores from that milestone', async (): Promise<void> => {
     const { adapter, events, service } = await fixture()
     const spec: SessionSpec = {
