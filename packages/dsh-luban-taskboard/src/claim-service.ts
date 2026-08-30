@@ -87,8 +87,14 @@ export class DefaultAgentClaimService implements AgentClaimService {
     if (session.executionOwner !== 'night-scheduler') {
       throw new LubanError('E_INVALID_INPUT', 'Night claims require the trusted scheduler owner')
     }
+    if (filter.accountId === undefined || session.actor.accountId !== filter.accountId) {
+      throw new LubanError(
+        'E_ACCOUNT_SCOPE_MISMATCH',
+        'Night claim account must match its scheduler actor',
+      )
+    }
     return this.#store.atomicNightClaim({
-      ...(filter.accountId === undefined ? {} : { accountId: filter.accountId }),
+      accountId: filter.accountId,
       actor: session.actor,
       sessionId: session.sessionId,
       host: this.#hostScope,

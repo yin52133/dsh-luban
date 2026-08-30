@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import { TaskboardHttpApi } from '../src/http-api.js'
 import { createLedgerStore } from '../src/ledger.js'
-import { DefaultNightScheduler } from '../src/night-scheduler.js'
+import { DefaultNightScheduler, type NightTaskExecutor } from '../src/night-scheduler.js'
 import { JsonTaskStore } from '../src/task-store.js'
 
 const directories = new Set<string>()
@@ -116,6 +116,114 @@ afterEach(async (): Promise<void> => {
 })
 
 describe('TaskboardHttpApi', (): void => {
+  it('scopes manual scheduler triggers and status to the authenticated account', async (): Promise<void> => {
+    const directory = join(tmpdir(), `dsh-luban-http-scheduler-${randomUUID()}`)
+    await mkdir(directory, { recursive: true })
+    directories.add(directory)
+    const clock = new StaticClock()
+    const store = new JsonTaskStore(createLedgerStore(join(directory, 'ledger.json'), clock), clock)
+    const claims = new DefaultAgentClaimService(store, 'ubuntu', true)
+    const executed: string[] = []
+    const execute: NightTaskExecutor['execute'] = (task) => {
+      if (task.claim === undefined || task.claim === null) throw new Error('claim missing')
+      executed.push(String(task.accountId))
+      return Promise.resolve({
+        kind: 'note',
+        ref: `result:${task.id}`,
+        summary: 'completed',
+        at: clock.now(),
+        by: task.claim.actor,
+      })
+    }
+    const scheduler = new DefaultNightScheduler({
+      store,
+      claims,
+      executor: { execute },
+      config: {
+        enabled: true,
+        window: '00:00-23:59',
+        dailyQuota: 1,
+        hostScopeWhitelist: ['ubuntu'],
+        tagWhitelist: ['auto-ok'],
+        model: { provider: 'night-provider', id: 'night-model' },
+        toolAllowlist: [],
+        circuitBreaker: { maxConsecutiveFailures: 2 },
+      },
+      hostScope: 'ubuntu',
+      clock,
+    })
+    const api = new TaskboardHttpApi({ store, claims, scheduler, auth: testAuth() })
+    const server = await listen(api)
+    const aliceHeaders = { cookie: 'session=ok', 'content-type': 'application/json' }
+    const bobHeaders = { cookie: 'session=bob', 'content-type': 'application/json' }
+    try {
+      for (const [title, headers] of [
+        ['Alice scheduled task', aliceHeaders],
+        ['Bob scheduled task', bobHeaders],
+      ] as const) {
+        const created = await fetch(`${server.base}/tasks`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            title,
+            status: 'todo',
+            hostScope: 'ubuntu',
+            priority: 'P1',
+            acceptance: 'Account-owned result is reviewed',
+            tags: ['auto-ok'],
+          }),
+        })
+        expect(created.status).toBe(201)
+      }
+
+      const aliceTrigger = await fetch(`${server.base}/scheduler/trigger?accountId=bob`, {
+        method: 'POST',
+        headers: aliceHeaders,
+        body: JSON.stringify({ accountId: 'bob' }),
+      })
+      expect(aliceTrigger.status).toBe(202)
+      expect(executed).toEqual(['alice'])
+      expect(
+        await store.query({ accountId: asAccountId('alice'), statuses: ['review'] }),
+      ).toHaveLength(1)
+      expect(await store.query({ accountId: asAccountId('bob'), statuses: ['todo'] })).toHaveLength(
+        1,
+      )
+
+      const aliceStatus = (await (
+        await fetch(`${server.base}/scheduler/status?accountId=bob`, {
+          headers: { cookie: 'session=ok' },
+        })
+      ).json()) as { readonly circuit: string; readonly quotaUsed: number }
+      const bobStatusBefore = (await (
+        await fetch(`${server.base}/scheduler/status?accountId=alice`, {
+          headers: { cookie: 'session=bob' },
+        })
+      ).json()) as { readonly circuit: string; readonly quotaUsed: number }
+      expect(aliceStatus).toMatchObject({ quotaUsed: 1, circuit: 'ok' })
+      expect(bobStatusBefore).toMatchObject({ quotaUsed: 0, circuit: 'ok' })
+
+      const bobTrigger = await fetch(`${server.base}/scheduler/trigger`, {
+        method: 'POST',
+        headers: bobHeaders,
+      })
+      expect(bobTrigger.status).toBe(202)
+      expect(executed).toEqual(['alice', 'bob'])
+      expect(
+        await store.query({ accountId: asAccountId('bob'), statuses: ['review'] }),
+      ).toHaveLength(1)
+      const bobStatusAfter = (await bobTrigger.json()) as {
+        readonly circuit: string
+        readonly quotaUsed: number
+      }
+      expect(bobStatusAfter).toMatchObject({ quotaUsed: 1, circuit: 'ok' })
+    } finally {
+      api.dispose()
+      await scheduler.dispose()
+      await server.close()
+    }
+  })
+
   it('serves one authenticated API to REST, importer, and SSE clients', async (): Promise<void> => {
     const directory = join(tmpdir(), `dsh-luban-http-${randomUUID()}`)
     await mkdir(directory, { recursive: true })

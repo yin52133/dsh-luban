@@ -5,6 +5,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId as DshSessionId } from '@deepseek-ai/dsh-session'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {
+  AccountId,
   AccountSessionRegistry,
   Actor,
   Clock,
@@ -301,6 +302,7 @@ export class DefaultNightScheduler implements NightScheduler {
   readonly #accountSessions: AccountSessionRegistry | undefined
   readonly #clock: Clock
   readonly #taskExecutors = new Map<string, NightTaskExecutorRoute>()
+  readonly #lastStatusByAccount = new Map<AccountId, SchedulerStatus>()
   #timer: ReturnType<typeof setInterval> | undefined
   #running = false
   #lastStatus: SchedulerStatus = { windowActive: false, quotaUsed: 0, circuit: 'ok' }
@@ -331,7 +333,7 @@ export class DefaultNightScheduler implements NightScheduler {
       void this.triggerOnce().catch((): undefined => undefined)
     }, 60_000)
     this.#timer.unref()
-    void this.#refreshStatus()
+    void this.#refreshStatuses()
   }
 
   public stop(): void {
@@ -339,8 +341,15 @@ export class DefaultNightScheduler implements NightScheduler {
     this.#timer = undefined
   }
 
-  public status(): SchedulerStatus {
-    return this.#lastStatus
+  public status(accountId?: AccountId): SchedulerStatus {
+    return accountId === undefined
+      ? this.#lastStatus
+      : (this.#lastStatusByAccount.get(accountId) ?? this.#defaultStatus())
+  }
+
+  public async statusFor(accountId: AccountId): Promise<SchedulerStatus> {
+    await this.#refreshStatus(accountId)
+    return this.status(accountId)
   }
 
   /** Register one exclusive executor for tasks matched by this route. */
@@ -359,86 +368,26 @@ export class DefaultNightScheduler implements NightScheduler {
     }
   }
 
-  public async triggerOnce(): Promise<void> {
+  public async triggerOnce(accountId?: AccountId): Promise<void> {
     if (!this.#config.enabled) throw new LubanError('E_UNAVAILABLE', 'Night scheduler is disabled')
     if (this.#running) return
     this.#running = true
     try {
-      const now = this.#clock.now()
-      const dateKey = localDateKey(now)
-      const windowActive = isInWindow(now, this.#config.window)
-      let snapshot = await this.#store.nightSchedulerSnapshot(dateKey)
-      this.#lastStatus = {
-        windowActive,
-        quotaUsed: snapshot.quotaAllocated,
-        circuit: snapshot.scheduler.circuit,
-      }
-      if (
-        !windowActive ||
-        snapshot.scheduler.circuit === 'open' ||
-        snapshot.quotaAllocated >= this.#config.dailyQuota
-      ) {
-        return
-      }
-      if (!this.#config.hostScopeWhitelist.includes(this.#hostScope)) return
-      if (this.#executor === undefined && this.#taskExecutors.size === 0) {
-        throw new LubanError('E_UNAVAILABLE', 'No DSH night executor is available')
-      }
-
-      const sessionId = asSessionId(`luban-night-${randomUUID()}`)
-      const actor: Actor = {
-        kind: 'agent',
-        id: asActorId(sessionId),
-        displayName: 'Luban Night Scheduler',
-      }
-      const claim = await this.#claims.claimNight(
-        { statuses: ['todo'], tags: this.#config.tagWhitelist, requireAcceptance: true },
-        { actor, sessionId, host: this.#hostId, executionOwner: 'night-scheduler' },
-        { dateKey, dailyQuota: this.#config.dailyQuota },
-      )
-      snapshot = { scheduler: claim.scheduler, quotaAllocated: claim.quotaAllocated }
-      this.#lastStatus = {
-        windowActive,
-        quotaUsed: snapshot.quotaAllocated,
-        circuit: snapshot.scheduler.circuit,
-      }
-      if (!claim.ok) return
-      const expectedClaim = claim.task.claim
-      if (expectedClaim === undefined || expectedClaim === null) {
-        throw new LubanError('E_IO', 'Claimed night task is missing its claim identity')
-      }
-      try {
-        if (claim.task.accountId !== undefined) {
-          await this.#accountSessions?.bind(claim.task.accountId, sessionId)
-        }
-        const executor = this.#executorFor(claim.task)
-        if (executor === undefined) {
-          throw new LubanError('E_UNAVAILABLE', 'No night executor matches the claimed task')
-        }
-        const output = await executor.execute(claim.task, sessionId)
-        const settled = await this.#claims.completeNight(claim.task.id, output, {
-          autoDone: true,
-          expectedClaim,
-          dailyQuota: this.#config.dailyQuota,
-        })
-        snapshot = { scheduler: settled.scheduler, quotaAllocated: settled.quotaAllocated }
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'Autonomous execution failed'
+      const accounts =
+        accountId === undefined ? await this.#store.nightSchedulerAccounts() : [accountId]
+      let firstError: unknown
+      for (const account of accounts) {
         try {
-          const settled = await this.#claims.failNight(claim.task.id, message, {
-            expectedClaim,
-            maxConsecutiveFailures: this.#config.circuitBreaker.maxConsecutiveFailures,
-          })
-          snapshot = { scheduler: settled.scheduler, quotaAllocated: settled.quotaAllocated }
-        } catch (failureError: unknown) {
-          if (!isClaimConflict(failureError)) throw failureError
-          snapshot = await this.#store.nightSchedulerSnapshot(dateKey)
+          await this.#triggerAccount(account)
+        } catch (error: unknown) {
+          firstError ??= error
         }
       }
-      this.#lastStatus = {
-        windowActive,
-        quotaUsed: snapshot.quotaAllocated,
-        circuit: snapshot.scheduler.circuit,
+      if (firstError instanceof Error) throw firstError
+      if (firstError !== undefined) {
+        throw new LubanError('E_UNAVAILABLE', 'Night scheduler failed with a non-error value', {
+          cause: firstError,
+        })
       }
     } finally {
       this.#running = false
@@ -477,13 +426,118 @@ export class DefaultNightScheduler implements NightScheduler {
     return matches[0]?.executor ?? this.#executor
   }
 
-  async #refreshStatus(): Promise<void> {
+  async #triggerAccount(accountId: AccountId): Promise<void> {
     const now = this.#clock.now()
-    const snapshot = await this.#store.nightSchedulerSnapshot(localDateKey(now))
-    this.#lastStatus = {
+    const dateKey = localDateKey(now)
+    const windowActive = isInWindow(now, this.#config.window)
+    let snapshot = await this.#store.nightSchedulerSnapshot(accountId, dateKey)
+    this.#setStatus(accountId, {
+      windowActive,
+      quotaUsed: snapshot.quotaAllocated,
+      circuit: snapshot.scheduler.circuit,
+    })
+    if (
+      !windowActive ||
+      snapshot.scheduler.circuit === 'open' ||
+      snapshot.quotaAllocated >= this.#config.dailyQuota
+    ) {
+      return
+    }
+    if (!this.#config.hostScopeWhitelist.includes(this.#hostScope)) return
+    if (this.#executor === undefined && this.#taskExecutors.size === 0) {
+      throw new LubanError('E_UNAVAILABLE', 'No DSH night executor is available')
+    }
+
+    const sessionId = asSessionId(`luban-night-${randomUUID()}`)
+    const actor: Actor = {
+      kind: 'agent',
+      id: asActorId(sessionId),
+      accountId,
+      displayName: 'Luban Night Scheduler',
+    }
+    const claim = await this.#claims.claimNight(
+      {
+        accountId,
+        statuses: ['todo'],
+        tags: this.#config.tagWhitelist,
+        requireAcceptance: true,
+      },
+      { actor, sessionId, host: this.#hostId, executionOwner: 'night-scheduler' },
+      { dateKey, dailyQuota: this.#config.dailyQuota },
+    )
+    snapshot = { scheduler: claim.scheduler, quotaAllocated: claim.quotaAllocated }
+    this.#setStatus(accountId, {
+      windowActive,
+      quotaUsed: snapshot.quotaAllocated,
+      circuit: snapshot.scheduler.circuit,
+    })
+    if (!claim.ok) return
+    if (claim.task.accountId !== accountId) {
+      throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'Claimed night task account changed')
+    }
+    const expectedClaim = claim.task.claim
+    if (expectedClaim === undefined || expectedClaim === null) {
+      throw new LubanError('E_IO', 'Claimed night task is missing its claim identity')
+    }
+    try {
+      await this.#accountSessions?.bind(accountId, sessionId)
+      const executor = this.#executorFor(claim.task)
+      if (executor === undefined) {
+        throw new LubanError('E_UNAVAILABLE', 'No night executor matches the claimed task')
+      }
+      const output = await executor.execute(claim.task, sessionId)
+      const settled = await this.#claims.completeNight(claim.task.id, output, {
+        autoDone: true,
+        expectedClaim,
+        dailyQuota: this.#config.dailyQuota,
+      })
+      snapshot = { scheduler: settled.scheduler, quotaAllocated: settled.quotaAllocated }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Autonomous execution failed'
+      try {
+        const settled = await this.#claims.failNight(claim.task.id, message, {
+          expectedClaim,
+          maxConsecutiveFailures: this.#config.circuitBreaker.maxConsecutiveFailures,
+        })
+        snapshot = { scheduler: settled.scheduler, quotaAllocated: settled.quotaAllocated }
+      } catch (failureError: unknown) {
+        if (!isClaimConflict(failureError)) throw failureError
+        snapshot = await this.#store.nightSchedulerSnapshot(accountId, dateKey)
+      }
+    }
+    this.#setStatus(accountId, {
+      windowActive,
+      quotaUsed: snapshot.quotaAllocated,
+      circuit: snapshot.scheduler.circuit,
+    })
+  }
+
+  async #refreshStatuses(): Promise<void> {
+    for (const accountId of await this.#store.nightSchedulerAccounts()) {
+      await this.#refreshStatus(accountId)
+    }
+  }
+
+  async #refreshStatus(accountId: AccountId): Promise<void> {
+    const now = this.#clock.now()
+    const snapshot = await this.#store.nightSchedulerSnapshot(accountId, localDateKey(now))
+    this.#setStatus(accountId, {
       windowActive: isInWindow(now, this.#config.window),
       quotaUsed: snapshot.quotaAllocated,
       circuit: snapshot.scheduler.circuit,
+    })
+  }
+
+  #setStatus(accountId: AccountId, status: SchedulerStatus): void {
+    this.#lastStatusByAccount.set(accountId, status)
+    this.#lastStatus = status
+  }
+
+  #defaultStatus(): SchedulerStatus {
+    return {
+      windowActive: isInWindow(this.#clock.now(), this.#config.window),
+      quotaUsed: 0,
+      circuit: 'ok',
     }
   }
 }

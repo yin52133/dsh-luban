@@ -16,6 +16,7 @@
 | v0.8 | 2026-08-30 | Codex | 增加夜间任务执行器路由与唯一终态所有权契约 |
 | v0.9 | 2026-08-30 | Codex | 将夜间容量预留与任务结算收敛为原子账本事务 |
 | v0.10 | 2026-08-30 | Codex | 非功能口径改为稳定性，并纳入账号上下文隔离 |
+| v0.11 | 2026-08-30 | Codex | 夜间认领、额度、熔断与状态按账号独立结算 |
 
 ## 1. 概述与目标
 
@@ -123,15 +124,15 @@ export interface NightTaskExecutorRoute {
 export interface NightScheduler {
   start(): void;
   stop(): void;
-  status(): SchedulerStatus;   // { windowActive, quotaUsed, circuit: 'ok'|'open' }
-  triggerOnce(): Promise<void>; // 手动触发一轮（供 CLI/调试）
+  statusFor(accountId: AccountId): Promise<SchedulerStatus>;
+  triggerOnce(accountId?: AccountId): Promise<void>; // 有账号时手动触发；缺省时轮询所有已归属账号
   registerTaskExecutor(route: NightTaskExecutorRoute): Unsubscribe;
 }
 ```
 
 ## 5. 数据模型
 
-见 `04-interfaces/data-models.md#task`。要点字段：`hostScope`、`workspace`、`acceptance`（验收标准 markdown）、`version`（乐观锁）、`claim`（认领会话/时间）、`outputs[]`（产出引用）、`autoDone`、`nightRunId`。
+见 `04-interfaces/data-models.md#task`。要点字段：`hostScope`、`workspace`、`acceptance`（验收标准 markdown）、`version`（乐观锁）、`claim`（认领会话/时间）、`outputs[]`（产出引用）、`autoDone`、`nightRunId`。夜间 `quotaUsed`、连续失败和 circuit 以 `accountId` 为键保存；旧全局 scheduler 字段只用于账本兼容读取。
 
 ## 6. 配置设计
 
@@ -175,7 +176,7 @@ export interface NightScheduler {
   `luban_report_night_result`；只有对应 `tool/call`/无错误 `tool/result` 已进入 durable
   session log、最终 `turn/end` 为 `completed` 且 `acceptanceMet=true` 时才写入
   `review(autoDone)`，其余路径全部回到 `todo` 并累计失败/熔断。
-- 所有任务由服务端写入 `accountId`；查询、单项读取、变更、SSE 与 scheduler 均只处理当前账号的数据。
+- 所有任务由服务端写入 `accountId`；查询、单项读取、变更、SSE 与手动 scheduler trigger/status 均只处理当前账号的数据。后台轮询逐个处理存在 todo 任务的账号，旧无账号任务不自动认领。
 - 审计记录 actor（人 / agent 会话 id），夜间 agent 与浏览器执行器继承来源任务的 `accountId`。
 
 ## 9. checklist 映射
@@ -204,8 +205,8 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
 - 每次认领生成唯一 `leaseId`；progress/complete/fail 在同一次 ledger update 锁内比对
   actor/session/claimedAt/leaseId/executionOwner。夜间 scheduler 和浏览器自动化始终传递启动时捕获的 claim，
   即使同一 agent/session 在同一毫秒 A→B 重领，A 的陈旧写入也全部 `E_VERSION_CONFLICT`。
-- 夜间认领在同一次账本锁内根据 `quotaUsed` 与当日 `doing/nightRunId` 计算已分配容量并写入 claim；
-  成功或失败结算把任务状态、quota 与熔断状态放入同一次原子 publish。跨 scheduler 实例不会超卖，
+- 夜间认领在同一次账本锁内按账号根据 `quotaUsed` 与当日 `doing/nightRunId` 计算已分配容量并写入 claim；
+  成功或失败结算把任务状态、该账号 quota 与熔断状态放入同一次原子 publish。跨 scheduler 实例不会超卖，
   跨日旧任务结算不会污染新日计数，publish 前进程被终止时仍保留可安全重试的旧账本。
 - 夜间 scheduler 为匹配任务选择唯一注册执行器；重叠路由 fail closed。路由执行器只返回
   `TaskOutput`，scheduler 独占 complete/fail；`executionOwner` 随 claim 持久化，普通浏览器监听器据此跳过夜间 claim。
@@ -214,12 +215,12 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
   model/tool scope、结果工具成功日志以及缺报告/验收失败/异常 turn 的 fail-closed；
   `tests/scheduler-atomic.test.ts` 覆盖双 scheduler 限额、跨日结算、run identity/CAS 与
   publish 前进程终止后的完整旧状态和安全重试；
-  `tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE 与断档基线；
+  `tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE、断档基线，以及 Alice/Bob 手动调度隔离；
   `tests/client-cli.test.ts` 覆盖客户端槽位、拖拽写 API、触屏/键盘迁移控件的合法目标、
   `expectedVersion`、伪造/陈旧 payload 拒绝、快速双提交/拖放互斥、busy/error/lock 清理
   语义与 CLI 同源调用。
 - 发布包生成 Host ESM、`taskctl` 与 rc2 lazy-CJS `client.js`/`client.d.ts`；夜间模式
-  继续默认关闭。43 项 M02 测试通过；真实无人值守执行仍需在目标 profile 进行部署验收后才启用。
+  继续默认关闭。46 项 M02 测试通过；真实无人值守执行仍需在目标 profile 进行部署验收后才启用。
 
 ## 11. 开放问题
 

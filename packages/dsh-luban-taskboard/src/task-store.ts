@@ -61,7 +61,11 @@ export interface AtomicClaimInput {
   readonly requireAcceptance: boolean
 }
 
-export interface AtomicNightClaimInput extends Omit<AtomicClaimInput, 'executionOwner'> {
+export interface AtomicNightClaimInput extends Omit<
+  AtomicClaimInput,
+  'accountId' | 'executionOwner'
+> {
+  readonly accountId: AccountId
   readonly dateKey: string
   readonly dailyQuota: number
 }
@@ -265,6 +269,33 @@ function schedulerForDate(current: SchedulerLedger, dateKey: string): SchedulerL
     : { dateKey, quotaUsed: 0, consecutiveFailures: 0, circuit: 'ok' }
 }
 
+function emptyScheduler(dateKey: string): SchedulerLedger {
+  return schedulerForDate(
+    { dateKey: '1970-01-01', quotaUsed: 0, consecutiveFailures: 0, circuit: 'ok' },
+    dateKey,
+  )
+}
+
+function accountScheduler(
+  ledger: TaskLedger,
+  accountId: AccountId,
+  dateKey: string,
+): SchedulerLedger {
+  return schedulerForDate(ledger.schedulers[String(accountId)] ?? emptyScheduler(dateKey), dateKey)
+}
+
+function withAccountScheduler(
+  ledger: TaskLedger,
+  accountId: AccountId,
+  scheduler: SchedulerLedger,
+): TaskLedger {
+  if (ledger.schedulers[String(accountId)] === scheduler) return ledger
+  return {
+    ...ledger,
+    schedulers: { ...ledger.schedulers, [String(accountId)]: scheduler },
+  }
+}
+
 function nightRunDateKey(task: Task): string | undefined {
   const match = /^(\d{4}-\d{2}-\d{2}):/u.exec(task.nightRunId ?? '')
   return match?.[1]
@@ -278,10 +309,11 @@ function localDateKey(epochMs: number): string {
   return `${year}-${month}-${day}`
 }
 
-function allocatedNightQuota(ledger: TaskLedger, dateKey: string): number {
-  const scheduler = schedulerForDate(ledger.scheduler, dateKey)
+function allocatedNightQuota(ledger: TaskLedger, accountId: AccountId, dateKey: string): number {
+  const scheduler = accountScheduler(ledger, accountId, dateKey)
   const activeRuns = ledger.tasks.filter(
     (task): boolean =>
+      task.accountId === accountId &&
       task.status === 'doing' &&
       task.claim?.executionOwner === 'night-scheduler' &&
       (nightRunDateKey(task) ?? localDateKey(task.claim.claimedAt)) === dateKey,
@@ -655,9 +687,9 @@ export class JsonTaskStore {
     const dailyQuota = positiveSafeInteger(input.dailyQuota, 'dailyQuota')
     let result: AtomicNightClaimResult | undefined
     await this.#store.update((ledger): TaskLedger => {
-      const scheduler = schedulerForDate(ledger.scheduler, input.dateKey)
-      const normalized = scheduler === ledger.scheduler ? ledger : { ...ledger, scheduler }
-      const quotaAllocated = allocatedNightQuota(normalized, input.dateKey)
+      const scheduler = accountScheduler(ledger, input.accountId, input.dateKey)
+      const normalized = withAccountScheduler(ledger, input.accountId, scheduler)
+      const quotaAllocated = allocatedNightQuota(normalized, input.accountId, input.dateKey)
       if (scheduler.circuit === 'open') {
         result = { ok: false, reason: 'circuit-open', scheduler, quotaAllocated }
         return normalized
@@ -757,6 +789,10 @@ export class JsonTaskStore {
       const index = taskIndex(ledger, input.id)
       const current = ledger.tasks[index]
       if (current === undefined) throw new LubanError('E_IO', 'Task index became inconsistent')
+      if (current.accountId === undefined) {
+        throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'Night task has no account ownership')
+      }
+      const accountId = current.accountId
       const runDateKey = requireNightRun(current, input.expectedClaim)
       const at = this.#clock.now()
       mutation =
@@ -779,7 +815,7 @@ export class JsonTaskStore {
               { expectedClaim: input.expectedClaim },
               at,
             )
-      const currentScheduler = ledger.scheduler
+      const currentScheduler = ledger.schedulers[String(accountId)] ?? emptyScheduler(runDateKey)
       if (currentScheduler.dateKey !== runDateKey) {
         scheduler = currentScheduler
       } else if (input.kind === 'complete') {
@@ -805,8 +841,8 @@ export class JsonTaskStore {
               : ('ok' as const),
         }
       }
-      const settledLedger = { ...mutation.ledger, scheduler }
-      quotaAllocated = allocatedNightQuota(settledLedger, scheduler.dateKey)
+      const settledLedger = withAccountScheduler(mutation.ledger, accountId, scheduler)
+      quotaAllocated = allocatedNightQuota(settledLedger, accountId, scheduler.dateKey)
       return settledLedger
     })
     if (mutation === undefined || scheduler === undefined || quotaAllocated === undefined) {
@@ -892,28 +928,53 @@ export class JsonTaskStore {
     return { imported, skipped, failed: errors.length, errors }
   }
 
-  public async schedulerLedger(): Promise<SchedulerLedger> {
-    return (await this.#store.read()).scheduler
+  public async schedulerLedger(accountId: AccountId): Promise<SchedulerLedger> {
+    const ledger = await this.#store.read()
+    return accountScheduler(
+      ledger,
+      accountId,
+      ledger.schedulers[String(accountId)]?.dateKey ?? '1970-01-01',
+    )
   }
 
   public async nightSchedulerSnapshot(
+    accountId: AccountId,
     dateKey: string,
   ): Promise<{ readonly scheduler: SchedulerLedger; readonly quotaAllocated: number }> {
     const ledger = await this.#store.read()
-    const scheduler = schedulerForDate(ledger.scheduler, dateKey)
-    return { scheduler, quotaAllocated: allocatedNightQuota({ ...ledger, scheduler }, dateKey) }
+    const scheduler = accountScheduler(ledger, accountId, dateKey)
+    const normalized = withAccountScheduler(ledger, accountId, scheduler)
+    return {
+      scheduler,
+      quotaAllocated: allocatedNightQuota(normalized, accountId, dateKey),
+    }
   }
 
   public async updateScheduler(
+    accountId: AccountId,
     updater: (current: SchedulerLedger) => SchedulerLedger,
   ): Promise<SchedulerLedger> {
     let updated: SchedulerLedger | undefined
     await this.#store.update((ledger): TaskLedger => {
-      updated = updater(ledger.scheduler)
-      return { ...ledger, scheduler: updated }
+      const current =
+        ledger.schedulers[String(accountId)] ??
+        emptyScheduler(new Date(this.#clock.now()).toISOString().slice(0, 10))
+      updated = updater(current)
+      return withAccountScheduler(ledger, accountId, updated)
     })
     if (updated === undefined) throw new LubanError('E_IO', 'Scheduler state did not commit')
     return updated
+  }
+
+  public async nightSchedulerAccounts(): Promise<readonly AccountId[]> {
+    const ledger = await this.#store.read()
+    return [
+      ...new Set(
+        ledger.tasks.flatMap((task): readonly AccountId[] =>
+          task.status !== 'todo' || task.accountId === undefined ? [] : [task.accountId],
+        ),
+      ),
+    ].sort((left, right): number => String(left).localeCompare(String(right)))
   }
 
   #emit(event: TaskEvent): void {

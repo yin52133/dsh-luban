@@ -22,7 +22,9 @@ export interface TaskLedger {
   readonly sequence: number
   readonly tasks: readonly Task[]
   readonly audit: readonly TaskAuditEntry[]
+  /** Legacy process-wide state retained only so existing ledgers remain readable. */
   readonly scheduler: SchedulerLedger
+  readonly schedulers: Readonly<Record<string, SchedulerLedger>>
 }
 
 export function emptyLedger(dateKey = '1970-01-01'): TaskLedger {
@@ -32,6 +34,7 @@ export function emptyLedger(dateKey = '1970-01-01'): TaskLedger {
     tasks: [],
     audit: [],
     scheduler: { dateKey, quotaUsed: 0, consecutiveFailures: 0, circuit: 'ok' },
+    schedulers: {},
   }
 }
 
@@ -165,15 +168,21 @@ export function decodeLedger(value: unknown): TaskLedger {
   if (!Array.isArray(row.tasks) || !Array.isArray(row.audit)) {
     throw new LubanError('E_INVALID_INPUT', 'ledger tasks and audit must be arrays')
   }
-  const scheduler = record(row.scheduler, 'ledger.scheduler')
-  const circuit = stringValue(scheduler.circuit, 'ledger.scheduler.circuit')
-  if (circuit !== 'ok' && circuit !== 'open') {
-    throw new LubanError('E_INVALID_INPUT', 'ledger.scheduler.circuit is invalid')
+  const scheduler = schedulerValue(row.scheduler, 'ledger.scheduler')
+  const tasks = row.tasks.map(taskValue)
+  const schedulers = decodeSchedulers(row.schedulers)
+  if (row.schedulers === undefined) {
+    const accounts = new Set(
+      tasks.flatMap((task): readonly string[] =>
+        task.accountId === undefined ? [] : [String(task.accountId)],
+      ),
+    )
+    for (const accountId of accounts) schedulers[accountId] = scheduler
   }
   return {
     schemaVersion: 1,
     sequence: numberValue(row.sequence, 'ledger.sequence'),
-    tasks: row.tasks.map(taskValue),
+    tasks,
     audit: row.audit.map((entry, index): TaskAuditEntry => {
       const label = `audit[${String(index)}]`
       const item = record(entry, label)
@@ -186,16 +195,36 @@ export function decodeLedger(value: unknown): TaskLedger {
         ...(typeof item.detail === 'string' ? { detail: item.detail } : {}),
       }
     }),
-    scheduler: {
-      dateKey: stringValue(scheduler.dateKey, 'ledger.scheduler.dateKey'),
-      quotaUsed: numberValue(scheduler.quotaUsed, 'ledger.scheduler.quotaUsed'),
-      consecutiveFailures: numberValue(
-        scheduler.consecutiveFailures,
-        'ledger.scheduler.consecutiveFailures',
-      ),
-      circuit,
-    },
+    scheduler,
+    schedulers,
   }
+}
+
+function schedulerValue(value: unknown, label: string): SchedulerLedger {
+  const scheduler = record(value, label)
+  const circuit = stringValue(scheduler.circuit, `${label}.circuit`)
+  if (circuit !== 'ok' && circuit !== 'open') {
+    throw new LubanError('E_INVALID_INPUT', `${label}.circuit is invalid`)
+  }
+  return {
+    dateKey: stringValue(scheduler.dateKey, `${label}.dateKey`),
+    quotaUsed: numberValue(scheduler.quotaUsed, `${label}.quotaUsed`),
+    consecutiveFailures: numberValue(scheduler.consecutiveFailures, `${label}.consecutiveFailures`),
+    circuit,
+  }
+}
+
+function decodeSchedulers(value: unknown): Record<string, SchedulerLedger> {
+  if (value === undefined) return {}
+  const rows = record(value, 'ledger.schedulers')
+  const schedulers: Record<string, SchedulerLedger> = {}
+  for (const [accountId, scheduler] of Object.entries(rows)) {
+    if (accountId === '') {
+      throw new LubanError('E_INVALID_INPUT', 'ledger.schedulers account id must not be empty')
+    }
+    schedulers[accountId] = schedulerValue(scheduler, `ledger.schedulers.${accountId}`)
+  }
+  return schedulers
 }
 
 export function createLedgerStore(filePath: string, clock: Clock): AtomicJsonStore<TaskLedger> {

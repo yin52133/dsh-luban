@@ -489,12 +489,12 @@ export class TaskboardHttpApi {
         return
       }
       if (method === 'GET' && path === '/scheduler/status') {
-        sendJson(response, 200, this.#scheduler.status())
+        sendJson(response, 200, await this.#scheduler.statusFor(actor.accountId))
         return
       }
       if (method === 'POST' && path === '/scheduler/trigger') {
-        await this.#scheduler.triggerOnce()
-        sendJson(response, 202, this.#scheduler.status())
+        await this.#scheduler.triggerOnce(actor.accountId)
+        sendJson(response, 202, await this.#scheduler.statusFor(actor.accountId))
         return
       }
 

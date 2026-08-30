@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import type { Clock, Task, TaskClaim, TaskOutput } from 'dsh-luban-core'
-import { AtomicJsonStore, asActorId, asHostId, asSessionId } from 'dsh-luban-core'
+import type { AccountId, Clock, Task, TaskClaim, TaskOutput } from 'dsh-luban-core'
+import { AtomicJsonStore, asAccountId, asActorId, asHostId, asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import type { NightConfig } from '../src/config.js'
@@ -14,6 +14,7 @@ import { DefaultNightScheduler, type NightTaskExecutor } from '../src/night-sche
 import { JsonTaskStore } from '../src/task-store.js'
 
 const directories = new Set<string>()
+const ACCOUNT = asAccountId('alice')
 
 class MutableClock implements Clock {
   public value = new Date(2026, 7, 30, 1, 0, 0).getTime()
@@ -75,6 +76,7 @@ async function state(clock: Clock): Promise<{
 
 async function createNightTask(store: JsonTaskStore, title: string): Promise<Task> {
   return store.create({
+    accountId: ACCOUNT,
     title,
     status: 'todo',
     hostScope: 'ubuntu',
@@ -85,13 +87,17 @@ async function createNightTask(store: JsonTaskStore, title: string): Promise<Tas
 }
 
 function claimSession(id: string): {
-  readonly actor: { readonly kind: 'agent'; readonly id: ReturnType<typeof asActorId> }
+  readonly actor: {
+    readonly kind: 'agent'
+    readonly id: ReturnType<typeof asActorId>
+    readonly accountId: AccountId
+  }
   readonly sessionId: ReturnType<typeof asSessionId>
   readonly host: ReturnType<typeof asHostId>
   readonly executionOwner: 'night-scheduler'
 } {
   return {
-    actor: { kind: 'agent', id: asActorId(id) },
+    actor: { kind: 'agent', id: asActorId(id), accountId: ACCOUNT },
     sessionId: asSessionId(id),
     host: asHostId('ubuntu'),
     executionOwner: 'night-scheduler',
@@ -170,7 +176,7 @@ describe('night scheduler atomic ledger transactions', (): void => {
     const reopened = new JsonTaskStore(createLedgerStore(ledgerPath, clock), clock)
     expect(await reopened.query({ statuses: ['review'] })).toHaveLength(1)
     expect(await reopened.query({ statuses: ['todo'] })).toHaveLength(1)
-    expect(await reopened.schedulerLedger()).toMatchObject({
+    expect(await reopened.schedulerLedger(ACCOUNT)).toMatchObject({
       quotaUsed: 1,
       consecutiveFailures: 0,
       circuit: 'ok',
@@ -183,7 +189,7 @@ describe('night scheduler atomic ledger transactions', (): void => {
     await createNightTask(store, 'Previous day run')
     await createNightTask(store, 'Current day failure')
     const first = await claims.claimNight(
-      { tags: ['auto-ok'], requireAcceptance: true },
+      { accountId: ACCOUNT, tags: ['auto-ok'], requireAcceptance: true },
       claimSession('night-day-one'),
       { dateKey: '2026-08-30', dailyQuota: 1 },
     )
@@ -191,7 +197,7 @@ describe('night scheduler atomic ledger transactions', (): void => {
 
     clock.value += 24 * 60 * 60 * 1_000
     const second = await claims.claimNight(
-      { tags: ['auto-ok'], requireAcceptance: true },
+      { accountId: ACCOUNT, tags: ['auto-ok'], requireAcceptance: true },
       claimSession('night-day-two'),
       { dateKey: '2026-08-31', dailyQuota: 1 },
     )
@@ -223,13 +229,19 @@ describe('night scheduler atomic ledger transactions', (): void => {
     const { ledger, store, claims } = await state(clock)
     await createNightTask(store, 'CAS-protected run')
     const session = claimSession('night-cas')
-    const first = await claims.claimNight({}, session, { dateKey: '2026-08-30', dailyQuota: 1 })
+    const first = await claims.claimNight({ accountId: ACCOUNT }, session, {
+      dateKey: '2026-08-30',
+      dailyQuota: 1,
+    })
     if (!first.ok) throw new Error(`first claim failed: ${first.reason}`)
     await store.transition(first.task.id, 'todo', {
       kind: 'user',
       id: asActorId('operator'),
     })
-    const second = await claims.claimNight({}, session, { dateKey: '2026-08-30', dailyQuota: 1 })
+    const second = await claims.claimNight({ accountId: ACCOUNT }, session, {
+      dateKey: '2026-08-30',
+      dailyQuota: 1,
+    })
     if (!second.ok) throw new Error(`second claim failed: ${second.reason}`)
 
     await expect(
@@ -254,7 +266,7 @@ describe('night scheduler atomic ledger transactions', (): void => {
       }),
     ).rejects.toMatchObject({ code: 'E_VERSION_CONFLICT', retriable: true })
 
-    expect(await store.schedulerLedger()).toMatchObject({
+    expect(await store.schedulerLedger(ACCOUNT)).toMatchObject({
       quotaUsed: 0,
       consecutiveFailures: 0,
       circuit: 'ok',
@@ -269,7 +281,7 @@ describe('night scheduler atomic ledger transactions', (): void => {
     const clock = new MutableClock()
     const { ledgerPath, store, claims } = await state(clock)
     const task = await createNightTask(store, 'Crash-safe settlement')
-    const claimed = await claims.claimNight({}, claimSession('night-crash'), {
+    const claimed = await claims.claimNight({ accountId: ACCOUNT }, claimSession('night-crash'), {
       dateKey: '2026-08-30',
       dailyQuota: 1,
     })
@@ -345,12 +357,12 @@ describe('night scheduler atomic ledger transactions', (): void => {
     })
     const reopened = new JsonTaskStore(reopenedLedger, clock)
     expect(await reopened.get(task.id)).toMatchObject({ status: 'doing', claim })
-    expect(await reopened.schedulerLedger()).toMatchObject({
+    expect(await reopened.schedulerLedger(ACCOUNT)).toMatchObject({
       quotaUsed: 0,
       consecutiveFailures: 0,
       circuit: 'ok',
     })
-    expect((await reopened.nightSchedulerSnapshot('2026-08-30')).quotaAllocated).toBe(1)
+    expect((await reopened.nightSchedulerSnapshot(ACCOUNT, '2026-08-30')).quotaAllocated).toBe(1)
 
     const retried = await new DefaultAgentClaimService(reopened, 'ubuntu', true).completeNight(
       task.id,

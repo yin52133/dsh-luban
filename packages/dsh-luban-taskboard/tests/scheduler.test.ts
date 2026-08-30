@@ -6,7 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle, AgentRegistry, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Clock, Task, TaskOutput } from 'dsh-luban-core'
-import { LubanError, asSessionId } from 'dsh-luban-core'
+import { LubanError, asAccountId, asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import type { NightConfig } from '../src/config.js'
@@ -21,6 +21,8 @@ import {
 import { JsonTaskStore } from '../src/task-store.js'
 
 const directories = new Set<string>()
+const ACCOUNT = asAccountId('alice')
+const BOB = asAccountId('bob')
 
 class MutableClock implements Clock {
   public value = new Date(2026, 7, 30, 1, 0, 0).getTime()
@@ -308,6 +310,7 @@ describe('night scheduler', (): void => {
     const clock = new MutableClock()
     const { store, claims } = await state(clock)
     await store.create({
+      accountId: ACCOUNT,
       title: 'Needs real evidence',
       status: 'todo',
       hostScope: 'ubuntu',
@@ -363,6 +366,7 @@ describe('night scheduler', (): void => {
     const { store, claims, ledgerPath } = await state(clock)
     for (const title of ['First', 'Second']) {
       await store.create({
+        accountId: ACCOUNT,
         title,
         status: 'todo',
         hostScope: 'ubuntu',
@@ -414,6 +418,7 @@ describe('night scheduler', (): void => {
     const clock = new MutableClock()
     const { store, claims } = await state(clock)
     await store.create({
+      accountId: ACCOUNT,
       title: 'Ambiguous browser task',
       status: 'todo',
       hostScope: 'ubuntu',
@@ -462,6 +467,7 @@ describe('night scheduler', (): void => {
     const clock = new MutableClock()
     const { store, claims } = await state(clock)
     await store.create({
+      accountId: ACCOUNT,
       title: 'Manual only',
       status: 'todo',
       hostScope: 'ubuntu',
@@ -470,6 +476,7 @@ describe('night scheduler', (): void => {
       tags: ['manual'],
     })
     await store.create({
+      accountId: ACCOUNT,
       title: 'Wrong host',
       status: 'todo',
       hostScope: 'win',
@@ -509,6 +516,7 @@ describe('night scheduler', (): void => {
     const { store, claims } = await state(clock)
     for (const title of ['Failure one', 'Failure two', 'Tomorrow']) {
       await store.create({
+        accountId: ACCOUNT,
         title,
         status: 'todo',
         hostScope: 'ubuntu',
@@ -545,10 +553,90 @@ describe('night scheduler', (): void => {
     await scheduler.dispose()
   })
 
+  it('keeps quota and circuit state independent while automatic polling visits each account', async (): Promise<void> => {
+    const clock = new MutableClock()
+    const { store, claims } = await state(clock)
+    await store.create({
+      accountId: ACCOUNT,
+      title: 'Alice provider failure',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'Failure opens only Alice circuit',
+      tags: ['auto-ok'],
+    })
+    await store.create({
+      accountId: BOB,
+      title: 'Bob succeeds independently',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'Bob result reaches review',
+      tags: ['auto-ok'],
+    })
+    await store.create({
+      title: 'Legacy unowned task',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'Unowned work is never auto-claimed',
+      tags: ['auto-ok'],
+    })
+    const scheduler = new DefaultNightScheduler({
+      store,
+      claims,
+      executor: {
+        execute(task: Task): Promise<TaskOutput> {
+          if (task.accountId === ACCOUNT) {
+            return Promise.reject(new LubanError('E_UNAVAILABLE', 'Alice provider down'))
+          }
+          if (task.claim === undefined || task.claim === null) throw new Error('claim missing')
+          return Promise.resolve({
+            kind: 'note',
+            ref: `result:${task.id}`,
+            summary: 'completed',
+            at: clock.now(),
+            by: task.claim.actor,
+          })
+        },
+      },
+      config: {
+        ...CONFIG,
+        dailyQuota: 5,
+        circuitBreaker: { maxConsecutiveFailures: 1 },
+      },
+      hostScope: 'ubuntu',
+      clock,
+    })
+
+    await scheduler.triggerOnce()
+
+    expect(await scheduler.statusFor(ACCOUNT)).toMatchObject({ quotaUsed: 0, circuit: 'open' })
+    expect(await scheduler.statusFor(BOB)).toMatchObject({ quotaUsed: 1, circuit: 'ok' })
+    expect(await store.schedulerLedger(ACCOUNT)).toMatchObject({
+      quotaUsed: 0,
+      consecutiveFailures: 1,
+      circuit: 'open',
+    })
+    expect(await store.schedulerLedger(BOB)).toMatchObject({
+      quotaUsed: 1,
+      consecutiveFailures: 0,
+      circuit: 'ok',
+    })
+    expect(await store.query({ accountId: ACCOUNT, statuses: ['todo'] })).toHaveLength(1)
+    expect(await store.query({ accountId: BOB, statuses: ['review'] })).toHaveLength(1)
+    const unowned = (await store.query({})).filter((task): boolean => task.accountId === undefined)
+    expect(unowned).toEqual([
+      expect.objectContaining({ title: 'Legacy unowned task', status: 'todo' }),
+    ])
+    await scheduler.dispose()
+  })
+
   it('records an executor version conflict when the scheduler still owns the claim', async (): Promise<void> => {
     const clock = new MutableClock()
     const { store, claims } = await state(clock)
     await store.create({
+      accountId: ACCOUNT,
       title: 'Executor-local conflict',
       status: 'todo',
       hostScope: 'ubuntu',
