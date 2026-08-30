@@ -86,6 +86,10 @@ export function apply(ctx: Context, input: Partial<TaskboardConfig> = {}): void 
     hostScope,
     accountSessions: ctx.lubanAuth.accountSessions,
     clock: systemClock,
+    onError: (error: unknown): void => {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+      ctx.logger.error(`luban-taskboard: night scheduler background failure: ${detail}`)
+    },
   })
   const api = new TaskboardHttpApi({ store, claims, scheduler, auth: ctx.lubanAuth })
 

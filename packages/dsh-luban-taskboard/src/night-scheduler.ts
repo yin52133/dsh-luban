@@ -301,9 +301,13 @@ export class DefaultNightScheduler implements NightScheduler {
   readonly #hostId: HostId
   readonly #accountSessions: AccountSessionRegistry | undefined
   readonly #clock: Clock
+  readonly #onError: (error: unknown) => void
   readonly #taskExecutors = new Map<string, NightTaskExecutorRoute>()
   readonly #lastStatusByAccount = new Map<AccountId, SchedulerStatus>()
+  readonly #recoveredAccounts = new Set<AccountId>()
+  readonly #recoveries = new Map<AccountId, Promise<void>>()
   #timer: ReturnType<typeof setInterval> | undefined
+  #startup: Promise<void> | undefined
   #running = false
   #lastStatus: SchedulerStatus = { windowActive: false, quotaUsed: 0, circuit: 'ok' }
 
@@ -316,6 +320,7 @@ export class DefaultNightScheduler implements NightScheduler {
     readonly hostId?: HostId
     readonly accountSessions?: AccountSessionRegistry
     readonly clock?: Clock
+    readonly onError?: (error: unknown) => void
   }) {
     this.#store = options.store
     this.#claims = options.claims
@@ -325,15 +330,25 @@ export class DefaultNightScheduler implements NightScheduler {
     this.#hostId = options.hostId ?? asHostId(this.#hostScope)
     this.#accountSessions = options.accountSessions
     this.#clock = options.clock ?? systemClock
+    this.#onError =
+      options.onError ??
+      ((error): void =>
+        process.emitWarning(error instanceof Error ? error : new Error(String(error))))
   }
 
   public start(): void {
     if (this.#timer !== undefined || !this.#config.enabled) return
     this.#timer = setInterval((): void => {
-      void this.triggerOnce().catch((): undefined => undefined)
+      void this.triggerOnce().catch((error: unknown): void => this.#reportError(error))
     }, 60_000)
     this.#timer.unref()
-    void this.#refreshStatuses()
+    const startup = this.#recoverInterruptedRuns()
+      .then(async (): Promise<void> => this.#refreshStatuses())
+      .catch((error: unknown): void => this.#reportError(error))
+      .finally((): void => {
+        if (this.#startup === startup) this.#startup = undefined
+      })
+    this.#startup = startup
   }
 
   public stop(): void {
@@ -375,6 +390,10 @@ export class DefaultNightScheduler implements NightScheduler {
     try {
       const accounts =
         accountId === undefined ? await this.#store.nightSchedulerAccounts() : [accountId]
+      // Recovery belongs to the mounted scheduler lifecycle. Ad-hoc schedulers may run concurrently.
+      if (this.#timer !== undefined) {
+        for (const account of accounts) await this.#recoverInterruptedRuns(account)
+      }
       let firstError: unknown
       for (const account of accounts) {
         try {
@@ -397,6 +416,7 @@ export class DefaultNightScheduler implements NightScheduler {
   public async dispose(): Promise<void> {
     this.stop()
     this.#taskExecutors.clear()
+    await this.#startup
     await this.#executor?.dispose?.()
   }
 
@@ -518,6 +538,42 @@ export class DefaultNightScheduler implements NightScheduler {
     }
   }
 
+  async #recoverInterruptedRuns(accountId?: AccountId): Promise<void> {
+    const accounts =
+      accountId === undefined ? await this.#store.nightSchedulerAccounts() : [accountId]
+    for (const account of accounts) await this.#recoverAccount(account)
+  }
+
+  async #recoverAccount(accountId: AccountId): Promise<void> {
+    if (this.#recoveredAccounts.has(accountId)) return
+    const active = this.#recoveries.get(accountId)
+    if (active !== undefined) return active
+    const recovery = (async (): Promise<void> => {
+      const tasks = await this.#store.query({ accountId, statuses: ['doing'] })
+      for (const task of tasks) {
+        const claim = task.claim
+        if (claim?.executionOwner !== 'night-scheduler') continue
+        const runId = task.nightRunId ?? claim.leaseId ?? String(claim.sessionId)
+        try {
+          await this.#claims.fail(
+            task.id,
+            `Recovered interrupted night run ${runId} after scheduler restart`,
+            { expectedClaim: claim },
+          )
+        } catch (error: unknown) {
+          if (!isClaimConflict(error)) throw error
+        }
+      }
+      this.#recoveredAccounts.add(accountId)
+    })()
+    this.#recoveries.set(accountId, recovery)
+    try {
+      await recovery
+    } finally {
+      if (this.#recoveries.get(accountId) === recovery) this.#recoveries.delete(accountId)
+    }
+  }
+
   async #refreshStatus(accountId: AccountId): Promise<void> {
     const now = this.#clock.now()
     const snapshot = await this.#store.nightSchedulerSnapshot(accountId, localDateKey(now))
@@ -538,6 +594,16 @@ export class DefaultNightScheduler implements NightScheduler {
       windowActive: isInWindow(this.#clock.now(), this.#config.window),
       quotaUsed: 0,
       circuit: 'ok',
+    }
+  }
+
+  #reportError(error: unknown): void {
+    try {
+      this.#onError(error)
+    } catch (reportError: unknown) {
+      process.emitWarning(
+        reportError instanceof Error ? reportError : new Error(String(reportError)),
+      )
     }
   }
 }

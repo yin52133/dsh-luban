@@ -6,7 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle, AgentRegistry, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Clock, Task, TaskOutput } from 'dsh-luban-core'
-import { LubanError, asAccountId, asSessionId } from 'dsh-luban-core'
+import { LubanError, asAccountId, asActorId, asHostId, asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import type { NightConfig } from '../src/config.js'
@@ -174,6 +174,91 @@ afterEach(async (): Promise<void> => {
 })
 
 describe('night scheduler', (): void => {
+  it('requeues an interrupted night claim during mounted startup recovery', async (): Promise<void> => {
+    const clock = new MutableClock()
+    const { store, claims } = await state(clock)
+    const task = await store.create({
+      accountId: ACCOUNT,
+      title: 'Interrupted night run',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'Recovered work can be retried',
+      tags: ['auto-ok'],
+    })
+    const sessionId = asSessionId('luban-night-interrupted')
+    const claimed = await claims.claimNight(
+      { accountId: ACCOUNT, tags: ['auto-ok'], requireAcceptance: true },
+      {
+        actor: {
+          kind: 'agent',
+          id: asActorId(sessionId),
+          accountId: ACCOUNT,
+          displayName: 'Interrupted scheduler',
+        },
+        sessionId,
+        host: asHostId('ubuntu'),
+        executionOwner: 'night-scheduler',
+      },
+      { dateKey: '2026-08-30', dailyQuota: 1 },
+    )
+    if (!claimed.ok) throw new Error(`night claim failed: ${claimed.reason}`)
+    expect(await store.nightSchedulerAccounts()).toEqual([ACCOUNT])
+
+    const errors: unknown[] = []
+    const scheduler = new DefaultNightScheduler({
+      store,
+      claims,
+      config: CONFIG,
+      hostScope: 'ubuntu',
+      clock,
+      onError: (error): void => {
+        errors.push(error)
+      },
+    })
+    scheduler.start()
+    await vi.waitFor(async (): Promise<void> => {
+      await expect(store.get(task.id)).resolves.toMatchObject({
+        status: 'todo',
+        claim: null,
+        failureCount: 1,
+      })
+    })
+
+    const recovered = await store.get(task.id)
+    expect(recovered?.outputs.at(-1)?.summary).toMatch(
+      /^Recovered interrupted night run 2026-08-30:lease-/u,
+    )
+    expect(await store.nightSchedulerSnapshot(ACCOUNT, '2026-08-30')).toMatchObject({
+      quotaAllocated: 0,
+      scheduler: { quotaUsed: 0, consecutiveFailures: 0, circuit: 'ok' },
+    })
+    expect(errors).toEqual([])
+    await scheduler.dispose()
+  })
+
+  it('reports startup scheduler failures instead of creating an unhandled rejection', async (): Promise<void> => {
+    const clock = new MutableClock()
+    const { store, claims } = await state(clock)
+    const failure = new Error('ledger read failed during startup')
+    vi.spyOn(store, 'nightSchedulerAccounts').mockRejectedValueOnce(failure)
+    const errors: unknown[] = []
+    const scheduler = new DefaultNightScheduler({
+      store,
+      claims,
+      config: CONFIG,
+      hostScope: 'ubuntu',
+      clock,
+      onError: (error): void => {
+        errors.push(error)
+      },
+    })
+
+    scheduler.start()
+    await vi.waitFor((): void => expect(errors).toEqual([failure]))
+    await scheduler.dispose()
+  })
+
   it('applies a dedicated rc2 model/tool scope and accepts one verified result report', async (): Promise<void> => {
     const clock = new MutableClock()
     const { store } = await state(clock)

@@ -301,6 +301,10 @@ function nightRunDateKey(task: Task): string | undefined {
   return match?.[1]
 }
 
+function isActiveNightRun(task: Task): boolean {
+  return task.status === 'doing' && task.claim?.executionOwner === 'night-scheduler'
+}
+
 function localDateKey(epochMs: number): string {
   const value = new Date(epochMs)
   const year = String(value.getFullYear()).padStart(4, '0')
@@ -971,7 +975,9 @@ export class JsonTaskStore {
     return [
       ...new Set(
         ledger.tasks.flatMap((task): readonly AccountId[] =>
-          task.status !== 'todo' || task.accountId === undefined ? [] : [task.accountId],
+          (task.status !== 'todo' && !isActiveNightRun(task)) || task.accountId === undefined
+            ? []
+            : [task.accountId],
         ),
       ),
     ].sort((left, right): number => String(left).localeCompare(String(right)))
