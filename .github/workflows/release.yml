@@ -83,6 +83,9 @@ jobs:
     needs: validate-and-pack
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_RELEASE_PUBLISH == 'true'
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-publish-${{ github.repository_id }}-${{ github.ref_name }}
+      cancel-in-progress: false
     environment: release
     permissions:
       contents: write
@@ -102,7 +105,20 @@ jobs:
         with:
           name: npm-release-${{ github.ref_name }}
           path: .release-artifacts
+      - name: Recover the create-once publish journal or choose a new release
+        id: recovery
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          node scripts/release/recover-release.mjs
+          --artifacts .release-artifacts
+          --repository "${GITHUB_REPOSITORY}"
+          --repository-id "${GITHUB_REPOSITORY_ID}"
+          --repository-owner-id "${GITHUB_REPOSITORY_OWNER_ID}"
+          --expected-sha "${GITHUB_SHA}"
+          --github-output "${GITHUB_OUTPUT}"
       - name: Create a recoverable draft release with the exact npm tarballs
+        if: steps.recovery.outputs.mode == 'create'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
@@ -114,11 +130,42 @@ jobs:
           --title "${GITHUB_REF_NAME}"
           --notes-file .release-artifacts/RELEASE_NOTES.md
       - name: Publish the reviewed tarballs to npm
+        if: steps.recovery.outputs.mode != 'verify'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           LUBAN_RELEASE_APPROVED: 'true'
-        run: node scripts/release/publish.mjs --publish --artifacts .release-artifacts
+          PUBLISH_ACTION: ${{ steps.recovery.outputs.mode == 'resume' && '--resume' || '--publish' }}
+        run: >-
+          node scripts/release/publish.mjs "${PUBLISH_ACTION}"
+          --artifacts .release-artifacts
+          --repository "${GITHUB_REPOSITORY}"
+          --expected-sha "${GITHUB_SHA}"
       - name: Publish GitHub Release after npm succeeds
+        if: steps.recovery.outputs.mode != 'verify'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${GITHUB_REF_NAME}" --draft=false
+      - name: Verify tag, public Release assets, and npm tarballs are identical
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          node scripts/release/verify-published-release.mjs
+          --artifacts .release-artifacts
+          --repository "${GITHUB_REPOSITORY}"
+          --repository-id "${GITHUB_REPOSITORY_ID}"
+          --repository-owner-id "${GITHUB_REPOSITORY_OWNER_ID}"
+          --expected-sha "${GITHUB_SHA}"
+      - name: Preserve the append-only npm publish ledger
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-publish-ledger-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .release-artifacts/publish-ledger.json
+            .release-artifacts/publish-ledger-head.json
+            .release-artifacts/publish-ledger.json.events/
+            .release-artifacts/publish-ledger.json.commits/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
