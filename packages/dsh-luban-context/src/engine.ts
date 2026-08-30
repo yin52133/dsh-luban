@@ -3,6 +3,7 @@ import type {
   CompactionAuditRecord,
   CompactionContext,
   CompactionEngine,
+  CompactionSurfaceSnapshotIndex,
   CompactionStrategy,
   LubanEventMap,
   SessionId,
@@ -20,6 +21,7 @@ export type CompactionTaskScope = 'night' | 'day'
 export interface CompactionWorkspace {
   readonly context: CompactionContext
   readonly repository: ContextArchiveRepository
+  snapshotSurface(): CompactionSurfaceSnapshotIndex
 }
 
 export interface CompactionContextFactory {
@@ -146,6 +148,7 @@ export class DefaultCompactionEngine implements CompactionEngineWithReplay {
         budgetTokens: profile.keepRecentTokens,
       })
       if (plan.summarize.length === 0 && plan.archive.length === 0) return
+      const beforeSurface = workspace.snapshotSurface()
       let result: Awaited<ReturnType<CompactionStrategy['execute']>> | undefined
       let failure: unknown
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -188,6 +191,11 @@ export class DefaultCompactionEngine implements CompactionEngineWithReplay {
         afterTokens: result.afterTokens,
         archiveFiles: result.archiveFiles,
         plan: auditedPlan,
+        surfaceSnapshots: {
+          kind: 'captured',
+          before: beforeSurface,
+          after: workspace.snapshotSurface(),
+        },
       }
       await workspace.repository.recordAudit(audit)
       this.#roundsSinceCompaction.set(session.id, 0)

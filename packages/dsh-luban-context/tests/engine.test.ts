@@ -6,6 +6,7 @@ import type {
   CompactionContext,
   CompactionPlan,
   CompactionResult,
+  CompactionSurfaceSnapshotIndex,
   CompactionStrategy,
   ContextSegment,
   SessionRef,
@@ -14,7 +15,7 @@ import type {
 import { asSessionId } from '@luban/core'
 import { ContextArchiveRepository } from '../src/archive.js'
 import type { Config } from '../src/config.js'
-import { DefaultCompactionEngine } from '../src/engine.js'
+import { DefaultCompactionEngine, type CompactionWorkspace } from '../src/engine.js'
 import {
   SummarizeStrategy,
   SummarizeVirtualFileStrategy,
@@ -90,12 +91,7 @@ describe('DefaultCompactionEngine', () => {
       config: activeConfig,
       clock: { now: (): number => 1000 },
       factory: {
-        create: (
-          ref,
-        ): Promise<{
-          readonly repository: ContextArchiveRepository
-          readonly context: CompactionContext & { read(segment: ContextSegment): Promise<string> }
-        }> => {
+        create: (ref): Promise<CompactionWorkspace> => {
           let repository = repositories.get(ref.id)
           if (repository === undefined) {
             repository = new ContextArchiveRepository({
@@ -108,10 +104,20 @@ describe('DefaultCompactionEngine', () => {
           }
           return Promise.resolve({
             repository,
+            snapshotSurface: (): CompactionSurfaceSnapshotIndex => ({
+              totalTokens: ref.segments.reduce(
+                (total, segment): number => total + segment.estTokens,
+                0,
+              ),
+              entries: ref.segments.map((segment, index) => ({
+                eventSeq: 100 + index,
+                segment,
+              })),
+            }),
             context: {
               sessionId: ref.id,
               archiveDir: join(directory, activeConfig.archiveDir),
-              read: (segment): Promise<string> =>
+              read: (segment: ContextSegment): Promise<string> =>
                 Promise.resolve(`Decision ${String(segment.startSeq)} must remain`),
               archive: (segment, content): Promise<string> => repository.archive(segment, content),
               summarize: (): Promise<string> => Promise.resolve('preserved decisions'),
@@ -167,23 +173,33 @@ describe('DefaultCompactionEngine', () => {
     expect(await engine.archives(asSessionId('fallback'))).toHaveLength(3)
   })
 
-  it('registers custom strategies without modifying the engine and ignores unknown telemetry', async () => {
+  it('executes custom strategies without extra contracts and ignores unknown telemetry', async () => {
     const { engine } = harness()
+    const execute = vi.fn<CompactionStrategy['execute']>(() =>
+      Promise.resolve({
+        beforeTokens: 40,
+        afterTokens: 10,
+        archiveFiles: [],
+      }),
+    )
     const custom: CompactionStrategy = {
       id: 'custom',
       plan: (input): CompactionPlan => new SummarizeStrategy().plan(input),
-      execute: (): Promise<CompactionResult> =>
-        Promise.resolve({
-          beforeTokens: 40,
-          afterTokens: 10,
-          archiveFiles: [],
-        }),
+      execute,
     }
     const unregister = engine.register(custom)
     engine.use('custom')
     await engine.maybeCompact(session('custom'), telemetry('unknown'))
     await engine.maybeCompact(session('custom'), telemetry('unknown'))
     await expect(engine.audit(asSessionId('custom'))).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+    await engine.maybeCompact(session('custom'), telemetry(0.9))
+    expect(execute).toHaveBeenCalledOnce()
+    const [record] = await engine.audit(asSessionId('custom'))
+    expect(record?.surfaceSnapshots).toMatchObject({
+      kind: 'captured',
+      before: { totalTokens: 40 },
+      after: { totalTokens: 40 },
+    })
     unregister()
     expect(() => engine.use('custom')).toThrow(/not registered/u)
   })

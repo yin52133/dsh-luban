@@ -166,6 +166,29 @@ export interface CompactionPlan {
   readonly strategyId: string
 }
 
+/** One live surface node linked to its durable DSH event and logical segment. */
+export interface CompactionSurfaceSnapshotIndexEntry {
+  readonly eventSeq: number
+  readonly segment: ContextSegment
+}
+
+/** A point-in-time index of the model-visible surface and its estimated token total. */
+export interface CompactionSurfaceSnapshotIndex {
+  readonly totalTokens: number
+  readonly entries: readonly CompactionSurfaceSnapshotIndexEntry[]
+}
+
+export type CompactionSurfaceSnapshots =
+  | {
+      readonly kind: 'captured'
+      readonly before: CompactionSurfaceSnapshotIndex
+      readonly after: CompactionSurfaceSnapshotIndex
+    }
+  | {
+      /** The persisted audit predates surface snapshot indexing. */
+      readonly kind: 'legacy'
+    }
+
 export interface CompactionAuditRecord {
   readonly sessionId: SessionId
   readonly at: EpochMs
@@ -174,6 +197,7 @@ export interface CompactionAuditRecord {
   readonly afterTokens: number
   readonly archiveFiles: readonly string[]
   readonly plan: CompactionPlan
+  readonly surfaceSnapshots: CompactionSurfaceSnapshots
 }
 
 export type BuildJobStatus = 'queued' | 'running' | 'failed' | 'done'

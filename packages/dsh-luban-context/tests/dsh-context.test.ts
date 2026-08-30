@@ -12,7 +12,7 @@ import {
   DshCompactionCoordinator,
   sessionRefFromAgent,
 } from '../src/dsh-context.js'
-import type { CompactionEngineWithReplay } from '../src/engine.js'
+import { DefaultCompactionEngine, type CompactionEngineWithReplay } from '../src/engine.js'
 import { SummarizeVirtualFileStrategy } from '../src/strategies.js'
 
 function maintenanceAgent(idValue: string): {
@@ -116,6 +116,83 @@ describe('DSH compaction boundary', () => {
     expect(replay).toContain('Requirement')
     expect(replay).toContain('[REDACTED]')
     expect(await (await factory.open(ref.id)).entries()).toHaveLength(result.archiveFiles.length)
+  })
+
+  it('audits the real live surface event and segment indexes before and after execution', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'luban-dsh-surface-audit-'))
+    directories.push(directory)
+    const id = SessionId('surface-audit-session')
+    const session = Session.create(id, [], {
+      version: SESSION_FORMAT_VERSION,
+      id,
+      createdAt: 1,
+      cwd: directory,
+    })
+    for (const text of [
+      'Requirement: retain the durable event identity for the oldest context.',
+      'Decision: preserve the selected implementation constraint.',
+      'Recent request remains on the model-visible surface.',
+    ]) {
+      session.append(
+        'user/message',
+        createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'plugin', plugin: 'test' },
+        }),
+        { surfaceOp: 'append' },
+      )
+    }
+    const agent = { id, session, status: 'idle' } as unknown as Agent
+    const agents = { get: (): Agent => agent } as unknown as AgentRegistry
+    const activeConfig = {
+      trigger: { ratio: 0.8, minGapRounds: 1 },
+      strategy: 'summarize+virtualfile',
+      keepRecentTokens: 10,
+      archiveDir: '.luban/context-archive',
+      nightProfile: { trigger: { ratio: 0.7 }, keepRecentTokens: 8 },
+    } as const
+    const factory = new DshCompactionContextFactory(agents, activeConfig, {
+      now: (): number => 100,
+    })
+    const engine = new DefaultCompactionEngine({
+      config: activeConfig,
+      factory,
+      clock: { now: (): number => 100 },
+    })
+    engine.register(new SummarizeVirtualFileStrategy())
+    const ref = sessionRefFromAgent(agent)
+    const beforeEventSeqs = [...session.surface.nodes]
+
+    await engine.maybeCompact(ref, {
+      context: { used: 90, max: 100, ratio: 0.9 },
+      workspace: { name: directory },
+      model: { name: 'test', thinkingDepth: 'medium' },
+      rates: { tpm1m: 0, tpm5m: 0, rpm1m: 0, rpm5m: 0 },
+      at: 1,
+    })
+
+    const [record] = await engine.audit(asSessionId(id))
+    if (record?.surfaceSnapshots.kind !== 'captured') {
+      throw new Error('captured surface snapshots are missing')
+    }
+    const { before, after } = record.surfaceSnapshots
+    expect(before.entries.map((entry) => entry.eventSeq)).toEqual(beforeEventSeqs)
+    expect(before.entries.map((entry) => entry.segment)).toEqual(ref.segments)
+    expect(before.totalTokens).toBe(
+      before.entries.reduce((total, entry): number => total + entry.segment.estTokens, 0),
+    )
+
+    const summaryEventSeq = session.events.at(-1)?.seq
+    expect(summaryEventSeq).toBe((beforeEventSeqs.at(-1) ?? 0) + 1)
+    expect(after.entries.map((entry) => entry.eventSeq)).toEqual([
+      summaryEventSeq,
+      beforeEventSeqs.at(-1),
+    ])
+    expect(after.entries.map((entry) => entry.segment.startSeq)).toEqual([0, 1])
+    expect(after.totalTokens).toBe(
+      after.entries.reduce((total, entry): number => total + entry.segment.estTokens, 0),
+    )
+    expect(await (await factory.open(asSessionId(id))).audit()).toEqual([record])
   })
 
   it('runs maintenance with a fresh snapshot scoped to the exact idle agent', async (): Promise<void> => {

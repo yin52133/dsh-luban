@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { CompactionAuditRecord } from '@luban/core'
 import { asSessionId } from '@luban/core'
 import { ContextArchiveRepository } from '../src/archive.js'
 import { parseConfig } from '../src/config.js'
@@ -114,5 +115,76 @@ describe('ContextArchiveRepository', () => {
     await expect(repository.replayPath('../outside.md')).rejects.toMatchObject({
       code: 'E_NOT_FOUND',
     })
+  })
+
+  it('persists captured surface indexes and explicitly decodes older audits as legacy', async () => {
+    const sessionId = asSessionId('audit-codec')
+    const options = {
+      workspace: directory,
+      archiveDir: '.luban/context-archive',
+      sessionId,
+      clock: { now: (): number => 123 },
+    } as const
+    const captured: CompactionAuditRecord = {
+      sessionId,
+      at: 123,
+      strategyId: 'custom',
+      beforeTokens: 20,
+      afterTokens: 8,
+      archiveFiles: [],
+      plan: {
+        keep: [{ startSeq: 1, endSeq: 1, estTokens: 10 }],
+        summarize: [{ startSeq: 0, endSeq: 0, estTokens: 10 }],
+        archive: [],
+        budgetTokens: 10,
+        strategyId: 'custom',
+      },
+      surfaceSnapshots: {
+        kind: 'captured',
+        before: {
+          totalTokens: 20,
+          entries: [
+            { eventSeq: 10, segment: { startSeq: 0, endSeq: 0, estTokens: 10 } },
+            { eventSeq: 11, segment: { startSeq: 1, endSeq: 1, estTokens: 10 } },
+          ],
+        },
+        after: {
+          totalTokens: 8,
+          entries: [{ eventSeq: 12, segment: { startSeq: 0, endSeq: 0, estTokens: 8 } }],
+        },
+      },
+    }
+    const repository = new ContextArchiveRepository(options)
+    await repository.recordAudit(captured)
+    await expect(new ContextArchiveRepository(options).audit()).resolves.toEqual([captured])
+
+    const legacyRecord = {
+      sessionId,
+      at: 100,
+      strategyId: 'legacy-strategy',
+      beforeTokens: 30,
+      afterTokens: 10,
+      archiveFiles: [],
+      plan: {
+        keep: [{ startSeq: 2, endSeq: 2, estTokens: 10 }],
+        summarize: [{ startSeq: 0, endSeq: 1, estTokens: 20 }],
+        archive: [],
+        budgetTokens: 10,
+        strategyId: 'legacy-strategy',
+      },
+    }
+    const auditPath = join(directory, '.luban', 'context-archive', String(sessionId), 'audit.json')
+    await writeFile(auditPath, JSON.stringify([legacyRecord]), 'utf8')
+    const legacyRepository = new ContextArchiveRepository(options)
+    const [decodedLegacy] = await legacyRepository.audit()
+    expect(decodedLegacy?.surfaceSnapshots).toEqual({ kind: 'legacy' })
+    expect(decodedLegacy?.surfaceSnapshots).not.toHaveProperty('after')
+
+    await legacyRepository.recordAudit(captured)
+    const persisted = JSON.parse(await readFile(auditPath, 'utf8')) as unknown
+    expect(persisted).toMatchObject([
+      { surfaceSnapshots: { kind: 'legacy' } },
+      { surfaceSnapshots: { kind: 'captured' } },
+    ])
   })
 })

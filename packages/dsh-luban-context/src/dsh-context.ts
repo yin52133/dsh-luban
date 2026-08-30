@@ -2,7 +2,13 @@ import { resolve } from 'node:path'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type { Clock, ContextSegment, SessionRef, TelemetryAggregator } from '@luban/core'
+import type {
+  Clock,
+  CompactionSurfaceSnapshotIndex,
+  ContextSegment,
+  SessionRef,
+  TelemetryAggregator,
+} from '@luban/core'
 import { LubanError, asSessionId, redactSecrets } from '@luban/core'
 import { ContextArchiveRepository } from './archive.js'
 import type { Config } from './config.js'
@@ -157,6 +163,21 @@ export class DshCompactionContext implements ReadableCompactionContext {
     return Promise.resolve()
   }
 
+  /** Capture the current model-visible surface using durable event sequence identities. */
+  public snapshotSurface(): CompactionSurfaceSnapshotIndex {
+    const snapshots = segmentSnapshots(this.#session)
+    return {
+      totalTokens: snapshots.reduce(
+        (total, snapshot): number => total + snapshot.segment.estTokens,
+        0,
+      ),
+      entries: snapshots.map((snapshot) => ({
+        eventSeq: snapshot.eventSeq,
+        segment: snapshot.segment,
+      })),
+    }
+  }
+
   #selected(segment: ContextSegment): readonly SegmentSnapshot[] {
     const selected = this.#snapshots.filter(
       (snapshot): boolean =>
@@ -196,14 +217,16 @@ export class DshCompactionContextFactory implements CompactionContextFactory {
       sessionId: session.id,
       clock: this.#clock,
     })
+    const context = new DshCompactionContext({
+      session: agent.session,
+      snapshots: segmentSnapshots(agent.session),
+      repository,
+      archiveDir: resolve(workspace, this.#config.archiveDir),
+    })
     return Promise.resolve({
       repository,
-      context: new DshCompactionContext({
-        session: agent.session,
-        snapshots: segmentSnapshots(agent.session),
-        repository,
-        archiveDir: resolve(workspace, this.#config.archiveDir),
-      }),
+      context,
+      snapshotSurface: (): CompactionSurfaceSnapshotIndex => context.snapshotSurface(),
     })
   }
 

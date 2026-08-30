@@ -15,6 +15,9 @@ import type {
   Clock,
   CompactionAuditRecord,
   CompactionPlan,
+  CompactionSurfaceSnapshotIndex,
+  CompactionSurfaceSnapshotIndexEntry,
+  CompactionSurfaceSnapshots,
   ContextSegment,
   JsonCodec,
   SessionId,
@@ -221,6 +224,46 @@ function compactionPlan(value: unknown, label: string): CompactionPlan {
   }
 }
 
+function surfaceSnapshotEntry(value: unknown, label: string): CompactionSurfaceSnapshotIndexEntry {
+  const row = record(value, label)
+  return {
+    eventSeq: integer(row.eventSeq, `${label}.eventSeq`),
+    segment: contextSegment(row.segment, `${label}.segment`),
+  }
+}
+
+function surfaceSnapshot(value: unknown, label: string): CompactionSurfaceSnapshotIndex {
+  const row = record(value, label)
+  if (!Array.isArray(row.entries)) {
+    throw new LubanError('E_IO', `${label}.entries must be an array`)
+  }
+  const entries = row.entries.map((item, index): CompactionSurfaceSnapshotIndexEntry =>
+    surfaceSnapshotEntry(item, `${label}.entries[${String(index)}]`),
+  )
+  const totalTokens = integer(row.totalTokens, `${label}.totalTokens`)
+  const indexedTokens = entries.reduce((total, entry): number => total + entry.segment.estTokens, 0)
+  if (totalTokens !== indexedTokens) {
+    throw new LubanError('E_IO', `${label}.totalTokens does not match its surface index`)
+  }
+  if (new Set(entries.map((entry): number => entry.eventSeq)).size !== entries.length) {
+    throw new LubanError('E_IO', `${label}.entries contains duplicate event sequences`)
+  }
+  return { totalTokens, entries }
+}
+
+function surfaceSnapshots(value: unknown, label: string): CompactionSurfaceSnapshots {
+  const row = record(value, label)
+  if (row.kind === 'legacy') return { kind: 'legacy' }
+  if (row.kind !== 'captured') {
+    throw new LubanError('E_IO', `${label}.kind is unsupported`)
+  }
+  return {
+    kind: 'captured',
+    before: surfaceSnapshot(row.before, `${label}.before`),
+    after: surfaceSnapshot(row.after, `${label}.after`),
+  }
+}
+
 function auditRecord(value: unknown, label: string): CompactionAuditRecord {
   const row = record(value, label)
   if (!Array.isArray(row.archiveFiles))
@@ -235,6 +278,10 @@ function auditRecord(value: unknown, label: string): CompactionAuditRecord {
       text(item, `${label}.archiveFiles[${String(index)}]`),
     ),
     plan: compactionPlan(row.plan, `${label}.plan`),
+    surfaceSnapshots:
+      row.surfaceSnapshots === undefined
+        ? { kind: 'legacy' }
+        : surfaceSnapshots(row.surfaceSnapshots, `${label}.surfaceSnapshots`),
   }
 }
 
