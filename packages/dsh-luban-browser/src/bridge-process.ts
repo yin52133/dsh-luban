@@ -69,8 +69,8 @@ export class BridgeProcess implements BrowserBridge {
     ) {
       throw new BrowserError('E_BROWSER_VERSION', 'Browser bridge version handshake failed')
     }
-    await this.#request('start', { profile }, 30_000)
-    return { id: randomUUID(), profile, startedAt: Date.now() }
+    const resolvedProfile = decodeStartedProfile(await this.#request('start', { profile }, 30_000))
+    return { id: randomUUID(), profile: resolvedProfile, startedAt: Date.now() }
   }
 
   public async *run(
@@ -475,6 +475,25 @@ function decodeResult(value: unknown): BrowserResult {
     steps: source.steps,
     durationMs: source.durationMs,
   }
+}
+
+function decodeStartedProfile(value: unknown): BrowserProfile {
+  const source = asRecord(value)
+  const profile = asRecord(source.profile)
+  const kernel = profile.kernel
+  if (
+    typeof kernel !== 'string' ||
+    !['chrome', 'edge', 'chromium-headless'].includes(kernel) ||
+    typeof profile.headless !== 'boolean' ||
+    typeof profile.isolated !== 'boolean'
+  ) {
+    throw new BrowserError('E_BROWSER_PROTOCOL', 'Browser bridge resolved profile is invalid')
+  }
+  return Object.freeze({
+    kernel: kernel as NonNullable<BrowserProfile['kernel']>,
+    headless: profile.headless,
+    isolated: profile.isolated,
+  })
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

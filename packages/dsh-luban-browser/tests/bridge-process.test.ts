@@ -66,11 +66,29 @@ describe('BridgeProcess', (): void => {
     expect(child.listenerCount('error')).toBe(0)
     expect(child.listenerCount('close')).toBe(0)
   })
+
+  it('rejects an invalid resolved profile from the bridge', async (): Promise<void> => {
+    const harness = await createHarness({
+      shutdownWithoutNewline: false,
+      exitDelayMs: 20,
+      resolvedProfile: { kernel: 'auto', headless: false, isolated: true },
+    })
+    const bridge = new BridgeProcess({
+      config: harness.config,
+      spawnProcess: harness.spawnProcess,
+    })
+
+    await expect(bridge.start({ kernel: 'chrome' })).rejects.toMatchObject({
+      code: 'E_BROWSER_PROTOCOL',
+    })
+    await expect(bridge.close()).resolves.toBeUndefined()
+  })
 })
 
 interface HarnessOptions {
   readonly shutdownWithoutNewline: boolean
   readonly exitDelayMs: number
+  readonly resolvedProfile?: unknown
 }
 
 async function createHarness(options: HarnessOptions): Promise<{
@@ -105,6 +123,13 @@ async function createHarness(options: HarnessOptions): Promise<{
 }
 
 function bridgeFixtureScript(options: HarnessOptions): string {
+  const resolvedProfile = JSON.stringify(
+    options.resolvedProfile ?? {
+      kernel: 'chromium-headless',
+      headless: true,
+      isolated: true,
+    },
+  )
   return String.raw`
     import { createInterface } from 'node:readline'
 
@@ -137,7 +162,7 @@ function bridgeFixtureScript(options: HarnessOptions): string {
         return
       }
       if (request.method === 'start') {
-        process.stdout.write(response(request, { started: true }) + '\n')
+        process.stdout.write(response(request, { profile: ${resolvedProfile} }) + '\n')
         return
       }
       if (request.method === 'shutdown') {

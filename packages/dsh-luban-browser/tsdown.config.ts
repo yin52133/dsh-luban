@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown'
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: ['src/index.ts', 'src/live-acceptance.ts', 'src/live-acceptance-cli.ts'],
   outDir: 'dist',
   format: ['esm'],
   platform: 'node',

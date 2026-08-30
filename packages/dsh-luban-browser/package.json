@@ -5,10 +5,17 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "luban-browser-acceptance": "./dist/live-acceptance-cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./live-acceptance": {
+      "types": "./dist/live-acceptance.d.ts",
+      "default": "./dist/live-acceptance.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
