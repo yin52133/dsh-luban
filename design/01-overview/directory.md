@@ -6,6 +6,7 @@
 | ---- | ---------- | ----- | --------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：pnpm monorepo 结构与包命名规范          |
 | v0.2 | 2026-08-30 | Codex | 对齐 DSH 0.1.1 bundle/client manifest 契约    |
+| v0.3 | 2026-08-30 | Codex | 校正 A 档三方包身份并记录受控安装入口          |
 
 ## 1. 总览
 
@@ -31,7 +32,7 @@ dsh-luban/
 │   └── 07-references/           # reference-analysis
 ├── scripts/
 │   ├── validate-design.mjs      # 设计一致性校验（F 编号三处一致等）
-│   ├── install-3rd-party.ps1    # A 档：Windows 直装 dshmarket / better-sidebar / dsh-memory
+│   ├── install-3rd-party.ps1    # A 档：Windows 受控安装 dshmarket / dsh-better-sidebar / @furongjun1999/dsh-memory
 │   ├── install-3rd-party.sh     # A 档：Ubuntu 同上
 │   ├── deploy/                  # 双端 profile 生成与部署脚本
 │   └── release/                 # 版本对齐、tag、npm publish 辅助

@@ -9,14 +9,19 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：A/B/C 档台账建立，标注核实状态 |
 | v0.2 | 2026-08-30 | Codex | 核实 browser-use 0.13.8 为 MIT 并确定 uv 集成形态 |
 | v0.3 | 2026-08-30 | Codex | 核实三项 taskboard 参考许可，仅保留 C 档功能描述参考 |
+| v0.4 | 2026-08-30 | Codex | 记录 A 档 npm metadata/lock v2 与源码许可待核边界 |
 
 ## 1. A 档 · 插件级安装原版（不进入本仓库代码）
 
 | 项目 | 地址/包名 | License（状态） | 用途 | 安装方式 | 边界 |
 | --- | --- | --- | --- | --- | --- |
-| dsh-market | npm `dshmarket`（github.com/dsh-market/dsh-market） | 待核实 | 插件市场 UI/热启停/备份恢复 | `install-3rd-party` 脚本 pnpm 直装 | 不 fork 不改；只通过其公开 Update API 集成 |
-| dsh-better-sidebar | npm `dsh-better-sidebar`（github.com/omdsh-dev/DSH-better-sidebar） | 待核实 | Trae 式 diff 展示回退、VSCode 式工作区树（相对路径） | 同上 | 同上；界面体验直接使用原版，不复制其代码 |
-| dsh-memory | npm `@furongjun1999/dsh-memory`（github.com/FuRongJun-1999/dsh-memory） | 待核实 | 长期记忆（本套件不做记忆功能，避免重复） | 同上 | 同上 |
+| dsh-market | npm `dshmarket@1.36.0`（github.com/dsh-market/dsh-market） | MIT（npm metadata/lock v2 已核对；源码 LICENSE 待核实） | 插件市场 UI/热启停/备份恢复 | `install-3rd-party` 脚本经 `dsh plugin add` 安装原版 | 不 fork 不改；只通过其公开 Update API 集成 |
+| dsh-better-sidebar | npm `dsh-better-sidebar@0.17.1`（github.com/omdsh-dev/DSH-better-sidebar） | MIT（npm metadata/lock v2 已核对；源码 LICENSE 待核实） | Trae 式 diff 展示回退、VSCode 式工作区树（相对路径） | 同上 | 同上；界面体验直接使用原版，不复制其代码 |
+| @furongjun1999/dsh-memory | npm `@furongjun1999/dsh-memory@0.4.0`（github.com/FuRongJun-1999/dsh-memory） | MIT（npm metadata/lock v2 已核对；源码 LICENSE 待核实） | 长期记忆（本套件不做记忆功能，避免重复） | 同上 | 同上 |
+
+> lock v2 记录包名、版本、SHA-512 integrity、license metadata 与 repository；安装器在 apply
+> 前向官方 npm registry 逐项复核。该供应链身份门禁不等同于已阅读源码 LICENSE，也不替代真实
+> 安装后的 notices 登记；两项仍是 M12-F004 目标环境验收内容。
 
 ## 2. B 档 · 依赖/服务级集成（只写适配层）
 
@@ -47,7 +52,7 @@
 
 ## 4. 核实任务清单（随开发推进更新）
 
-- [ ] dsh-market / dsh-better-sidebar / dsh-memory 的 LICENSE 文件核验并登记（M12-F004 执行时）
+- [ ] `dshmarket` / `dsh-better-sidebar` / `@furongjun1999/dsh-memory` 的源码 LICENSE 文件与安装后 notices 核验并登记（M12-F004 获授权执行时）
 - [x] browser-use license + python 集成成本评估（MIT；0.13.8；uv 隔离 JSONL 子进程）
 - [x] cloader / maochiy / dsh-web-ui 三家 taskboard license 核验（Apache-2.0 / MIT / Apache-2.0；仅 C 档描述参考）
 - [ ] pi-mono / pi-agentic-compaction license 核验（M08-F001 前；核实为 MIT 后允许读源码级参考）

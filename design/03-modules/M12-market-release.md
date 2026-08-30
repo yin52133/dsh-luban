@@ -14,6 +14,7 @@
 | v0.6 | 2026-08-30 | Codex | 要求 tag 来源于 mainline，并让制品构建复用完整 TS/Python CI 门禁 |
 | v0.7 | 2026-08-30 | Codex | 增加原子 staging 发布与可加载脚手架/profile 验证 |
 | v0.8 | 2026-08-30 | Codex | 记录本地完整发布、安全与 uv 锁定门禁证据 |
+| v0.9 | 2026-08-30 | Codex | 固化 A 档 lock v2、安装授权门禁与目标宿主 profile smoke |
 
 ## 1. 概述与目标
 
@@ -29,7 +30,7 @@
 | M12-F001 | 包脚手架与 manifest 规范：生成 `dsh-luban-*` 包骨架（顶层 `engines.dsh`、`dsh.bundle.patch`、可选 `dsh.client` + `exports["./client"]`；cordis.patch.yml 模板），在一个最简 host/client 插件上验证双端可挂载/可热启停 | P0 | MS1 | 最简插件在双端 profile 挂载成功，client bundle 可加载 |
 | M12-F002 | 市场注册：向 awesome-dsh-plugin 仓库提 PR（entry），GitHub 仓库打 `dsh-plugin` 等 topic | P1 | MS2 | 市场检索可见并可安装 |
 | M12-F003 | 发布流水线：git tag → CI 构建 → GitHub Release（changelog）→ npm publish，同 tag 同内容；版本号全仓统一 | P1 | MS2 | tag 与 npm 版本一一对应 |
-| M12-F004 | A 档第三方安装脚本：win(.ps1)/ubuntu(.sh) 直装 dshmarket、dsh-better-sidebar、dsh-memory 原版到目标 profile（版本锁定可选 latest） | P1 | MS2 | 双端脚本一键装齐且可重复执行 |
+| M12-F004 | A 档第三方安装脚本：win(.ps1)/ubuntu(.sh) 安装 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、`@furongjun1999/dsh-memory@0.4.0` 原版到目标 profile；默认 lock v2 pinned，latest/显式 semver 需二次批准 | P1 | MS2 | 双端脚本一键装齐且可重复执行 |
 | M12-F005 | 安全门禁：gitleaks pre-commit + CI 扫描；npm `files` 白名单；publish 前 dry-run 检查 | P0 | MS1 | 模拟含密钥提交被拦截 |
 | M12-F006 | README 与版本记录规范落地：每包 README 模板、`engines.dsh` 对齐表、CHANGELOG 生成约定 | P1 | MS2 | 新包从模板创建即合规 |
 
@@ -56,23 +57,43 @@ flowchart TD
 ### 3.2 A 档安装脚本
 
 ```mermaid
-flowchart LR
-    U["用户执行 install-3rd-party"] --> P{"检测目标 profile"}
-    P --> Q["pnpm add dshmarket dsh-better-sidebar dsh-memory（原版，非 fork）"]
-    Q --> R["patch 层登记 bundles + 默认配置"]
-    R --> S{"平台差异"}
-    S -- win --> T["ps1：路径/服务提示"]
-    S -- ubuntu --> W["sh：tmux/systemd 提示"]
-    T & W --> V["校验挂载成功并打印启停方法"]
+flowchart TD
+    U["用户执行 install-3rd-party"] --> L["读取并严格校验 lock v2<br/>固定三项包身份"]
+    L --> D{"dry-run?"}
+    D -- 是 --> O["输出请求 spec 与执行计划<br/>不访问 registry、不启动子进程"]
+    D -- 否 --> H{"目标平台与当前宿主一致?"}
+    H -- 否 --> X["fail closed：拒绝跨宿主安装"]
+    H -- 是 --> A["要求绝对且非根 DSH_HOME<br/>+ approved-by"]
+    A --> P{"pinned?"}
+    P -- 否 --> P2["要求 approve-unpinned"]
+    P -- 是 --> R["官方 npm registry 复核<br/>name/version/license/repository/integrity"]
+    P2 --> R
+    R --> E["解析精确 name@version"]
+    E --> C["仅向子进程注入<br/>DSH_HOME + npm_config_registry"]
+    C --> I["dsh plugin --profile ... add"]
 ```
 
 ## 4. 接口设计（脚本与配置约定，非运行时 API）
 
 ```text
 scripts/release/publish.mjs [--dry-run] [--packages <glob>]
-scripts/install-3rd-party.ps1 [-Profile win-debug] [-Version latest|<pin>]
-scripts/install-3rd-party.sh  [--profile ubuntu-server] [--version latest|<pin>]
+scripts/install-3rd-party.ps1 [-Profile win-debug] [-Version pinned|latest|<semver>] [-DshHome <absolute>] [-ApprovedBy <actor>] [-ApproveUnpinned] [-DryRun|-Apply]
+scripts/install-3rd-party.sh  [--profile ubuntu-server] [--version pinned|latest|<semver>] [--dsh-home <absolute>] [--approved-by <actor>] [--approve-unpinned] [--dry-run|--apply]
+node scripts/acceptance/m12-profile-smoke.mjs [--live] [--output <new-json-path>]
 ```
+
+安装器默认 dry-run；该路径只校验本地 lock 并输出计划，不访问 registry，也不启动 `dsh`。
+`--apply`/`-Apply` 仅允许在与目标一致的宿主执行，并要求通过 `--dsh-home`/`-DshHome` 和
+`--approved-by`/`-ApprovedBy` 显式提供绝对、非文件系统根目录的 DSH home 与非空批准人。
+latest 或显式 semver 还必须提供 `--approve-unpinned`/`-ApproveUnpinned`；registry 复核后安装器
+只把解析出的精确版本交给 `dsh plugin add`。`DSH_HOME` 与官方 npm registry 配置只注入该子进程，
+不修改父进程环境。
+
+M12 profile smoke 默认只输出无写入计划。`--live` 根据当前宿主选择 `win-debug` 或
+`ubuntu-server`，要求项目本地 DSH `0.1.1-rc.2`，在忽略目录下创建隔离 `DSH_HOME`，离线安装
+临时 host/client fixture，验证 config 唯一挂载、lazy-CJS client、热停/热启、进程重启和完整
+dispose 序列，最后只清理其明确拥有的临时目录。注入 fake executor 的测试结果只能标记为
+`simulated`，不能升级为 live acceptance；只有目标宿主的真实 `--live` pass 才是该平台证据。
 
 包 manifest 基线（全部包必须满足，CI 校验）：
 
@@ -107,17 +128,23 @@ scripts/install-3rd-party.sh  [--profile ubuntu-server] [--version latest|<pin>]
 ## 6. 配置设计
 
 - `.github/workflows/release.yml` 触发条件 `tags: ['v*']`；npm token 存 GitHub Secrets（P6.1：token 不落盘不入文档）。
-- 第三方版本锁定文件 `scripts/install-3rd-party.versions.json`（pin 模式用）。
+- 第三方版本锁定文件 `scripts/install-3rd-party.versions.json` 使用 schema v2，固定官方 registry，
+  并为三项包记录精确 `name`、`version`、SHA-512 `integrity`、npm metadata `license` 与
+  `repository`。pinned apply 必须逐字段与官方 registry 当前响应一致，否则 fail closed。
 
 ## 7. 依赖与边界
 
-- 下层：npm registry、GitHub Actions、awesome-dsh-plugin 注册表（市场侧）；A 档三插件（只安装，不修改）。
+- 下层：官方 npm registry、GitHub Actions、awesome-dsh-plugin 注册表（市场侧）；A 档三插件
+  （只安装，不修改）。npm metadata 的许可声明不替代源码仓库 LICENSE 与安装后 notices 复核。
 - 平台属性：仓库级；脚本双平台成对提供。
 
 ## 8. 非功能与安全
 
 - 全部红线见 06-release：key/.env 禁提交（P6.1）、files 白名单、gitleaks、泄漏即 rotate。
 - 发布原子性：npm publish 失败可重发同版本前必须先 unpublish/deprecate 处理，流水线给出明确指引，避免半发布状态。
+- A 档 apply 在任何 registry 请求或 `dsh` 子进程前完成批准人、目标宿主与 DSH_HOME 边界校验；
+  dry-run 无网络、无子进程。非 pinned 请求不得沿用 pinned 供应链声明，必须二次批准并记录为
+  `registry-resolved`。
 
 ## 9. checklist 映射
 
@@ -128,6 +155,8 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
 - awesome-dsh-plugin PR 的 entry 字段细则与审核周期须在获准执行 M12-F002 时，以届时上游贡献
   说明为准；仓库只生成待人工审核的候选 entry，不自动调用 GitHub 或修改 topic。
 - client-ui 槽位按模块从官方 SlotMap 选择并做 profile 实测；脚手架只提供 lazy-CJS 构建、manifest 与生命周期模板，不虚构通用页面槽位。
+- A 档三包的 npm metadata/lock v2 已核对；源码仓库 LICENSE 文件、安装后 notices、双平台真实
+  安装、重复执行与挂载仍须在获得授权的可丢弃 profile 上验证。
 
 ## 11. 实现与验证记录
 
@@ -140,20 +169,28 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
   fail closed 地拒绝不属于 mainline 历史的 tag；通过后才执行校验、构建并产出带 SHA-256 manifest
   的不可变 tarball。受保护的 release environment 先创建可恢复 draft Release，再发布同一 tarball
   到 npm，成功后才公开 Release。
-- Windows/Ubuntu 包装脚本共享固定的三项 A 档版本锁，默认 dry-run，只有 `--apply` 才以参数数组调用
-  `dsh plugin --profile ... add`；本轮两个平台计划均已验证，未安装外部插件。
+- Windows/Ubuntu 包装脚本共享 schema v2 A 档锁：`dshmarket@1.36.0`、
+  `dsh-better-sidebar@0.17.1`、`@furongjun1999/dsh-memory@0.4.0`，同时固定 SHA-512
+  integrity、MIT npm metadata 声明与 repository 身份。dry-run 无 registry/子进程；apply 在目标宿主
+  要求显式 DSH_HOME 与批准人，并在官方 registry 逐项复核后才以参数数组调用
+  `dsh plugin --profile ... add`。latest/显式 semver 需额外批准并先解析为精确版本；测试使用注入
+  fetcher/runner，本轮未安装外部插件。
 - `scripts/deploy/setup-windows.ps1` 与 `setup-ubuntu.sh` 共享 allowlist 生成器，默认仅输出计划，
   显式 apply 才创建 profile；随机同父目录 staging 经 canonical/device/inode 身份校验后原子发布，
   已有目标一律拒绝覆盖，异常身份不递归清理。Windows 隔离 `DSH_HOME` 已实际 apply `win-debug`
   与 `ubuntu-server` profile 并由 DSH `--dump-config` 验证加载，随后清理临时目录。
+- `scripts/acceptance/m12-profile-smoke.mjs` 提供 fail-closed 的目标宿主 live runner：生成并构建临时
+  host/client 插件，在隔离 profile 中离线安装，验证 host/client 挂载、热启停、重启与清理；其 5 项
+  契约测试证明默认 plan 不写入、fake 结果不得冒充 live、缺少项目本地 DSH 时副作用前 blocked，
+  以及临时目录所有权和 lazy-CJS 生命周期边界。runner 已就绪不代表双端现场验收已完成。
 - gitleaks pre-commit、mainline CI 与 tag 发布工作流均固定扫描器版本；tag job 在生成任何 tarball
   前独立执行全历史扫描与带校验和的合成密钥拒绝证明，并固定 uv `0.11.8` 复跑
   format/lint/typecheck/build/test、uv lock、ruff、13 项 Python 测试、compileall 与发布校验。npm
   `files` 白名单、pack dry-run、tag/版本/CHANGELOG/README/DSH 基线验证均已落地；发布入口在本地和
   未批准 CI 中 fail closed。
-- M12 的 21 项脚手架、profile 生成、安装、安全、市场与不可变发布测试通过；真实 Ubuntu profile、
-  完整插件挂载、CI tag、npm、
-  GitHub Release、市场 PR 与 topic 仍需在获得明确授权后验收。
+- M12 的脚手架、profile 生成、安装、安全、市场、不可变发布及 profile smoke 契约测试通过；
+  仍缺 Windows/Ubuntu 两台目标宿主分别产出的 live smoke 证据、A 档真实安装与重复执行、CI tag、
+  npm、GitHub Release、市场 PR 与 topic，须在获得明确授权后验收。
 - 全工作区 format/lint/typecheck/build、包测试、跨模块集成、12 包 audit、release metadata 与
   pack/publish dry-run 门禁通过；经 SHA-256 校验的临时 Gitleaks 8.30.1 已证明全历史扫描和合成
   token 拒绝链路，扫描器随后清理且未做全局安装；`uv --locked` 的 Ruff、13 项 Python 测试与

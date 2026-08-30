@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ----------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：分层/契约/HAL/复用三档/许可合规/安全红线 |
 | v0.2 | 2026-08-30 | Codex | 允许包按公开 API 需求提高已实测 DSH 最低版本   |
+| v0.3 | 2026-08-30 | Codex | 固化 A 档包身份与 metadata/源码许可核验边界    |
 
 ## 1. 分层设计（第一原则）
 
@@ -37,7 +38,7 @@
 
 | 档位 | 定义 | 适用对象 | 约束 |
 | --- | --- | --- | --- |
-| **A · 插件级安装原版** | 安装脚本直装原版插件，不进入我们的包 | 仅：dshmarket、dsh-better-sidebar、dsh-memory | 不 fork、不复制代码进本仓库；版本锁定 + 升级走原版发布 |
+| **A · 插件级安装原版** | 安装脚本受控安装原版插件，不进入我们的包 | 仅：`dshmarket`、`dsh-better-sidebar`、`@furongjun1999/dsh-memory` | 不 fork、不复制代码进本仓库；lock v2 固定身份/版本/integrity，升级走原版发布；npm metadata 声明不替代源码 LICENSE 与安装后 notices 核验 |
 | **B · 依赖/服务级集成** | 作为 npm/pip 依赖或外部服务/MCP 接入，只写适配层 | browser-use、Windows-MCP/CursorTouch、openocd、gdb、adb/fastboot、tmux、ssh | 适配层归 HAL；依赖 license 允许集成使用；逐个登记 license |
 | **C · 功能参考重新实现** | 只借鉴需求、功能与优点，代码与界面零接触 | 其余一切 dsh 生态插件（dashi-taskboard、cloader/dsh-taskboard、dsh-web-ui 系列等）、pi 上下文压缩思路 | 见下方许可分级规则 |
 

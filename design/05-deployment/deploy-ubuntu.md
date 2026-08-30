@@ -8,6 +8,7 @@
 | v0.2 | 2026-08-30 | Codex | 增加 M11 browser-use 的 uv 隔离环境要求 |
 | v0.3 | 2026-08-30 | Codex | 落地默认预览且拒绝覆盖的 ubuntu-server 生成脚本 |
 | v0.4 | 2026-08-30 | Codex | 修正 systemd 启动命令并明确强制恢复哨兵语义 |
+| v0.5 | 2026-08-30 | Codex | 同步 A 档 lock v2、安装授权门禁与 profile smoke |
 
 ## 1. 目标形态
 
@@ -29,7 +30,10 @@ flowchart LR
    `--apply`，生成 `~/.dsh/profiles/ubuntu-server/`。可用 `--dsh-home <path>` 指向隔离目录。
    脚本不改官方 preset，且目标已存在时拒绝覆盖。
 3. **安装套件**：`dsh plugin --profile ubuntu-server add dsh-luban-auth ... dsh-luban-server-mode`。
-4. **A 档直装**：`scripts/install-3rd-party.sh --profile ubuntu-server`。
+4. **A 档直装**：先运行 `scripts/install-3rd-party.sh --profile ubuntu-server --dry-run` 审核
+   本地 lock v2 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
+   `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Linux 宿主提供绝对且非根目录的
+   `--dsh-home` 与 `--approved-by`；latest/显式 semver 还需 `--approve-unpinned`。
 5. **服务注册**：M09-F001 安装 user 级 unit：
 
 ```ini
@@ -67,7 +71,35 @@ scripts/deploy/setup-ubuntu.sh --dsh-home /tmp/dsh-acceptance
 scripts/deploy/setup-ubuntu.sh --dsh-home /tmp/dsh-acceptance --apply
 
 DSH_HOME=/tmp/dsh-acceptance dsh --profile ubuntu-server --dump-config
+
+# Review the pinned A-class plan (no registry request and no dsh child process)
+bash scripts/install-3rd-party.sh --profile ubuntu-server --dry-run
+
+# Apply only on the matching Linux host after explicit review
+bash scripts/install-3rd-party.sh --profile ubuntu-server \
+  --dsh-home /tmp/dsh-acceptance --approved-by operator-name --apply
+
+# Unpinned resolution requires a separate approval
+bash scripts/install-3rd-party.sh --profile ubuntu-server --version latest \
+  --dsh-home /tmp/dsh-acceptance --approved-by operator-name --approve-unpinned --apply
 ```
+
+apply 只向 `dsh plugin add` 子进程注入 `DSH_HOME` 与固定官方 npm registry，不修改当前 shell
+环境。执行前会从官方 registry 核对包名、版本、license metadata、repository 与 integrity；任一
+不一致即拒绝安装。npm metadata 中的 MIT 声明不等于源码 LICENSE 或安装后 notices 已完成复核。
+
+M12-F001 的目标宿主 smoke runner 默认只打印无写入计划。Ubuntu 现场验收时使用项目本地
+DSH `0.1.1-rc.2` 执行：
+
+```sh
+node scripts/acceptance/m12-profile-smoke.mjs
+node scripts/acceptance/m12-profile-smoke.mjs --live \
+  --output /tmp/m12-ubuntu-server.json
+```
+
+live runner 在隔离 `DSH_HOME` 中安装临时 host/client fixture，验证唯一挂载、lazy-CJS client、
+热停/热启、重启和清理。runner 存在不代表 Windows/Ubuntu 双端已验收；两端必须各自产出
+真实 live pass 证据。
 
 ## 3. 重启恢复链路（与 M03/M09 协作）
 
