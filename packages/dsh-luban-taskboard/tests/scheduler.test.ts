@@ -4,10 +4,9 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle, AgentRegistry, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import { SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Clock, Task, TaskOutput } from '@luban/core'
-import { LubanError } from '@luban/core'
+import { LubanError, asSessionId } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import type { NightConfig } from '../src/config.js'
@@ -191,7 +190,7 @@ describe('night scheduler', (): void => {
       },
     })
     const executor = new DshAgentNightExecutor(harness.registry, CONFIG, clock)
-    const sessionId = SessionId('luban-night-test')
+    const sessionId = asSessionId('luban-night-test')
 
     await expect(executor.execute(task, sessionId)).resolves.toMatchObject({
       kind: 'commit',
@@ -226,7 +225,7 @@ describe('night scheduler', (): void => {
       hostScope: 'ubuntu',
       priority: 'P2',
     })
-    const sessionId = SessionId('luban-night-fail-closed')
+    const sessionId = asSessionId('luban-night-fail-closed')
 
     const missing = fakeAgentRegistry({})
     await expect(
@@ -411,6 +410,54 @@ describe('night scheduler', (): void => {
     await restarted.dispose()
   })
 
+  it('fails closed instead of choosing between overlapping executor routes', async (): Promise<void> => {
+    const clock = new MutableClock()
+    const { store, claims } = await state(clock)
+    await store.create({
+      title: 'Ambiguous browser task',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'One executor owns the task',
+      tags: ['auto-ok', 'browser'],
+    })
+    const fallback = vi.fn<NightTaskExecutor['execute']>()
+    const first = vi.fn<NightTaskExecutor['execute']>()
+    const second = vi.fn<NightTaskExecutor['execute']>()
+    const scheduler = new DefaultNightScheduler({
+      store,
+      claims,
+      executor: { execute: fallback },
+      config: CONFIG,
+      hostScope: 'ubuntu',
+      clock,
+    })
+    const unregisterFirst = scheduler.registerTaskExecutor({
+      id: 'browser-first',
+      matches: (task): boolean => task.tags.includes('browser'),
+      executor: { execute: first },
+    })
+    const unregisterSecond = scheduler.registerTaskExecutor({
+      id: 'browser-second',
+      matches: (task): boolean => task.tags.includes('browser'),
+      executor: { execute: second },
+    })
+
+    await scheduler.triggerOnce()
+
+    expect(fallback).not.toHaveBeenCalled()
+    expect(first).not.toHaveBeenCalled()
+    expect(second).not.toHaveBeenCalled()
+    const [failed] = await store.query({ statuses: ['todo'] })
+    expect(failed).toMatchObject({ failureCount: 1, claim: null })
+    expect(failed?.outputs.at(-1)?.summary).toContain('Multiple night task executors match task')
+    expect(scheduler.status()).toMatchObject({ quotaUsed: 0, circuit: 'ok' })
+
+    unregisterSecond()
+    unregisterFirst()
+    await scheduler.dispose()
+  })
+
   it('does not claim tasks outside either the tag or host whitelist', async (): Promise<void> => {
     const clock = new MutableClock()
     const { store, claims } = await state(clock)
@@ -495,6 +542,42 @@ describe('night scheduler', (): void => {
     clock.value += 24 * 60 * 60 * 1_000
     await scheduler.triggerOnce()
     expect(scheduler.status().circuit).toBe('ok')
+    await scheduler.dispose()
+  })
+
+  it('records an executor version conflict when the scheduler still owns the claim', async (): Promise<void> => {
+    const clock = new MutableClock()
+    const { store, claims } = await state(clock)
+    await store.create({
+      title: 'Executor-local conflict',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'The task returns safely to todo',
+      tags: ['auto-ok'],
+    })
+    const scheduler = new DefaultNightScheduler({
+      store,
+      claims,
+      executor: {
+        execute: (): Promise<TaskOutput> =>
+          Promise.reject(
+            new LubanError('E_VERSION_CONFLICT', 'Executor workspace version changed', {
+              retriable: true,
+            }),
+          ),
+      },
+      config: CONFIG,
+      hostScope: 'ubuntu',
+      clock,
+    })
+
+    await scheduler.triggerOnce()
+
+    const [failed] = await store.query({ statuses: ['todo'] })
+    expect(failed).toMatchObject({ status: 'todo', claim: null, failureCount: 1 })
+    expect(failed?.outputs.at(-1)?.summary).toBe('Executor workspace version changed')
+    expect(scheduler.status()).toMatchObject({ quotaUsed: 0, circuit: 'ok' })
     await scheduler.dispose()
   })
 

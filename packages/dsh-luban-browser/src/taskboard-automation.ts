@@ -1,4 +1,11 @@
-import type { AgentClaimService, Task, TaskEvent, TaskStore } from '@luban/core'
+import type {
+  AgentClaimService,
+  SessionId,
+  Task,
+  TaskEvent,
+  TaskOutput,
+  TaskStore,
+} from '@luban/core'
 import { BrowserError } from './errors.js'
 import type { BrowserQueue } from './types.js'
 
@@ -10,6 +17,19 @@ interface TaskExecutionState {
   tail: Promise<void>
   readonly generations: Map<string, Promise<void>>
 }
+
+interface BrowserExecutionFailure {
+  readonly ok: false
+  readonly message: string
+  readonly retriable: boolean
+}
+
+interface BrowserExecutionSuccess {
+  readonly ok: true
+  readonly output: TaskOutput
+}
+
+type BrowserExecutionResult = BrowserExecutionFailure | BrowserExecutionSuccess
 
 export class BrowserTaskboardAutomation {
   readonly #queue: BrowserQueue
@@ -30,6 +50,7 @@ export class BrowserTaskboardAutomation {
 
   public async executeClaimedTask(task: Task): Promise<void> {
     if (!task.tags.includes('browser')) return
+    if (isNightSchedulerClaim(task)) return
     const generation = claimGeneration(task)
     const state = this.#executions.get(task.id) ?? {
       tail: Promise.resolve(),
@@ -62,6 +83,21 @@ export class BrowserTaskboardAutomation {
     return execution
   }
 
+  /** Execute a scheduler-owned browser task without mutating its terminal claim state. */
+  public async executeNightTask(task: Task, sessionId: SessionId): Promise<TaskOutput> {
+    if (!isNightSchedulerClaim(task, sessionId)) {
+      throw new BrowserError(
+        'E_BROWSER_POLICY',
+        'Night browser execution requires the owning Luban night scheduler claim',
+      )
+    }
+    const result = await this.#executeBrowserTask(task)
+    if (!result.ok) {
+      throw new BrowserError('E_BROWSER_RUN', result.message, result.retriable)
+    }
+    return result.output
+  }
+
   async #runClaimedTask(task: Task): Promise<void> {
     const expectedClaim = task.claim
     if (expectedClaim?.actor.kind !== 'agent') {
@@ -70,68 +106,16 @@ export class BrowserTaskboardAutomation {
     let failureReported = false
     let failureAttempted = false
     try {
-      if (!task.tags.includes('auto-ok')) {
-        throw new BrowserError(
-          'E_BROWSER_POLICY',
-          'Automatic browser tasks require the auto-ok tag',
-        )
-      }
-      const templateTags = task.tags.filter((tag) => tag.startsWith(TEMPLATE_TAG))
-      if (templateTags.length !== 1) {
-        throw new BrowserError(
-          'E_BROWSER_POLICY',
-          'Automatic browser tasks require exactly one template tag',
-        )
-      }
-      const templateId = templateTags[0]?.slice(TEMPLATE_TAG.length) ?? ''
-      if (!TEMPLATE_ID.test(templateId)) {
-        throw new BrowserError('E_BROWSER_POLICY', 'Invalid browser template tag')
-      }
-      const params = parseParameters(task.tags)
-      await this.#claims.reportProgress(
-        task.id,
-        {
-          summary: 'Browser automation queued',
-          percent: 0,
-        },
-        { expectedClaim },
-      )
-      const queued = this.#queue.enqueue({
-        task: {
-          templateId,
-          goal: task.description.trim() === '' ? task.title : task.description,
-        },
-        params,
-        automatic: true,
-      })
-      const completed = await this.#queue.wait(queued.id)
-      if (completed.status !== 'succeeded' || completed.result?.status !== 'ok') {
+      const result = await this.#executeBrowserTask(task)
+      if (!result.ok) {
         failureAttempted = true
-        await this.#claims.fail(task.id, completed.error?.message ?? 'Browser automation failed', {
+        await this.#claims.fail(task.id, result.message, {
           expectedClaim,
         })
         failureReported = true
         return
       }
-      await this.#claims.reportProgress(
-        task.id,
-        {
-          summary: 'Browser automation completed',
-          percent: 100,
-        },
-        { expectedClaim },
-      )
-      await this.#claims.complete(
-        task.id,
-        {
-          kind: 'artifact',
-          ref: completed.result.screenshots[0] ?? `browser-run:${completed.id}`,
-          summary: summarize(completed.result.text),
-          at: Date.now(),
-          by: expectedClaim.actor,
-        },
-        { autoDone: true, expectedClaim },
-      )
+      await this.#claims.complete(task.id, result.output, { autoDone: true, expectedClaim })
     } catch (error: unknown) {
       if (!failureReported && !failureAttempted) {
         failureAttempted = true
@@ -143,6 +127,70 @@ export class BrowserTaskboardAutomation {
         failureReported = true
       }
       throw error
+    }
+  }
+
+  async #executeBrowserTask(task: Task): Promise<BrowserExecutionResult> {
+    const expectedClaim = task.claim
+    if (expectedClaim?.actor.kind !== 'agent') {
+      throw new BrowserError('E_BROWSER_POLICY', 'Automatic browser tasks require an agent claim')
+    }
+    if (!task.tags.includes('auto-ok')) {
+      throw new BrowserError('E_BROWSER_POLICY', 'Automatic browser tasks require the auto-ok tag')
+    }
+    const templateTags = task.tags.filter((tag) => tag.startsWith(TEMPLATE_TAG))
+    if (templateTags.length !== 1) {
+      throw new BrowserError(
+        'E_BROWSER_POLICY',
+        'Automatic browser tasks require exactly one template tag',
+      )
+    }
+    const templateId = templateTags[0]?.slice(TEMPLATE_TAG.length) ?? ''
+    if (!TEMPLATE_ID.test(templateId)) {
+      throw new BrowserError('E_BROWSER_POLICY', 'Invalid browser template tag')
+    }
+    const params = parseParameters(task.tags)
+    await this.#claims.reportProgress(
+      task.id,
+      {
+        summary: 'Browser automation queued',
+        percent: 0,
+      },
+      { expectedClaim },
+    )
+    const queued = this.#queue.enqueue({
+      task: {
+        templateId,
+        goal: task.description.trim() === '' ? task.title : task.description,
+      },
+      params,
+      automatic: true,
+    })
+    const completed = await this.#queue.wait(queued.id)
+    if (completed.status !== 'succeeded' || completed.result?.status !== 'ok') {
+      return {
+        ok: false,
+        message: completed.error?.message ?? 'Browser automation failed',
+        retriable: completed.error?.retriable ?? false,
+      }
+    }
+    await this.#claims.reportProgress(
+      task.id,
+      {
+        summary: 'Browser automation completed',
+        percent: 100,
+      },
+      { expectedClaim },
+    )
+    return {
+      ok: true,
+      output: {
+        kind: 'artifact',
+        ref: completed.result.screenshots[0] ?? `browser-run:${completed.id}`,
+        summary: summarize(completed.result.text),
+        at: Date.now(),
+        by: expectedClaim.actor,
+      },
     }
   }
 }
@@ -184,5 +232,16 @@ function claimGeneration(task: Task): string {
     claim.sessionId,
     claim.claimedAt,
     claim.leaseId ?? null,
+    claim.executionOwner ?? null,
   ])
+}
+
+function isNightSchedulerClaim(task: Task, sessionId?: SessionId): boolean {
+  const claim = task.claim
+  if (claim?.actor.kind !== 'agent') return false
+  return (
+    claim.executionOwner === 'night-scheduler' &&
+    String(claim.actor.id) === String(claim.sessionId) &&
+    (sessionId === undefined || claim.sessionId === sessionId)
+  )
 }

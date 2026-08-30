@@ -126,6 +126,8 @@ export interface ClaimSession {
   readonly actor: Actor
   readonly sessionId: SessionId
   readonly host: HostId
+  /** Trusted in-process execution owner; HTTP claim requests cannot set this field. */
+  readonly executionOwner?: 'night-scheduler'
 }
 
 export type ClaimResult =
@@ -158,11 +160,22 @@ export interface SchedulerStatus {
   readonly circuit: 'ok' | 'open'
 }
 
+export interface NightTaskExecutor {
+  execute(task: Task, sessionId: SessionId): Promise<TaskOutput>
+}
+
+export interface NightTaskExecutorRoute {
+  readonly id: string
+  readonly matches: (task: Task) => boolean
+  readonly executor: NightTaskExecutor
+}
+
 export interface NightScheduler {
   start(): void
   stop(): void
   status(): SchedulerStatus
   triggerOnce(): Promise<void>
+  registerTaskExecutor(route: NightTaskExecutorRoute): Unsubscribe
 }
 
 export interface SessionSpec {

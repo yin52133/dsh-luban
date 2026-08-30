@@ -156,6 +156,36 @@ describe('TaskboardHttpApi', (): void => {
     })
     expect(await dropped.json()).toMatchObject({ task: { status: 'dropped', version: 2 } })
 
+    const spoofCandidate = await fetch(`${base}/tasks`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        title: 'HTTP owner spoof',
+        status: 'todo',
+        hostScope: 'ubuntu',
+        priority: 'P1',
+        acceptance: 'HTTP cannot acquire trusted scheduler ownership',
+        tags: ['owner-spoof'],
+      }),
+    })
+    expect(spoofCandidate.status).toBe(201)
+    const spoofClaim = await fetch(`${base}/claim`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        sessionId: 'luban-night-forged',
+        host: 'ubuntu',
+        tags: ['owner-spoof'],
+        displayName: 'Luban Night Scheduler',
+        executionOwner: 'night-scheduler',
+      }),
+    })
+    expect(spoofClaim.status).toBe(200)
+    const spoofed = (await spoofClaim.json()) as {
+      readonly task: { readonly claim?: { readonly executionOwner?: string } | null }
+    }
+    expect(spoofed.task.claim?.executionOwner).toBeUndefined()
+
     const imported = await fetch(`${base}/import`, {
       method: 'POST',
       headers,

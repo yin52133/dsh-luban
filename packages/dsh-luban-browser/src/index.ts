@@ -1,6 +1,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { AgentClaimService, AuthService, BrowserAdapter, TaskStore } from '@luban/core'
+import type {
+  AgentClaimService,
+  AuthService,
+  BrowserAdapter,
+  NightScheduler,
+  TaskOutput,
+  TaskStore,
+} from '@luban/core'
 import { BridgeProcess } from './bridge-process.js'
 import { BrowserService } from './browser-service.js'
 import { resolveConfig, type Config } from './config.js'
@@ -10,6 +17,9 @@ import { BrowserTaskboardAutomation } from './taskboard-automation.js'
 declare module '@deepseek-ai/cordis' {
   interface Context {
     lubanBrowser: BrowserAdapter
+    lubanTaskStore: TaskStore
+    lubanAgentClaim: AgentClaimService
+    lubanNightScheduler: NightScheduler
   }
 
   interface Events {
@@ -55,11 +65,31 @@ export function apply(ctx: Context, config: Config = {}): void {
   )
 
   if (resolved.taskboardAutoRun) {
-    ctx.inject(['lubanTaskStore', 'lubanAgentClaim'], (taskContext): (() => void) => {
-      const store = taskContext.get('lubanTaskStore') as TaskStore
-      const claims = taskContext.get('lubanAgentClaim') as AgentClaimService
-      return new BrowserTaskboardAutomation(service, claims).bind(store)
-    })
+    ctx.inject(
+      ['lubanTaskStore', 'lubanAgentClaim', 'lubanNightScheduler'],
+      (taskContext): (() => void) => {
+        const store = taskContext.get('lubanTaskStore')
+        const claims = taskContext.get('lubanAgentClaim')
+        const scheduler = taskContext.get('lubanNightScheduler')
+        if (store === undefined || claims === undefined || scheduler === undefined) {
+          throw new Error('Browser taskboard automation services are unavailable')
+        }
+        const automation = new BrowserTaskboardAutomation(service, claims)
+        const unregister = scheduler.registerTaskExecutor({
+          id: 'luban-browser',
+          matches: (task): boolean => task.tags.includes('browser'),
+          executor: {
+            execute: (task, sessionId): Promise<TaskOutput> =>
+              automation.executeNightTask(task, sessionId),
+          },
+        })
+        const unbind = automation.bind(store)
+        return (): void => {
+          unbind()
+          unregister()
+        }
+      },
+    )
   }
 }
 

@@ -2,14 +2,17 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { Agent, AgentHandle, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId as DshSessionId } from '@deepseek-ai/dsh-session'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {
   Actor,
   Clock,
   HostId,
   NightScheduler,
+  NightTaskExecutor,
+  NightTaskExecutorRoute,
   SchedulerStatus,
+  SessionId,
   Task,
   TaskOutput,
 } from '@luban/core'
@@ -18,8 +21,9 @@ import type { NightConfig } from './config.js'
 import type { DefaultAgentClaimService } from './claim-service.js'
 import type { JsonTaskStore } from './task-store.js'
 
-export interface NightTaskExecutor {
-  execute(task: Task, sessionId: ReturnType<typeof SessionId>): Promise<TaskOutput>
+export type { NightTaskExecutor, NightTaskExecutorRoute } from '@luban/core'
+
+interface DisposableNightTaskExecutor extends NightTaskExecutor {
   dispose?(): Promise<void>
 }
 
@@ -75,7 +79,7 @@ function hasSuccessfulResultEvent(
 }
 
 function resultTool(
-  sessionId: ReturnType<typeof SessionId>,
+  sessionId: ReturnType<typeof DshSessionId>,
   state: NightExecutionReportState,
 ): ToolDefinition {
   return defineTool({
@@ -203,10 +207,11 @@ export class DshAgentNightExecutor implements NightTaskExecutor {
     this.#clock = clock
   }
 
-  public async execute(task: Task, sessionId: ReturnType<typeof SessionId>): Promise<TaskOutput> {
+  public async execute(task: Task, sessionId: SessionId): Promise<TaskOutput> {
+    const dshSessionId = DshSessionId(sessionId)
     const reportState: NightExecutionReportState = { calls: 0 }
     const handle = await this.#agents.create({
-      sessionId,
+      sessionId: dshSessionId,
       meta: {
         ...(task.workspace === undefined ? {} : { cwd: resolve(task.workspace) }),
       },
@@ -216,7 +221,7 @@ export class DshAgentNightExecutor implements NightTaskExecutor {
       },
       setup: (agentCtx): void => {
         agentCtx.tools.restrict({ allow: this.#config.toolAllowlist })
-        agentCtx.tools.register(resultTool(sessionId, reportState))
+        agentCtx.tools.register(resultTool(dshSessionId, reportState))
       },
     })
     this.#handles.add(handle)
@@ -284,11 +289,12 @@ export class DshAgentNightExecutor implements NightTaskExecutor {
 export class DefaultNightScheduler implements NightScheduler {
   readonly #store: JsonTaskStore
   readonly #claims: DefaultAgentClaimService
-  readonly #executor: NightTaskExecutor | undefined
+  readonly #executor: DisposableNightTaskExecutor | undefined
   readonly #config: NightConfig
   readonly #hostScope: 'win' | 'ubuntu'
   readonly #hostId: HostId
   readonly #clock: Clock
+  readonly #taskExecutors = new Map<string, NightTaskExecutorRoute>()
   #timer: ReturnType<typeof setInterval> | undefined
   #running = false
   #lastStatus: SchedulerStatus = { windowActive: false, quotaUsed: 0, circuit: 'ok' }
@@ -296,7 +302,7 @@ export class DefaultNightScheduler implements NightScheduler {
   public constructor(options: {
     readonly store: JsonTaskStore
     readonly claims: DefaultAgentClaimService
-    readonly executor?: NightTaskExecutor
+    readonly executor?: DisposableNightTaskExecutor
     readonly config: NightConfig
     readonly hostScope: 'win' | 'ubuntu'
     readonly hostId?: HostId
@@ -329,6 +335,22 @@ export class DefaultNightScheduler implements NightScheduler {
     return this.#lastStatus
   }
 
+  /** Register one exclusive executor for tasks matched by this route. */
+  public registerTaskExecutor(route: NightTaskExecutorRoute): () => void {
+    const id = route.id.trim()
+    if (id === '') {
+      throw new LubanError('E_INVALID_INPUT', 'Night task executor route id is required')
+    }
+    if (this.#taskExecutors.has(id)) {
+      throw new LubanError('E_INVALID_INPUT', `Night task executor route already exists: ${id}`)
+    }
+    const registered = { ...route, id }
+    this.#taskExecutors.set(id, registered)
+    return (): void => {
+      if (this.#taskExecutors.get(id) === registered) this.#taskExecutors.delete(id)
+    }
+  }
+
   public async triggerOnce(): Promise<void> {
     if (!this.#config.enabled) throw new LubanError('E_UNAVAILABLE', 'Night scheduler is disabled')
     if (this.#running) return
@@ -346,12 +368,11 @@ export class DefaultNightScheduler implements NightScheduler {
       if (!windowActive || state.circuit === 'open' || state.quotaUsed >= this.#config.dailyQuota)
         return
       if (!this.#config.hostScopeWhitelist.includes(this.#hostScope)) return
-      if (this.#executor === undefined) {
+      if (this.#executor === undefined && this.#taskExecutors.size === 0) {
         throw new LubanError('E_UNAVAILABLE', 'No DSH night executor is available')
       }
 
-      const sessionId = SessionId(`luban-night-${randomUUID()}`)
-      const claimSessionId = asSessionId(sessionId)
+      const sessionId = asSessionId(`luban-night-${randomUUID()}`)
       const actor: Actor = {
         kind: 'agent',
         id: asActorId(sessionId),
@@ -359,7 +380,7 @@ export class DefaultNightScheduler implements NightScheduler {
       }
       const claim = await this.#claims.claim(
         { statuses: ['todo'], tags: this.#config.tagWhitelist, requireAcceptance: true },
-        { actor, sessionId: claimSessionId, host: this.#hostId },
+        { actor, sessionId, host: this.#hostId, executionOwner: 'night-scheduler' },
       )
       if (!claim.ok) return
       const expectedClaim = claim.task.claim
@@ -367,7 +388,11 @@ export class DefaultNightScheduler implements NightScheduler {
         throw new LubanError('E_IO', 'Claimed night task is missing its claim identity')
       }
       try {
-        const output = await this.#executor.execute(claim.task, sessionId)
+        const executor = this.#executorFor(claim.task)
+        if (executor === undefined) {
+          throw new LubanError('E_UNAVAILABLE', 'No night executor matches the claimed task')
+        }
+        const output = await executor.execute(claim.task, sessionId)
         await this.#claims.complete(claim.task.id, output, { autoDone: true, expectedClaim })
         state = await this.#store.updateScheduler((current) => ({
           ...current,
@@ -377,18 +402,26 @@ export class DefaultNightScheduler implements NightScheduler {
         }))
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Autonomous execution failed'
-        await this.#claims.fail(claim.task.id, message, { expectedClaim })
-        state = await this.#store.updateScheduler((current) => {
-          const consecutiveFailures = current.consecutiveFailures + 1
-          return {
-            ...current,
-            consecutiveFailures,
-            circuit:
-              consecutiveFailures >= this.#config.circuitBreaker.maxConsecutiveFailures
-                ? 'open'
-                : 'ok',
-          }
-        })
+        let failureRecorded = false
+        try {
+          await this.#claims.fail(claim.task.id, message, { expectedClaim })
+          failureRecorded = true
+        } catch (failureError: unknown) {
+          if (!isClaimConflict(failureError)) throw failureError
+        }
+        if (failureRecorded) {
+          state = await this.#store.updateScheduler((current) => {
+            const consecutiveFailures = current.consecutiveFailures + 1
+            return {
+              ...current,
+              consecutiveFailures,
+              circuit:
+                consecutiveFailures >= this.#config.circuitBreaker.maxConsecutiveFailures
+                  ? 'open'
+                  : 'ok',
+            }
+          })
+        }
       }
       this.#lastStatus = {
         windowActive,
@@ -402,7 +435,34 @@ export class DefaultNightScheduler implements NightScheduler {
 
   public async dispose(): Promise<void> {
     this.stop()
+    this.#taskExecutors.clear()
     await this.#executor?.dispose?.()
+  }
+
+  #executorFor(task: Task): NightTaskExecutor | undefined {
+    const matches: NightTaskExecutorRoute[] = []
+    for (const route of this.#taskExecutors.values()) {
+      let matched: boolean
+      try {
+        matched = route.matches(task)
+      } catch (error: unknown) {
+        throw new LubanError(
+          'E_INVALID_INPUT',
+          `Night task executor route failed while matching: ${route.id}`,
+          { cause: error },
+        )
+      }
+      if (matched) matches.push(route)
+    }
+    if (matches.length > 1) {
+      throw new LubanError(
+        'E_INVALID_INPUT',
+        `Multiple night task executors match task ${task.id}: ${matches
+          .map((route) => route.id)
+          .join(', ')}`,
+      )
+    }
+    return matches[0]?.executor ?? this.#executor
   }
 
   async #refreshStatus(): Promise<void> {
@@ -414,4 +474,8 @@ export class DefaultNightScheduler implements NightScheduler {
       circuit: state.dateKey === localDateKey(now) ? state.circuit : 'ok',
     }
   }
+}
+
+function isClaimConflict(error: unknown): boolean {
+  return error instanceof LubanError && error.code === 'E_VERSION_CONFLICT'
 }

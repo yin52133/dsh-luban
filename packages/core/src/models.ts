@@ -27,6 +27,8 @@ export interface TaskClaim {
   readonly claimedAt: EpochMs
   /** Unique for newly issued claims; omitted only on ledgers written before lease identities. */
   readonly leaseId?: string
+  /** Trusted in-process owner of terminal claim mutations. */
+  readonly executionOwner?: 'night-scheduler'
 }
 
 export interface Task {

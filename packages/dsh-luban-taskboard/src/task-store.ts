@@ -52,6 +52,7 @@ export interface AtomicClaimInput {
   readonly actor: Actor
   readonly sessionId: SessionId
   readonly host: 'win' | 'ubuntu'
+  readonly executionOwner?: 'night-scheduler'
   readonly statuses?: readonly TaskStatus[]
   readonly workspace?: string
   readonly tags?: readonly string[]
@@ -161,7 +162,8 @@ function sameClaim(left: TaskClaim, right: TaskClaim): boolean {
     left.actor.id === right.actor.id &&
     left.sessionId === right.sessionId &&
     left.claimedAt === right.claimedAt &&
-    left.leaseId === right.leaseId
+    left.leaseId === right.leaseId &&
+    left.executionOwner === right.executionOwner
   )
 }
 
@@ -403,6 +405,7 @@ export class JsonTaskStore {
           sessionId: input.sessionId,
           claimedAt: at,
           leaseId: `lease-${String(ledger.sequence + 1)}-${randomBytes(8).toString('hex')}`,
+          ...(input.executionOwner === undefined ? {} : { executionOwner: input.executionOwner }),
         },
         version: selected.task.version + 1,
         updatedAt: at,

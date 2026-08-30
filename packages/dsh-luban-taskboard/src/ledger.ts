@@ -123,11 +123,17 @@ function taskValue(value: unknown, index: number): Task {
           ) {
             throw new LubanError('E_INVALID_INPUT', `${label}.claim.leaseId is invalid`)
           }
+          if (item.executionOwner !== undefined && item.executionOwner !== 'night-scheduler') {
+            throw new LubanError('E_INVALID_INPUT', `${label}.claim.executionOwner is invalid`)
+          }
           return {
             actor: actorValue(item.actor, `${label}.claim.actor`),
             sessionId: asSessionId(stringValue(item.sessionId, `${label}.claim.sessionId`)),
             claimedAt: numberValue(item.claimedAt, `${label}.claim.claimedAt`),
             ...(typeof item.leaseId === 'string' ? { leaseId: item.leaseId } : {}),
+            ...(item.executionOwner === 'night-scheduler'
+              ? { executionOwner: 'night-scheduler' as const }
+              : {}),
           }
         })()
   return {

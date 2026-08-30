@@ -49,6 +49,7 @@ export class DefaultAgentClaimService implements AgentClaimService {
       actor: session.actor,
       sessionId: session.sessionId,
       host: this.#hostScope,
+      ...(session.executionOwner === undefined ? {} : { executionOwner: session.executionOwner }),
       ...(filter.statuses === undefined ? {} : { statuses: filter.statuses }),
       ...(filter.workspace === undefined ? {} : { workspace: filter.workspace }),
       ...(filter.tags === undefined ? {} : { tags: filter.tags }),

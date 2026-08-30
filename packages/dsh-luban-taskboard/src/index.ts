@@ -37,7 +37,7 @@ export { TaskboardHttpApi, TaskEventStream } from './http-api.js'
 export { createLedgerStore, decodeLedger, emptyLedger } from './ledger.js'
 export type { SchedulerLedger, TaskAuditEntry, TaskLedger } from './ledger.js'
 export { DefaultNightScheduler, DshAgentNightExecutor, isInWindow } from './night-scheduler.js'
-export type { NightTaskExecutor } from './night-scheduler.js'
+export type { NightTaskExecutor, NightTaskExecutorRoute } from './night-scheduler.js'
 export { JsonTaskStore } from './task-store.js'
 export type { ImportReport, ImportTask } from './task-store.js'
 

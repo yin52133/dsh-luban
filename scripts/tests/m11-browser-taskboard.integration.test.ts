@@ -1,8 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import type { Actor, Clock, Task, TaskClaim } from '../../packages/core/src/index.js'
+import { describe, expect, it, vi } from 'vitest'
+import type { Actor, Clock, Task, TaskClaim, TaskOutput } from '../../packages/core/src/index.js'
 import { asActorId, asHostId, asSessionId } from '../../packages/core/src/index.js'
 import { BrowserTaskboardAutomation } from '../../packages/dsh-luban-browser/src/taskboard-automation.js'
 import type {
@@ -13,6 +13,10 @@ import type {
 } from '../../packages/dsh-luban-browser/src/types.js'
 import { DefaultAgentClaimService } from '../../packages/dsh-luban-taskboard/src/claim-service.js'
 import { createLedgerStore } from '../../packages/dsh-luban-taskboard/src/ledger.js'
+import {
+  DefaultNightScheduler,
+  type NightTaskExecutor,
+} from '../../packages/dsh-luban-taskboard/src/night-scheduler.js'
 import { JsonTaskStore } from '../../packages/dsh-luban-taskboard/src/task-store.js'
 
 const NOW = 1_777_777_777_777
@@ -25,6 +29,77 @@ const SESSION = {
 } as const
 
 describe('M11 taskboard browser automation integration', (): void => {
+  it('gives one routed browser executor exclusive ownership of a night claim', async (): Promise<void> => {
+    const harness = await createHarness([
+      (job): Promise<BrowserJobSnapshot> => Promise.resolve(succeeded(job, 'night-browser')),
+    ])
+    const browserPathCompleted = deferred<undefined>()
+    let schedulerClaim: TaskClaim | null | undefined
+    const stopCompletionWatch = harness.store.subscribe((event): void => {
+      if (event.task.status === 'doing') schedulerClaim = event.task.claim
+      if (event.task.status === 'review') browserPathCompleted.resolve(undefined)
+    })
+    const fallbackExecute = vi.fn<NightTaskExecutor['execute']>(async (): Promise<TaskOutput> => {
+      await browserPathCompleted.promise
+      return {
+        kind: 'artifact',
+        ref: '/artifacts/duplicate-night-executor.png',
+        summary: 'The fallback executor must not own a routed browser task.',
+        at: NOW,
+        by: AGENT,
+      }
+    })
+    const fallback: NightTaskExecutor = { execute: fallbackExecute }
+    const scheduler = new DefaultNightScheduler({
+      store: harness.store,
+      claims: harness.claims,
+      executor: fallback,
+      config: {
+        enabled: true,
+        window: '10:00-12:00',
+        dailyQuota: 1,
+        hostScopeWhitelist: ['ubuntu'],
+        tagWhitelist: ['auto-ok'],
+        model: { provider: 'deterministic', id: 'browser-test' },
+        toolAllowlist: [],
+        circuitBreaker: { maxConsecutiveFailures: 2 },
+      },
+      hostScope: 'ubuntu',
+      clock: CLOCK,
+    })
+    const unregisterRoute = scheduler.registerTaskExecutor({
+      id: 'luban-browser',
+      matches: (task): boolean => task.tags.includes('browser'),
+      executor: {
+        execute: (task, sessionId): Promise<TaskOutput> =>
+          harness.automation.executeNightTask(task, sessionId),
+      },
+    })
+
+    try {
+      const task = await harness.create(['browser', 'auto-ok', 'browser-template:night-safe'])
+
+      await expect(scheduler.triggerOnce()).resolves.toBeUndefined()
+
+      const completed = await harness.store.get(task.id)
+      expect(fallbackExecute).not.toHaveBeenCalled()
+      expect(harness.queue.requests).toHaveLength(1)
+      expect(schedulerClaim).toMatchObject({ executionOwner: 'night-scheduler' })
+      expect(completed).toMatchObject({ status: 'review', claim: null, autoDone: true })
+      expect(completed?.outputs.map((output) => output.ref)).toEqual([
+        'progress:0',
+        'progress:100',
+        '/artifacts/night-browser.png',
+      ])
+      expect(scheduler.status()).toMatchObject({ quotaUsed: 1, circuit: 'ok' })
+    } finally {
+      unregisterRoute()
+      stopCompletionWatch()
+      await scheduler.dispose()
+      await harness.dispose()
+    }
+  })
+
   it('persists claim, queue progress, artifact, and autoDone exactly once', async (): Promise<void> => {
     const completion = deferred<undefined>()
     const harness = await createHarness([
@@ -287,9 +362,11 @@ class ControlledQueue implements BrowserQueue {
 
 interface Harness {
   readonly store: JsonTaskStore
+  readonly claims: DefaultAgentClaimService
   readonly automation: BrowserTaskboardAutomation
   readonly queue: ControlledQueue
   readonly ledgerPath: string
+  readonly create: (tags: readonly string[]) => Promise<Task>
   readonly createAndClaim: (tags: readonly string[]) => Promise<Task>
   readonly claim: () => Promise<Task>
   readonly waitForTask: (id: Task['id'], predicate: (task: Task) => boolean) => Promise<Task>
@@ -317,9 +394,20 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
   }
   return {
     store,
+    claims,
     automation,
     queue,
     ledgerPath,
+    create: async (tags): Promise<Task> =>
+      store.create({
+        title: 'Automate a browser task',
+        description: 'Collect the requested browser artifact.',
+        status: 'todo',
+        hostScope: 'ubuntu',
+        priority: 'P1',
+        acceptance: 'The browser result is attached for review.',
+        tags,
+      }),
     createAndClaim: async (tags): Promise<Task> => {
       await store.create({
         title: 'Automate a browser task',

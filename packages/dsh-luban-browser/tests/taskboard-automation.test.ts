@@ -40,6 +40,55 @@ describe('BrowserTaskboardAutomation', () => {
     expect(claims.fail).not.toHaveBeenCalled()
   })
 
+  it('returns scheduler-owned output without competing for terminal claim ownership', async () => {
+    const { queue, enqueue } = fakeQueue()
+    const claims = fakeClaims()
+    const automation = new BrowserTaskboardAutomation(queue, claims.service)
+    const claimedTask = nightTask([
+      'browser',
+      'auto-ok',
+      'browser-template:datasheet',
+      'browser-param:part=STM32',
+    ])
+
+    const output = await automation.executeNightTask(
+      claimedTask,
+      asSessionId('luban-night-session-1'),
+    )
+    await automation.executeClaimedTask(claimedTask)
+
+    expect(output).toMatchObject({ kind: 'artifact', ref: '/artifact/result.png' })
+    expect(enqueue).toHaveBeenCalledOnce()
+    expect(claims.progress).toHaveBeenCalledTimes(2)
+    expect(claims.complete).not.toHaveBeenCalled()
+    expect(claims.fail).not.toHaveBeenCalled()
+  })
+
+  it('does not trust a forged scheduler display name and session prefix', async () => {
+    const { queue, enqueue } = fakeQueue()
+    const claims = fakeClaims()
+    const automation = new BrowserTaskboardAutomation(queue, claims.service)
+    const value = task(['browser', 'auto-ok', 'browser-template:datasheet'])
+    const forged: Task = {
+      ...value,
+      claim: {
+        actor: {
+          kind: 'agent',
+          id: asActorId('luban-night-forged'),
+          displayName: 'Luban Night Scheduler',
+        },
+        sessionId: asSessionId('luban-night-forged'),
+        claimedAt: 1,
+        leaseId: 'forged-lease',
+      },
+    }
+
+    await automation.executeClaimedTask(forged)
+
+    expect(enqueue).toHaveBeenCalledOnce()
+    expect(claims.complete).toHaveBeenCalledOnce()
+  })
+
   it('rejects automatic execution without auto-ok', async () => {
     const { queue, enqueue } = fakeQueue()
     const claims = fakeClaims()
@@ -174,6 +223,24 @@ function task(tags: readonly string[], leaseId = 'lease-1', version = 1): Task {
     outputs: [],
     createdAt: 1,
     updatedAt: 1,
+  }
+}
+
+function nightTask(tags: readonly string[]): Task {
+  const value = task(tags)
+  return {
+    ...value,
+    claim: {
+      actor: {
+        kind: 'agent',
+        id: asActorId('luban-night-session-1'),
+        displayName: 'Luban Night Scheduler',
+      },
+      sessionId: asSessionId('luban-night-session-1'),
+      claimedAt: 1,
+      leaseId: 'night-lease-1',
+      executionOwner: 'night-scheduler',
+    },
   }
 }
 

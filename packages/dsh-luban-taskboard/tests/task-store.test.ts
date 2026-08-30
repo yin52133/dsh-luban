@@ -22,13 +22,20 @@ async function harness(): Promise<{
   readonly store: JsonTaskStore
   readonly claims: DefaultAgentClaimService
   readonly clock: TestClock
+  readonly ledgerPath: string
 }> {
   const directory = join(tmpdir(), `dsh-luban-taskboard-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   directories.add(directory)
   const clock = new TestClock()
-  const store = new JsonTaskStore(createLedgerStore(join(directory, 'ledger.json'), clock), clock)
-  return { store, claims: new DefaultAgentClaimService(store, 'ubuntu', true), clock }
+  const ledgerPath = join(directory, 'ledger.json')
+  const store = new JsonTaskStore(createLedgerStore(ledgerPath, clock), clock)
+  return {
+    store,
+    claims: new DefaultAgentClaimService(store, 'ubuntu', true),
+    clock,
+    ledgerPath,
+  }
 }
 
 const HUMAN: Actor = { kind: 'user', id: asActorId('alice'), displayName: 'Alice' }
@@ -110,6 +117,51 @@ describe('JsonTaskStore', (): void => {
     ])
     const accepted = await store.transition(completed.id, 'done', HUMAN)
     expect(accepted.autoDone).toBe(false)
+  })
+
+  it('persists the trusted execution owner and includes it in claim CAS identity', async (): Promise<void> => {
+    const { store, claims, clock, ledgerPath } = await harness()
+    const task = await store.create({
+      title: 'Night-owned browser task',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'The night scheduler owns terminal mutations',
+    })
+    const claimed = await claims.claim(
+      {},
+      {
+        actor: { kind: 'agent', id: asActorId('luban-night-owner') },
+        sessionId: asSessionId('luban-night-owner'),
+        host: asHostId('ubuntu'),
+        executionOwner: 'night-scheduler',
+      },
+    )
+    if (!claimed.ok || claimed.task.claim === undefined || claimed.task.claim === null) {
+      throw new Error('night claim missing')
+    }
+    const expectedClaim = claimed.task.claim
+
+    await expect(
+      claims.reportProgress(
+        task.id,
+        { summary: 'ownerless claim must not match', percent: 10 },
+        {
+          expectedClaim: {
+            actor: expectedClaim.actor,
+            sessionId: expectedClaim.sessionId,
+            claimedAt: expectedClaim.claimedAt,
+            ...(expectedClaim.leaseId === undefined ? {} : { leaseId: expectedClaim.leaseId }),
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'E_VERSION_CONFLICT', retriable: true })
+
+    const reopened = new JsonTaskStore(createLedgerStore(ledgerPath, clock), clock)
+    expect(await reopened.get(task.id)).toMatchObject({
+      status: 'doing',
+      claim: { executionOwner: 'night-scheduler' },
+    })
   })
 
   it('records failure atomically and produces deterministic import reports', async (): Promise<void> => {
