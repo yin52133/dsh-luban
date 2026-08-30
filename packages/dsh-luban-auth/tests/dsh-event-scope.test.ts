@@ -344,6 +344,25 @@ describe('DshEventScope', () => {
     await expect(conflicting).rejects.toMatchObject({ code: 'E_ACCOUNT_SCOPE_MISMATCH' })
     await expect(conflicting).rejects.toThrow('Conflicting DSH')
   })
+
+  it('exposes only plugin and run-request ownership recovered from inventory', () => {
+    const { scope } = fixture()
+
+    scope.rememberPluginOwner('inventory-plugin', alice, 'inventory-approval')
+    expect(scope.ownerOfPlugin('inventory-plugin')).toBe(alice)
+    expect(scope.ownerOfRunRequest('inventory-approval')).toBe(alice)
+    expect(() =>
+      scope.rememberPluginOwner('inventory-plugin', alice, 'inventory-approval'),
+    ).not.toThrow()
+
+    expect(() => scope.rememberPluginOwner('inventory-plugin', bob)).toThrow(
+      expect.objectContaining({ code: 'E_ACCOUNT_SCOPE_MISMATCH' }),
+    )
+    expect(() => scope.rememberPluginOwner('second-plugin', bob, 'inventory-approval')).toThrow(
+      expect.objectContaining({ code: 'E_ACCOUNT_SCOPE_MISMATCH' }),
+    )
+    expect(scope.ownerOfPlugin('second-plugin')).toBeNull()
+  })
 })
 
 function fixture(): {

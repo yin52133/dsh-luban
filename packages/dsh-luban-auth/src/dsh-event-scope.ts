@@ -59,6 +59,32 @@ export class DshEventScope {
     this.#questionRpcOwners.delete(rpcId)
   }
 
+  /** Return the account associated with one dynamic Cordis plugin. */
+  public ownerOfPlugin(pluginId: string): AccountId | null {
+    return this.#pluginOwners.get(pluginId) ?? null
+  }
+
+  /** Return the account associated with one model-driven Cordis run request. */
+  public ownerOfRunRequest(requestId: string): AccountId | null {
+    return this.#runRequestOwners.get(requestId) ?? null
+  }
+
+  /** Remember ownership recovered from an already account-filtered inventory row. */
+  public rememberPluginOwner(pluginId: string, owner: AccountId, approvalRequestId?: string): void {
+    requireIdentifier(pluginId, 'Cordis plugin id')
+    if (approvalRequestId !== undefined) {
+      requireIdentifier(approvalRequestId, 'Cordis approval request id')
+    }
+    assertCompatibleOwner(this.#pluginOwners, pluginId, owner, 'Cordis plugin')
+    if (approvalRequestId !== undefined) {
+      assertCompatibleOwner(this.#runRequestOwners, approvalRequestId, owner, 'Cordis run request')
+    }
+    this.#pluginOwners.set(pluginId, owner)
+    if (approvalRequestId !== undefined) {
+      this.#runRequestOwners.set(approvalRequestId, owner)
+    }
+  }
+
   /** Keep, rewrite, or drop one serialized `events.mux` / `events.host` server request. */
   public async filter(
     accountId: AccountId,
@@ -310,11 +336,24 @@ function rememberOwner(
   owner: AccountId,
   relation: string,
 ): void {
+  assertCompatibleOwner(owners, id, owner, relation)
+  owners.set(id, owner)
+}
+
+function assertCompatibleOwner(
+  owners: ReadonlyMap<string, AccountId>,
+  id: string,
+  owner: AccountId,
+  relation: string,
+): void {
   const recorded = owners.get(id)
   if (recorded !== undefined && recorded !== owner) {
     throw relationError(relation, id, recorded, owner)
   }
-  owners.set(id, owner)
+}
+
+function requireIdentifier(value: string, label: string): void {
+  if (value.length === 0) throw protocolError(`${label} must be a non-empty string`)
 }
 
 function relationError(

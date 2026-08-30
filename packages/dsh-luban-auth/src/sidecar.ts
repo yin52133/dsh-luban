@@ -17,6 +17,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { asSessionId, type AccountId } from 'dsh-luban-core'
 import type { AuthManager } from './auth-manager.js'
 import { DshEventScope, type DshEventChannel } from './dsh-event-scope.js'
+import { dshMethodFromPath, dshRequestSessionIds } from './dsh-http-scope.js'
 import {
   AUTH_COOKIE_NAME,
   AUTH_ROOT,
@@ -58,6 +59,9 @@ const DSH_FILTERED_UNARY_METHODS = new Set([
   'session.search',
   'session.create',
   'session.fork',
+  'sessionReferenceResolver/candidates',
+  'dynamicCordisRunner/inventory',
+  'subagent.list',
 ])
 const SENSITIVE_COOKIE_NAMES = new Set([AUTH_COOKIE_NAME, CSRF_COOKIE_NAME])
 const HOP_BY_HOP_HEADERS = new Set([
@@ -533,9 +537,8 @@ export class AuthSidecar implements AuthGateway {
     const body = await readBoundedBody(request, this.#config.maxProxyBodyBytes)
     const message = parseJsonRecord(body)
     const rpcId = typeof message?.rpcId === 'string' ? message.rpcId : undefined
-    const method = methodFromDshPath(target.pathname)
-    const scopeRoot = target.pathname === DSH_RESPOND_ROUTE ? message : asRecord(message?.payload)
-    const sessionIds = collectSessionIds(scopeRoot)
+    const method = dshMethodFromPath(target.pathname)
+    const sessionIds = dshRequestSessionIds(method, message)
     const denial = await this.#firstSessionScopeDenial(accountId, sessionIds)
     if (denial !== null) {
       if (target.pathname === DSH_RESPOND_ROUTE) {
@@ -555,11 +558,39 @@ export class AuthSidecar implements AuthGateway {
       sendDshRespondDenied(response)
       return
     }
+    if (rpcId !== undefined) {
+      if (this.#denyDshRelationRequest(response, accountId, method, message, rpcId)) return
+    }
     await this.#proxyBufferedDshRequest(request, response, target, security, body, {
       accountId,
       method,
       rpcId,
     })
+  }
+
+  #denyDshRelationRequest(
+    response: ServerResponse,
+    accountId: AccountId,
+    method: string | undefined,
+    message: Readonly<Record<string, unknown>> | null,
+    rpcId: string,
+  ): boolean {
+    const args = asRecord(asRecord(message?.payload)?.args)
+    if (method === 'dynamicCordisRunner/invoke' && typeof args?.pluginId === 'string') {
+      if (this.#dshEventScope.ownerOfPlugin(args.pluginId) === accountId) return false
+      sendDshRpcValue(response, rpcId, {
+        ok: false,
+        code: 'plugin-not-running',
+        message: 'Dynamic plugin is not running',
+      })
+      return true
+    }
+    if (method === 'dynamicCordisRunner/resolveRequestRun' && typeof args?.requestId === 'string') {
+      if (this.#dshEventScope.ownerOfRunRequest(args.requestId) === accountId) return false
+      sendDshRpcValue(response, rpcId, { accepted: false })
+      return true
+    }
+    return false
   }
 
   async #proxyBufferedDshRequest(
@@ -668,8 +699,51 @@ export class AuthSidecar implements AuthGateway {
       return { body, changed: false }
     }
     if (result.ok !== true) return { body, changed: false }
+
+    if (method === 'sessionReferenceResolver/candidates') {
+      const candidates = result.value
+      if (!Array.isArray(candidates)) return { body, changed: false }
+      const filtered = await this.#filterOwnedSessionRows(context.accountId, candidates)
+      return filtered.length === candidates.length
+        ? { body, changed: false }
+        : rewriteDshResponseValue(message, result, filtered)
+    }
+
+    if (method === 'dynamicCordisRunner/inventory') {
+      const inventory = result.value
+      if (!Array.isArray(inventory)) return { body, changed: false }
+      const filtered: unknown[] = []
+      for (const item of inventory) {
+        const row = asRecord(item)
+        if (typeof row?.agentId !== 'string' || typeof row.pluginId !== 'string') continue
+        const owner = await this.#manager.dshSessionOwner(asSessionId(row.agentId))
+        if (owner !== context.accountId) continue
+        const latestRun = asRecord(row.latestRun)
+        const approvalRequestId =
+          typeof latestRun?.approvalRequestId === 'string' ? latestRun.approvalRequestId : undefined
+        this.#dshEventScope.rememberPluginOwner(row.pluginId, context.accountId, approvalRequestId)
+        filtered.push(item)
+      }
+      return filtered.length === inventory.length
+        ? { body, changed: false }
+        : rewriteDshResponseValue(message, result, filtered)
+    }
+
     const value = asRecord(result.value)
     if (value === null) return { body, changed: false }
+
+    if (method === 'subagent.list') {
+      if (!Array.isArray(value.entries)) return { body, changed: false }
+      for (const entry of value.entries) {
+        const childId = asRecord(entry)?.id
+        if (typeof childId !== 'string') continue
+        const childDenial = await this.#bindCreatedSession(context.accountId, childId)
+        if (childDenial !== null) {
+          return { body: dshScopeErrorBody(message.rpcId, childDenial), changed: true }
+        }
+      }
+      return { body, changed: false }
+    }
 
     if (method === 'session.create' || method === 'session.fork') {
       if (typeof value.sessionId !== 'string') return { body, changed: false }
@@ -722,6 +796,22 @@ export class AuthSidecar implements AuthGateway {
       }
     }
     return { body, changed: false }
+  }
+
+  async #filterOwnedSessionRows(
+    accountId: AccountId,
+    rows: readonly unknown[],
+  ): Promise<unknown[]> {
+    const keep = await Promise.all(
+      rows.map(async (row): Promise<boolean> => {
+        const sessionId = asRecord(row)?.sessionId
+        return (
+          typeof sessionId === 'string' &&
+          (await this.#manager.dshSessionOwner(asSessionId(sessionId))) === accountId
+        )
+      }),
+    )
+    return rows.filter((_row, index) => keep[index] === true)
   }
 
   async #bindCreatedSession(
@@ -1045,38 +1135,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-function methodFromDshPath(pathname: string): string | undefined {
-  if (!pathname.startsWith(DSH_API_ROOT)) return undefined
-  const method = pathname.slice(DSH_API_ROOT.length)
-  return method === '' || method.includes('/') ? undefined : method
-}
-
-function collectSessionIds(value: unknown): string[] {
-  const ids: string[] = []
-  const pending: unknown[] = [value]
-  while (pending.length > 0) {
-    const current = pending.pop()
-    if (Array.isArray(current)) {
-      for (const item of current as readonly unknown[]) pending.push(item)
-      continue
-    }
-    const record = asRecord(current)
-    if (record === null) continue
-    for (const [key, nested] of Object.entries(record)) {
-      if (/sessionid$/iu.test(key) && typeof nested === 'string' && nested !== '') {
-        ids.push(nested)
-        continue
-      }
-      if (/sessionids$/iu.test(key) && Array.isArray(nested)) {
-        for (const item of nested) if (typeof item === 'string' && item !== '') ids.push(item)
-        continue
-      }
-      pending.push(nested)
-    }
-  }
-  return ids
-}
-
 function isQuestionCancellation(message: Readonly<Record<string, unknown>> | null): boolean {
   if (message?.type !== 'client-response') return false
   const result = asRecord(message.result)
@@ -1176,6 +1234,30 @@ function sendDshScopeError(
 
 function sendDshRespondDenied(response: ServerResponse): void {
   sendJson(response, 200, { accepted: false, reason: 'not-pending' })
+}
+
+function sendDshRpcValue(response: ServerResponse, rpcId: string, value: unknown): void {
+  const body = Buffer.from(
+    JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value } }),
+    'utf8',
+  )
+  response.writeHead(200, {
+    'cache-control': 'no-store',
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(body.length),
+  })
+  response.end(body)
+}
+
+function rewriteDshResponseValue(
+  message: Readonly<Record<string, unknown>>,
+  result: Readonly<Record<string, unknown>>,
+  value: unknown,
+): BodyRewrite {
+  return {
+    body: Buffer.from(JSON.stringify({ ...message, result: { ...result, value } }), 'utf8'),
+    changed: true,
+  }
 }
 
 function errorCode(error: unknown): string | undefined {

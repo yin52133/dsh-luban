@@ -476,6 +476,161 @@ describe('AuthSidecar integration', () => {
     await expect(ownResponse.json()).resolves.toEqual({ accepted: true })
   })
 
+  it('scopes native DSH slash RPCs, references, Cordis relations, and subagents', async () => {
+    harness = await createHarness()
+    const aliceCookie = await loginUser(harness.baseUrl, 'admin', 'correct horse')
+    const provision = await fetch(`${harness.baseUrl}/luban-auth/users`, {
+      method: 'POST',
+      headers: {
+        cookie: aliceCookie,
+        'content-type': 'application/json',
+        origin: harness.baseUrl,
+      },
+      body: JSON.stringify({ user: 'bob', password: 'bob password', role: 'operator' }),
+    })
+    expect(provision.status).toBe(201)
+    const bobCookie = await loginUser(harness.baseUrl, 'bob', 'bob password')
+    await harness.fixture.manager.bindDshSession(asAccountId('admin'), asSessionId('alice-session'))
+    await harness.fixture.manager.bindDshSession(
+      asAccountId('admin'),
+      asSessionId('alice-reference'),
+    )
+    await harness.fixture.manager.bindDshSession(asAccountId('bob'), asSessionId('bob-session'))
+
+    const agentScopedMethods = [
+      'commands/execute',
+      'commands/list',
+      'fileReferences/list',
+      'goals/clear',
+      'goals/complete',
+      'goals/create',
+      'goals/edit',
+      'goals/pause',
+      'goals/resume',
+      'sessionReferenceResolver/candidates',
+      'dynamicCordisRunner/getClientCode',
+      'dynamicCordisRunner/reportClientGuardFailure',
+      'dynamicCordisRunner/reportRenderFailure',
+      'dynamicCordisRunner/resolveInspectQuery',
+      'dynamicCordisRunner/runHostHalf',
+      'dynamicCordisRunner/settleUserRun',
+      'dynamicCordisRunner/stopFromPanel',
+      'dynamicCordisRunner/undefineFromPanel',
+    ] as const
+    for (const method of agentScopedMethods) {
+      const denied = await dshRpc(harness.baseUrl, aliceCookie, method, {
+        args: { agentId: 'bob-session' },
+      })
+      expect(denied.result).toMatchObject({
+        ok: false,
+        error: { code: 'session-not-found', details: { sessionId: 'bob-session' } },
+      })
+    }
+
+    const ownCommand = await dshRpc(harness.baseUrl, aliceCookie, 'commands/list', {
+      args: { agentId: 'alice-session' },
+    })
+    expect(ownCommand.result).toMatchObject({ ok: true })
+    const foreignFeedback = await dshRpc(harness.baseUrl, aliceCookie, 'messageFeedback/list', {
+      args: { request: { sessionId: 'bob-session' } },
+    })
+    expect(foreignFeedback.result).toMatchObject({ ok: false })
+    const sharedSettings = await dshRpc(harness.baseUrl, aliceCookie, 'settings.update', {
+      patch: { sessionId: 'bob-session' },
+    })
+    expect(sharedSettings.result).toMatchObject({ ok: true })
+
+    const candidates = await dshRpc(
+      harness.baseUrl,
+      aliceCookie,
+      'sessionReferenceResolver/candidates',
+      { args: { agentId: 'alice-session', query: '' } },
+    )
+    expect(candidates.result.value).toEqual([
+      expect.objectContaining({ sessionId: 'alice-reference', label: 'Alice reference' }),
+    ])
+
+    const foreignReference = await dshRpc(harness.baseUrl, aliceCookie, 'session.prompt', {
+      sessionId: 'alice-session',
+      mode: 'queue',
+      content: [{ type: 'text', text: `Read ${dshSessionUri('bob-session')}` }],
+    })
+    expect(foreignReference.result).toMatchObject({
+      ok: false,
+      error: { details: { sessionId: 'bob-session' } },
+    })
+    const ownReference = await dshRpc(harness.baseUrl, aliceCookie, 'session.prompt', {
+      sessionId: 'alice-session',
+      mode: 'queue',
+      content: [{ type: 'text', text: `Read ${dshSessionUri('alice-reference')}` }],
+    })
+    expect(ownReference.result).toMatchObject({ ok: true })
+
+    const inventory = await dshRpc(harness.baseUrl, aliceCookie, 'dynamicCordisRunner/inventory', {
+      args: {},
+    })
+    expect(inventory.result.value).toEqual([
+      expect.objectContaining({ pluginId: 'alice-plugin', agentId: 'alice-session' }),
+    ])
+    const foreignInvoke = await dshRpc(harness.baseUrl, aliceCookie, 'dynamicCordisRunner/invoke', {
+      args: { pluginId: 'bob-plugin', pluginRunId: 'bob-run', method: 'read', args: {} },
+    })
+    expect(foreignInvoke.result).toMatchObject({
+      ok: true,
+      value: { ok: false, code: 'plugin-not-running' },
+    })
+    const ownInvoke = await dshRpc(harness.baseUrl, aliceCookie, 'dynamicCordisRunner/invoke', {
+      args: {
+        pluginId: 'alice-plugin',
+        pluginRunId: 'alice-run',
+        method: 'read',
+        args: { sessionId: 'bob-session' },
+      },
+    })
+    expect(ownInvoke.result).toMatchObject({ ok: true, value: { accepted: true } })
+
+    const foreignResolution = await dshRpc(
+      harness.baseUrl,
+      aliceCookie,
+      'dynamicCordisRunner/resolveRequestRun',
+      { args: { requestId: 'bob-approval', resolution: { ok: false, reason: 'rejected' } } },
+    )
+    expect(foreignResolution.result).toMatchObject({
+      ok: true,
+      value: { accepted: false },
+    })
+    const ownResolution = await dshRpc(
+      harness.baseUrl,
+      aliceCookie,
+      'dynamicCordisRunner/resolveRequestRun',
+      { args: { requestId: 'alice-approval', resolution: { ok: false, reason: 'rejected' } } },
+    )
+    expect(ownResolution.result).toMatchObject({ ok: true, value: { accepted: true } })
+
+    const subagents = await dshRpc(harness.baseUrl, aliceCookie, 'subagent.list', {
+      parentSessionId: 'alice-session',
+    })
+    expect(subagents.result).toMatchObject({
+      ok: true,
+      value: { entries: [{ kind: 'child', id: 'alice-child' }] },
+    })
+    expect(await harness.fixture.manager.dshSessionOwner(asSessionId('alice-child'))).toBe(
+      asAccountId('admin'),
+    )
+    const ownChildHistory = await dshRpc(harness.baseUrl, aliceCookie, 'subagent.history', {
+      parentSessionId: 'alice-session',
+      childSessionId: 'alice-child',
+      mode: 'continuable',
+    })
+    expect(ownChildHistory.result).toMatchObject({ ok: true })
+    const foreignChildHistory = await dshRpc(harness.baseUrl, bobCookie, 'subagent.history', {
+      parentSessionId: 'bob-session',
+      childSessionId: 'alice-child',
+      mode: 'continuable',
+    })
+    expect(foreignChildHistory.result).toMatchObject({ ok: false })
+  })
+
   it('protects and tunnels WebSocket upgrades and closes upgraded resources', async () => {
     harness = await createHarness()
     const unauthorized = await openUpgrade(harness.publicPort)
@@ -741,6 +896,76 @@ async function handleUpstreamRequest(
         ],
         archivedSessionIds: ['alice-session', 'bob-session', 'legacy-session'],
       }
+    } else if (target.pathname === '/api/sessionReferenceResolver/candidates') {
+      value = [
+        {
+          sessionId: 'alice-reference',
+          label: 'Alice reference',
+          cwd: 'D:/alice',
+          createdAt: 1,
+          mention: `@[Alice reference](${dshSessionUri('alice-reference')})`,
+        },
+        {
+          sessionId: 'bob-session',
+          label: 'Bob secret',
+          cwd: 'D:/bob',
+          createdAt: 2,
+          mention: `@[Bob secret](${dshSessionUri('bob-session')})`,
+        },
+        {
+          sessionId: 'legacy-session',
+          label: 'Legacy',
+          cwd: 'D:/legacy',
+          createdAt: 3,
+          mention: `@[Legacy](${dshSessionUri('legacy-session')})`,
+        },
+      ]
+    } else if (target.pathname === '/api/dynamicCordisRunner/inventory') {
+      value = [
+        {
+          pluginId: 'alice-plugin',
+          agentId: 'alice-session',
+          packages: [],
+          latestRun: {
+            pluginRunId: 'alice-run',
+            packageId: 'alice-package',
+            mode: 'run',
+            status: 'awaiting-approval',
+            approvalRequestId: 'alice-approval',
+            host: { status: 'waiting', waitingFor: [] },
+            client: { status: 'waiting', waitingFor: [] },
+          },
+        },
+        {
+          pluginId: 'bob-plugin',
+          agentId: 'bob-session',
+          packages: [],
+          latestRun: {
+            pluginRunId: 'bob-run',
+            packageId: 'bob-package',
+            mode: 'run',
+            status: 'awaiting-approval',
+            approvalRequestId: 'bob-approval',
+            host: { status: 'waiting', waitingFor: [] },
+            client: { status: 'waiting', waitingFor: [] },
+          },
+        },
+        { pluginId: 'legacy-plugin', agentId: 'legacy-session', packages: [] },
+      ]
+    } else if (target.pathname === '/api/subagent.list') {
+      value = {
+        entries: [
+          {
+            kind: 'child',
+            id: 'alice-child',
+            mode: 'continuable',
+            activity: 'inactive',
+            hasChildren: false,
+            label: 'child',
+          },
+        ],
+        parentAvailable: true,
+      }
     }
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(
@@ -857,6 +1082,10 @@ function sessionIdsFromRpc(response: TestRpcResponse): string[] {
     const sessionId = asTestRecord(item)?.sessionId
     return typeof sessionId === 'string' ? [sessionId] : []
   })
+}
+
+function dshSessionUri(sessionId: string): string {
+  return `dsh-session:${Buffer.from(JSON.stringify(sessionId), 'utf8').toString('base64url')}`
 }
 
 async function rawHttpRequest(
