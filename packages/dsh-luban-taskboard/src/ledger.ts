@@ -115,10 +115,19 @@ function taskValue(value: unknown, index: number): Task {
       ? row.claim
       : (() => {
           const item = record(row.claim, `${label}.claim`)
+          if (
+            item.leaseId !== undefined &&
+            (typeof item.leaseId !== 'string' ||
+              item.leaseId.length === 0 ||
+              item.leaseId.length > 128)
+          ) {
+            throw new LubanError('E_INVALID_INPUT', `${label}.claim.leaseId is invalid`)
+          }
           return {
             actor: actorValue(item.actor, `${label}.claim.actor`),
             sessionId: asSessionId(stringValue(item.sessionId, `${label}.claim.sessionId`)),
             claimedAt: numberValue(item.claimedAt, `${label}.claim.claimedAt`),
+            ...(typeof item.leaseId === 'string' ? { leaseId: item.leaseId } : {}),
           }
         })()
   return {

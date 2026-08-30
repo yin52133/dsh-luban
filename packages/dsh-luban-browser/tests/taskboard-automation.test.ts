@@ -1,6 +1,8 @@
 import type {
   AgentClaimService,
+  ClaimCompletionOptions,
   ClaimFilter,
+  ClaimMutationOptions,
   ClaimResult,
   ClaimSession,
   Task,
@@ -9,6 +11,7 @@ import type {
   TaskProgress,
 } from '@luban/core'
 import { asActorId, asSessionId, asTaskId } from '@luban/core'
+import { LubanError } from '@luban/core'
 import { describe, expect, it, vi } from 'vitest'
 import { BrowserTaskboardAutomation } from '../src/taskboard-automation.js'
 import type { BrowserJobRequest, BrowserJobSnapshot, BrowserQueue } from '../src/types.js'
@@ -18,17 +21,21 @@ describe('BrowserTaskboardAutomation', () => {
     const { queue, enqueue } = fakeQueue()
     const claims = fakeClaims()
     const automation = new BrowserTaskboardAutomation(queue, claims.service)
+    const claimedTask = task([
+      'browser',
+      'auto-ok',
+      'browser-template:datasheet',
+      'browser-param:part=STM32',
+    ])
 
-    await automation.executeClaimedTask(
-      task(['browser', 'auto-ok', 'browser-template:datasheet', 'browser-param:part=STM32']),
-    )
+    await automation.executeClaimedTask(claimedTask)
 
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ automatic: true }))
     expect(claims.progress).toHaveBeenCalledTimes(2)
     expect(claims.complete).toHaveBeenCalledWith(
       asTaskId('T-1'),
       expect.objectContaining({ kind: 'artifact', ref: '/artifact/result.png' }),
-      { autoDone: true },
+      { autoDone: true, expectedClaim: claimedTask.claim },
     )
     expect(claims.fail).not.toHaveBeenCalled()
   })
@@ -42,11 +49,113 @@ describe('BrowserTaskboardAutomation', () => {
       automation.executeClaimedTask(task(['browser', 'browser-template:datasheet'])),
     ).rejects.toThrow(/auto-ok/u)
     expect(enqueue).not.toHaveBeenCalled()
-    expect(claims.fail).toHaveBeenCalledWith(asTaskId('T-1'), expect.stringMatching(/auto-ok/u))
+    expect(claims.fail).toHaveBeenCalledWith(asTaskId('T-1'), expect.stringMatching(/auto-ok/u), {
+      expectedClaim: task([]).claim,
+    })
+  })
+
+  it('fails closed when a succeeded job contains a non-ok browser result', async () => {
+    const { queue } = fakeQueue('failed')
+    const claims = fakeClaims()
+    const automation = new BrowserTaskboardAutomation(queue, claims.service)
+    const claimedTask = task(['browser', 'auto-ok', 'browser-template:datasheet'])
+
+    await automation.executeClaimedTask(claimedTask)
+
+    expect(claims.progress).toHaveBeenCalledTimes(1)
+    expect(claims.complete).not.toHaveBeenCalled()
+    expect(claims.fail).toHaveBeenCalledTimes(1)
+    expect(claims.fail).toHaveBeenCalledWith(asTaskId('T-1'), 'Browser automation failed', {
+      expectedClaim: claimedTask.claim,
+    })
+  })
+
+  it('serializes claim generations and runs the replacement after a stale claim conflict', async () => {
+    const first = task(['browser', 'auto-ok', 'browser-template:datasheet'], 'lease-a', 1)
+    const replacement = task(['browser', 'auto-ok', 'browser-template:datasheet'], 'lease-b', 2)
+    const firstWait = deferred<BrowserJobSnapshot>()
+    const successful = completedJob('R-2')
+    let enqueueCount = 0
+    const enqueue = vi.fn((request: BrowserJobRequest): BrowserJobSnapshot => {
+      enqueueCount += 1
+      return {
+        id: `R-${String(enqueueCount)}`,
+        status: 'queued',
+        task: request.task,
+        automatic: true,
+        createdAt: enqueueCount,
+        progressStep: 0,
+        screenshots: [],
+      }
+    })
+    const queue: BrowserQueue = {
+      enqueue,
+      cancel: vi.fn(() => Promise.resolve(false)),
+      get: vi.fn(() => null),
+      list: vi.fn(() => []),
+      wait: vi.fn((id: string) => (id === 'R-1' ? firstWait.promise : Promise.resolve(successful))),
+      subscribe: vi.fn(() => (): void => undefined),
+    }
+    const progress = vi.fn(
+      (_id: TaskId, value: TaskProgress, options?: ClaimMutationOptions): Promise<void> =>
+        options?.expectedClaim?.leaseId === 'lease-a' && value.percent === 100
+          ? Promise.reject(
+              new LubanError('E_VERSION_CONFLICT', 'Task claim has changed', { retriable: true }),
+            )
+          : Promise.resolve(),
+    )
+    const complete = vi.fn(
+      (_id: TaskId, _output: TaskOutput, _options: ClaimCompletionOptions): Promise<Task> =>
+        Promise.resolve(replacement),
+    )
+    const fail = vi.fn(
+      (_id: TaskId, _reason: string, options?: ClaimMutationOptions): Promise<void> =>
+        options?.expectedClaim?.leaseId === 'lease-a'
+          ? Promise.reject(
+              new LubanError('E_VERSION_CONFLICT', 'Task claim has changed', { retriable: true }),
+            )
+          : Promise.resolve(),
+    )
+    const claims: AgentClaimService = {
+      claim: (_filter: ClaimFilter, _session: ClaimSession): Promise<ClaimResult> =>
+        Promise.resolve({ ok: false, reason: 'no-match' }),
+      reportProgress: progress,
+      complete,
+      fail,
+    }
+    const automation = new BrowserTaskboardAutomation(queue, claims)
+
+    const staleRun = automation.executeClaimedTask(first)
+    const duplicateStaleRun = automation.executeClaimedTask(first)
+    await vi.waitFor((): void => {
+      expect(enqueue).toHaveBeenCalledTimes(1)
+    })
+    const replacementRun = automation.executeClaimedTask(replacement)
+    expect(enqueue).toHaveBeenCalledTimes(1)
+
+    const staleExpectation = expect(staleRun).rejects.toMatchObject({
+      code: 'E_VERSION_CONFLICT',
+    })
+    const duplicateExpectation = expect(duplicateStaleRun).rejects.toMatchObject({
+      code: 'E_VERSION_CONFLICT',
+    })
+    firstWait.resolve(completedJob('R-1'))
+    await staleExpectation
+    await duplicateExpectation
+    await replacementRun
+
+    expect(enqueue).toHaveBeenCalledTimes(2)
+    expect(fail).toHaveBeenCalledTimes(1)
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(complete).toHaveBeenCalledWith(
+      asTaskId('T-1'),
+      expect.objectContaining({ kind: 'artifact' }),
+      { autoDone: true, expectedClaim: replacement.claim },
+    )
   })
 })
 
-function task(tags: readonly string[]): Task {
+function task(tags: readonly string[], leaseId = 'lease-1', version = 1): Task {
   return {
     id: asTaskId('T-1'),
     title: 'Research part',
@@ -55,11 +164,12 @@ function task(tags: readonly string[]): Task {
     hostScope: 'any',
     priority: 'P1',
     tags,
-    version: 1,
+    version,
     claim: {
       actor: { kind: 'agent', id: asActorId('agent-1') },
       sessionId: asSessionId('session-1'),
       claimedAt: 1,
+      leaseId,
     },
     outputs: [],
     createdAt: 1,
@@ -67,9 +177,9 @@ function task(tags: readonly string[]): Task {
   }
 }
 
-function fakeQueue(): { readonly queue: BrowserQueue; readonly enqueue: ReturnType<typeof vi.fn> } {
-  const completed: BrowserJobSnapshot = {
-    id: 'R-1',
+function completedJob(id: string, resultStatus: 'ok' | 'failed' = 'ok'): BrowserJobSnapshot {
+  return {
+    id,
     status: 'succeeded',
     task: { goal: 'Find the datasheet' },
     automatic: true,
@@ -78,14 +188,21 @@ function fakeQueue(): { readonly queue: BrowserQueue; readonly enqueue: ReturnTy
     progressStep: 1,
     screenshots: ['/artifact/result.png'],
     result: {
-      runId: 'R-1',
-      status: 'ok',
+      runId: id,
+      status: resultStatus,
       screenshots: ['/artifact/result.png'],
       text: 'Found result',
       steps: 1,
       durationMs: 1,
     },
   }
+}
+
+function fakeQueue(resultStatus: 'ok' | 'failed' = 'ok'): {
+  readonly queue: BrowserQueue
+  readonly enqueue: ReturnType<typeof vi.fn>
+} {
+  const completed = completedJob('R-1', resultStatus)
   const enqueue = vi.fn((_request: BrowserJobRequest): BrowserJobSnapshot => ({
     id: completed.id,
     status: 'queued',
@@ -114,12 +231,18 @@ function fakeClaims(): {
   complete: ReturnType<typeof vi.fn>
   fail: ReturnType<typeof vi.fn>
 } {
-  const progress = vi.fn((_id: TaskId, _progress: TaskProgress): Promise<void> => Promise.resolve())
+  const progress = vi.fn(
+    (_id: TaskId, _progress: TaskProgress, _options?: ClaimMutationOptions): Promise<void> =>
+      Promise.resolve(),
+  )
   const complete = vi.fn(
-    (_id: TaskId, _output: TaskOutput, _options: { readonly autoDone: boolean }): Promise<Task> =>
+    (_id: TaskId, _output: TaskOutput, _options: ClaimCompletionOptions): Promise<Task> =>
       Promise.resolve(task([])),
   )
-  const fail = vi.fn((_id: TaskId, _reason: string): Promise<void> => Promise.resolve())
+  const fail = vi.fn(
+    (_id: TaskId, _reason: string, _options?: ClaimMutationOptions): Promise<void> =>
+      Promise.resolve(),
+  )
   return {
     progress,
     complete,
@@ -133,6 +256,22 @@ function fakeClaims(): {
       reportProgress: progress,
       complete,
       fail,
+    },
+  }
+}
+
+function deferred<Value>(): {
+  readonly promise: Promise<Value>
+  readonly resolve: (value: Value) => void
+} {
+  let resolvePromise: ((value: Value) => void) | undefined
+  const promise = new Promise<Value>((resolve): void => {
+    resolvePromise = resolve
+  })
+  return {
+    promise,
+    resolve(value: Value): void {
+      resolvePromise?.(value)
     },
   }
 }

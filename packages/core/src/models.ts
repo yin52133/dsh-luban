@@ -25,6 +25,8 @@ export interface TaskClaim {
   readonly actor: Actor
   readonly sessionId: SessionId
   readonly claimedAt: EpochMs
+  /** Unique for newly issued claims; omitted only on ledgers written before lease identities. */
+  readonly leaseId?: string
 }
 
 export interface Task {

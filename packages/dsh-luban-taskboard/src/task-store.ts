@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type {
   Actor,
+  ClaimMutationOptions,
   Clock,
   Task,
   TaskCreateInput,
@@ -8,6 +9,7 @@ import type {
   TaskId,
   TaskPatch,
   TaskQuery,
+  TaskClaim,
   SessionId,
   TaskStatus,
   Unsubscribe,
@@ -54,6 +56,11 @@ export interface AtomicClaimInput {
   readonly workspace?: string
   readonly tags?: readonly string[]
   readonly requireAcceptance: boolean
+}
+
+interface AppendOutputOptions extends ClaimMutationOptions {
+  readonly transitionToReview: boolean
+  readonly autoDone: boolean
 }
 
 function trimmed(value: string, label: string, maximum: number, allowEmpty = false): string {
@@ -145,6 +152,29 @@ function requireVersion(task: Task, expectedVersion: number): void {
       retriable: true,
       details: { expectedVersion, actualVersion: task.version },
     })
+  }
+}
+
+function sameClaim(left: TaskClaim, right: TaskClaim): boolean {
+  return (
+    left.actor.kind === right.actor.kind &&
+    left.actor.id === right.actor.id &&
+    left.sessionId === right.sessionId &&
+    left.claimedAt === right.claimedAt &&
+    left.leaseId === right.leaseId
+  )
+}
+
+function requireExpectedClaim(task: Task, expectedClaim: TaskClaim | undefined): void {
+  if (expectedClaim === undefined) return
+  const actualClaim = task.claim
+  if (
+    task.status !== 'doing' ||
+    actualClaim === undefined ||
+    actualClaim === null ||
+    !sameClaim(actualClaim, expectedClaim)
+  ) {
+    throw new LubanError('E_VERSION_CONFLICT', 'Task claim has changed', { retriable: true })
   }
 }
 
@@ -368,7 +398,12 @@ export class JsonTaskStore {
       claimed = {
         ...selected.task,
         status: 'doing',
-        claim: { actor: input.actor, sessionId: input.sessionId, claimedAt: at },
+        claim: {
+          actor: input.actor,
+          sessionId: input.sessionId,
+          claimedAt: at,
+          leaseId: `lease-${String(ledger.sequence + 1)}-${randomBytes(8).toString('hex')}`,
+        },
         version: selected.task.version + 1,
         updatedAt: at,
       }
@@ -395,7 +430,7 @@ export class JsonTaskStore {
   public async appendOutput(
     id: TaskId,
     output: Task['outputs'][number],
-    options: { readonly transitionToReview: boolean; readonly autoDone: boolean },
+    options: AppendOutputOptions,
   ): Promise<Task> {
     let before: Task | undefined
     let updated: Task | undefined
@@ -403,8 +438,20 @@ export class JsonTaskStore {
       const index = taskIndex(ledger, id)
       const current = ledger.tasks[index]
       if (current === undefined) throw new LubanError('E_IO', 'Task index became inconsistent')
-      if (options.transitionToReview && current.status !== 'doing') {
-        throw new LubanError('E_INVALID_TRANSITION', 'Only doing tasks can be completed')
+      requireExpectedClaim(current, options.expectedClaim)
+      if (
+        options.transitionToReview &&
+        (current.status !== 'doing' || current.claim === undefined || current.claim === null)
+      ) {
+        throw new LubanError('E_INVALID_TRANSITION', 'Only claimed doing tasks can be completed')
+      }
+      if (
+        options.transitionToReview &&
+        current.claim !== undefined &&
+        current.claim !== null &&
+        (current.claim.actor.kind !== output.by.kind || current.claim.actor.id !== output.by.id)
+      ) {
+        throw new LubanError('E_AUTH_REQUIRED', 'Only the claiming actor can complete the task')
       }
       const at = this.#clock.now()
       before = current
@@ -441,7 +488,7 @@ export class JsonTaskStore {
     return updated
   }
 
-  public async fail(id: TaskId, reason: string): Promise<Task> {
+  public async fail(id: TaskId, reason: string, options: ClaimMutationOptions = {}): Promise<Task> {
     const summary = trimmed(reason, 'reason', 4_000)
     let actor: Actor | undefined
     let updated: Task | undefined
@@ -449,6 +496,7 @@ export class JsonTaskStore {
       const index = taskIndex(ledger, id)
       const current = ledger.tasks[index]
       if (current === undefined) throw new LubanError('E_IO', 'Task index became inconsistent')
+      requireExpectedClaim(current, options.expectedClaim)
       if (current.status !== 'doing' || current.claim === undefined || current.claim === null) {
         throw new LubanError('E_INVALID_TRANSITION', 'Only claimed doing tasks can fail')
       }

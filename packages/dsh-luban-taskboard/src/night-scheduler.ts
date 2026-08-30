@@ -362,9 +362,13 @@ export class DefaultNightScheduler implements NightScheduler {
         { actor, sessionId: claimSessionId, host: this.#hostId },
       )
       if (!claim.ok) return
+      const expectedClaim = claim.task.claim
+      if (expectedClaim === undefined || expectedClaim === null) {
+        throw new LubanError('E_IO', 'Claimed night task is missing its claim identity')
+      }
       try {
         const output = await this.#executor.execute(claim.task, sessionId)
-        await this.#claims.complete(claim.task.id, output, { autoDone: true })
+        await this.#claims.complete(claim.task.id, output, { autoDone: true, expectedClaim })
         state = await this.#store.updateScheduler((current) => ({
           ...current,
           quotaUsed: current.quotaUsed + 1,
@@ -373,7 +377,7 @@ export class DefaultNightScheduler implements NightScheduler {
         }))
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Autonomous execution failed'
-        await this.#claims.fail(claim.task.id, message)
+        await this.#claims.fail(claim.task.id, message, { expectedClaim })
         state = await this.#store.updateScheduler((current) => {
           const consecutiveFailures = current.consecutiveFailures + 1
           return {

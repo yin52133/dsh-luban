@@ -1,9 +1,12 @@
 import type {
   AgentClaimService,
+  ClaimCompletionOptions,
   ClaimFilter,
+  ClaimMutationOptions,
   ClaimResult,
   ClaimSession,
   Task,
+  TaskClaim,
   TaskId,
   TaskOutput,
   TaskProgress,
@@ -54,9 +57,12 @@ export class DefaultAgentClaimService implements AgentClaimService {
     return task === null ? { ok: false, reason: 'no-match' } : { ok: true, task }
   }
 
-  public async reportProgress(id: TaskId, progress: TaskProgress): Promise<void> {
-    const task = await this.#claimedTask(id)
-    const claim = task.claim
+  public async reportProgress(
+    id: TaskId,
+    progress: TaskProgress,
+    options: ClaimMutationOptions = {},
+  ): Promise<void> {
+    const expectedClaim = await this.#expectedClaim(id, options.expectedClaim)
     const percent = progress.percent
     if (percent !== undefined && (!Number.isFinite(percent) || percent < 0 || percent > 100)) {
       throw new LubanError('E_INVALID_INPUT', 'progress percent must be between 0 and 100')
@@ -68,30 +74,35 @@ export class DefaultAgentClaimService implements AgentClaimService {
         ref: percent === undefined ? 'progress' : `progress:${String(percent)}`,
         summary: progress.summary,
         at: Date.now(),
-        by: claim.actor,
+        by: expectedClaim.actor,
       },
-      { transitionToReview: false, autoDone: false },
+      { transitionToReview: false, autoDone: false, expectedClaim },
     )
   }
 
   public async complete(
     id: TaskId,
     output: TaskOutput,
-    options: { readonly autoDone: boolean },
+    options: ClaimCompletionOptions,
   ): Promise<Task> {
-    const task = await this.#claimedTask(id)
-    if (task.claim.actor.id !== output.by.id || task.claim.actor.kind !== output.by.kind) {
+    const expectedClaim = await this.#expectedClaim(id, options.expectedClaim)
+    if (expectedClaim.actor.id !== output.by.id || expectedClaim.actor.kind !== output.by.kind) {
       throw new LubanError('E_AUTH_REQUIRED', 'Only the claiming actor can complete the task')
     }
     return this.#store.appendOutput(id, output, {
       transitionToReview: true,
       autoDone: options.autoDone,
+      expectedClaim,
     })
   }
 
-  public async fail(id: TaskId, reason: string): Promise<void> {
-    await this.#claimedTask(id)
-    await this.#store.fail(id, reason)
+  public async fail(id: TaskId, reason: string, options: ClaimMutationOptions = {}): Promise<void> {
+    const expectedClaim = await this.#expectedClaim(id, options.expectedClaim)
+    await this.#store.fail(id, reason, { expectedClaim })
+  }
+
+  async #expectedClaim(id: TaskId, expectedClaim: TaskClaim | undefined): Promise<TaskClaim> {
+    return expectedClaim ?? (await this.#claimedTask(id)).claim
   }
 
   async #claimedTask(id: TaskId): Promise<Task & { readonly claim: NonNullable<Task['claim']> }> {

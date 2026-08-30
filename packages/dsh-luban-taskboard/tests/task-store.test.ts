@@ -144,6 +144,83 @@ describe('JsonTaskStore', (): void => {
     expect(second).toMatchObject({ imported: 0, skipped: 1, failed: 0 })
   })
 
+  it('rejects every stale claim mutation after an identical-clock reclaim', async (): Promise<void> => {
+    const { store, claims, clock } = await harness()
+    const task = await store.create({
+      title: 'Serialize browser work',
+      status: 'todo',
+      hostScope: 'ubuntu',
+      priority: 'P1',
+      acceptance: 'The latest lease owns every mutation',
+    })
+    const session = {
+      actor: { kind: 'agent' as const, id: asActorId('same-agent') },
+      sessionId: asSessionId('same-session'),
+      host: asHostId('ubuntu'),
+    }
+    const first = await claims.claim({}, session)
+    if (!first.ok || first.task.claim === undefined || first.task.claim === null) {
+      throw new Error('first claim missing')
+    }
+    const staleClaim = first.task.claim
+
+    await store.transition(task.id, 'todo', HUMAN)
+    clock.value = staleClaim.claimedAt
+    const second = await claims.claim({}, session)
+    if (!second.ok || second.task.claim === undefined || second.task.claim === null) {
+      throw new Error('second claim missing')
+    }
+    const currentClaim = second.task.claim
+    expect(currentClaim.claimedAt).toBe(staleClaim.claimedAt)
+    expect(currentClaim.leaseId).not.toBe(staleClaim.leaseId)
+
+    const conflicts = [
+      (): Promise<void> =>
+        claims.reportProgress(
+          task.id,
+          { summary: 'stale progress', percent: 50 },
+          { expectedClaim: staleClaim },
+        ),
+      async (): Promise<void> => {
+        await claims.complete(
+          task.id,
+          {
+            kind: 'artifact',
+            ref: 'stale-artifact',
+            summary: 'stale completion',
+            at: clock.now(),
+            by: staleClaim.actor,
+          },
+          { autoDone: true, expectedClaim: staleClaim },
+        )
+      },
+      (): Promise<void> => claims.fail(task.id, 'stale failure', { expectedClaim: staleClaim }),
+    ]
+    for (const conflict of conflicts) {
+      await expect(conflict()).rejects.toMatchObject({
+        code: 'E_VERSION_CONFLICT',
+        retriable: true,
+      })
+    }
+    await expect(
+      claims.fail(task.id, 'legacy claim must not match a leased claim', {
+        expectedClaim: {
+          actor: currentClaim.actor,
+          sessionId: currentClaim.sessionId,
+          claimedAt: currentClaim.claimedAt,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'E_VERSION_CONFLICT', retriable: true })
+
+    expect(await store.get(task.id)).toMatchObject({
+      status: 'doing',
+      claim: currentClaim,
+      outputs: [],
+      failureCount: 0,
+      version: 4,
+    })
+  })
+
   it('emits one committed event per task mutation', async (): Promise<void> => {
     const { store } = await harness()
     const events: string[] = []

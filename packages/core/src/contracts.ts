@@ -19,6 +19,7 @@ import type {
   SharedSession,
   SnippetFile,
   Task,
+  TaskClaim,
   TaskOutput,
   TaskStatus,
   TelemetrySnapshot,
@@ -136,11 +137,19 @@ export interface TaskProgress {
   readonly percent?: number
 }
 
+export interface ClaimMutationOptions {
+  readonly expectedClaim?: TaskClaim
+}
+
+export interface ClaimCompletionOptions extends ClaimMutationOptions {
+  readonly autoDone: boolean
+}
+
 export interface AgentClaimService {
   claim(filter: ClaimFilter, session: ClaimSession): Promise<ClaimResult>
-  reportProgress(id: TaskId, progress: TaskProgress): Promise<void>
-  complete(id: TaskId, output: TaskOutput, options: { readonly autoDone: boolean }): Promise<Task>
-  fail(id: TaskId, reason: string): Promise<void>
+  reportProgress(id: TaskId, progress: TaskProgress, options?: ClaimMutationOptions): Promise<void>
+  complete(id: TaskId, output: TaskOutput, options: ClaimCompletionOptions): Promise<Task>
+  fail(id: TaskId, reason: string, options?: ClaimMutationOptions): Promise<void>
 }
 
 export interface SchedulerStatus {

@@ -4,11 +4,17 @@ import type { BrowserQueue } from './types.js'
 
 const TEMPLATE_TAG = 'browser-template:'
 const PARAMETER_TAG = 'browser-param:'
+const TEMPLATE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/u
+
+interface TaskExecutionState {
+  tail: Promise<void>
+  readonly generations: Map<string, Promise<void>>
+}
 
 export class BrowserTaskboardAutomation {
   readonly #queue: BrowserQueue
   readonly #claims: AgentClaimService
-  readonly #running = new Set<string>()
+  readonly #executions = new Map<string, TaskExecutionState>()
 
   public constructor(queue: BrowserQueue, claims: AgentClaimService) {
     this.#queue = queue
@@ -23,12 +29,46 @@ export class BrowserTaskboardAutomation {
   }
 
   public async executeClaimedTask(task: Task): Promise<void> {
-    if (this.#running.has(task.id)) return
     if (!task.tags.includes('browser')) return
-    if (task.claim?.actor.kind !== 'agent') {
+    const generation = claimGeneration(task)
+    const state = this.#executions.get(task.id) ?? {
+      tail: Promise.resolve(),
+      generations: new Map<string, Promise<void>>(),
+    }
+    this.#executions.set(task.id, state)
+    const existing = state.generations.get(generation)
+    if (existing !== undefined) return existing
+
+    const execution = state.tail
+      .catch((): undefined => undefined)
+      .then(async (): Promise<void> => {
+        await this.#runClaimedTask(task)
+      })
+    state.generations.set(generation, execution)
+    state.tail = execution
+    const cleanup = (): void => {
+      if (state.generations.get(generation) === execution) {
+        state.generations.delete(generation)
+      }
+      if (
+        state.generations.size === 0 &&
+        state.tail === execution &&
+        this.#executions.get(task.id) === state
+      ) {
+        this.#executions.delete(task.id)
+      }
+    }
+    void execution.then(cleanup, cleanup)
+    return execution
+  }
+
+  async #runClaimedTask(task: Task): Promise<void> {
+    const expectedClaim = task.claim
+    if (expectedClaim?.actor.kind !== 'agent') {
       throw new BrowserError('E_BROWSER_POLICY', 'Automatic browser tasks require an agent claim')
     }
-    this.#running.add(task.id)
+    let failureReported = false
+    let failureAttempted = false
     try {
       if (!task.tags.includes('auto-ok')) {
         throw new BrowserError(
@@ -44,11 +84,18 @@ export class BrowserTaskboardAutomation {
         )
       }
       const templateId = templateTags[0]?.slice(TEMPLATE_TAG.length) ?? ''
+      if (!TEMPLATE_ID.test(templateId)) {
+        throw new BrowserError('E_BROWSER_POLICY', 'Invalid browser template tag')
+      }
       const params = parseParameters(task.tags)
-      await this.#claims.reportProgress(task.id, {
-        summary: 'Browser automation queued',
-        percent: 0,
-      })
+      await this.#claims.reportProgress(
+        task.id,
+        {
+          summary: 'Browser automation queued',
+          percent: 0,
+        },
+        { expectedClaim },
+      )
       const queued = this.#queue.enqueue({
         task: {
           templateId,
@@ -58,14 +105,22 @@ export class BrowserTaskboardAutomation {
         automatic: true,
       })
       const completed = await this.#queue.wait(queued.id)
-      if (completed.status !== 'succeeded' || completed.result === undefined) {
-        await this.#claims.fail(task.id, completed.error?.message ?? 'Browser automation failed')
+      if (completed.status !== 'succeeded' || completed.result?.status !== 'ok') {
+        failureAttempted = true
+        await this.#claims.fail(task.id, completed.error?.message ?? 'Browser automation failed', {
+          expectedClaim,
+        })
+        failureReported = true
         return
       }
-      await this.#claims.reportProgress(task.id, {
-        summary: 'Browser automation completed',
-        percent: 100,
-      })
+      await this.#claims.reportProgress(
+        task.id,
+        {
+          summary: 'Browser automation completed',
+          percent: 100,
+        },
+        { expectedClaim },
+      )
       await this.#claims.complete(
         task.id,
         {
@@ -73,18 +128,21 @@ export class BrowserTaskboardAutomation {
           ref: completed.result.screenshots[0] ?? `browser-run:${completed.id}`,
           summary: summarize(completed.result.text),
           at: Date.now(),
-          by: task.claim.actor,
+          by: expectedClaim.actor,
         },
-        { autoDone: true },
+        { autoDone: true, expectedClaim },
       )
     } catch (error: unknown) {
-      await this.#claims.fail(
-        task.id,
-        error instanceof Error ? error.message : 'Browser automation failed',
-      )
+      if (!failureReported && !failureAttempted) {
+        failureAttempted = true
+        await this.#claims.fail(
+          task.id,
+          error instanceof Error ? error.message : 'Browser automation failed',
+          { expectedClaim },
+        )
+        failureReported = true
+      }
       throw error
-    } finally {
-      this.#running.delete(task.id)
     }
   }
 }
@@ -115,4 +173,16 @@ function summarize(value: string): string {
   const normalized = value.replace(/\s+/gu, ' ').trim()
   if (normalized === '') return 'Browser automation completed'
   return normalized.length <= 500 ? normalized : `${normalized.slice(0, 497)}...`
+}
+
+function claimGeneration(task: Task): string {
+  const claim = task.claim
+  if (claim === undefined || claim === null) return `unclaimed:${String(task.version)}`
+  return JSON.stringify([
+    claim.actor.kind,
+    claim.actor.id,
+    claim.sessionId,
+    claim.claimedAt,
+    claim.leaseId ?? null,
+  ])
 }
