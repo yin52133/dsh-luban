@@ -22,6 +22,7 @@ describe('browser Cordis taskboard lifecycle', (): void => {
       return unregisterExecutor
     })
     const subscribe = vi.fn((): (() => void) => unbindTaskStore)
+    const query = vi.fn((): Promise<readonly Task[]> => Promise.resolve([]))
 
     context.provide('webServer', {
       register: vi.fn((): (() => void) => unregisterHttp),
@@ -30,7 +31,7 @@ describe('browser Cordis taskboard lifecycle', (): void => {
       middleware: (): ReturnType<AuthService['middleware']> => () =>
         Promise.resolve({ allowed: true, status: 200, user: 'tester' }),
     } as unknown as AuthService)
-    context.provide('lubanTaskStore', { subscribe } as unknown as TaskStore)
+    context.provide('lubanTaskStore', { query, subscribe } as unknown as TaskStore)
     context.provide('lubanAgentClaim', {} as AgentClaimService)
     const scheduler: NightScheduler = {
       start: vi.fn(),
@@ -47,6 +48,7 @@ describe('browser Cordis taskboard lifecycle', (): void => {
 
       expect(registerTaskExecutor).toHaveBeenCalledOnce()
       expect(subscribe).toHaveBeenCalledOnce()
+      expect(query).toHaveBeenCalledWith({ statuses: ['doing'], tags: ['browser'] })
       expect(route?.id).toBe('luban-browser')
       expect(route?.matches({ tags: ['browser'] } as unknown as Task)).toBe(true)
       expect(route?.matches({ tags: ['manual'] } as unknown as Task)).toBe(false)
