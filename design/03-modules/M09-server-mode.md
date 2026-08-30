@@ -116,5 +116,6 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
   进程测试使用当前 `process.execPath` 验证超时/取消后 PID 已退出和 stdout/stderr 已排空，并以 fake child
   验证 spawn 同步失败、永不 close、TERM/KILL 最终边界、abort/timeout 首因及清理。未安装 systemd
   unit、运行外部编译器或下载真实产物。
-- 全工作区 format/lint/typecheck/build、408 项包测试及 22 项跨模块集成通过；M09-F002 的本地实现已
-  收口，剩余验收阻塞于当前主机没有 Ubuntu systemd 环境及目标 MCU/交叉编译工具链。
+- 全工作区 format/lint/typecheck/build、包测试与跨模块集成门禁通过；M09-F002 的显式验收已由
+  持久 FIFO、并发上限与安全模板直接覆盖。当前模块唯一阻塞项是 M09-F001 缺少 Ubuntu
+  systemd user/linger/reboot 环境；目标 MCU 与交叉编译工具链保留为额外兼容性 smoke。

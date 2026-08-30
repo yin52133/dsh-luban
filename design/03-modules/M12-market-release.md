@@ -154,6 +154,7 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
 - M12 的 21 项脚手架、profile 生成、安装、安全、市场与不可变发布测试通过；真实 Ubuntu profile、
   完整插件挂载、CI tag、npm、
   GitHub Release、市场 PR 与 topic 仍需在获得明确授权后验收。
-- 全工作区 format/lint/typecheck/build、408 项包测试、22 项跨模块集成、12 包 audit、release metadata/
-  pack dry-run 全绿；临时校验 SHA-256 的 Gitleaks 8.30.1 扫描 63 个提交无泄漏，合成 token 被正确拒绝；
-  `uv --locked` 的 Ruff、13 项 Python 测试与 compileall 全绿。临时扫描器已清理，未做全局安装。
+- 全工作区 format/lint/typecheck/build、包测试、跨模块集成、12 包 audit、release metadata 与
+  pack/publish dry-run 门禁通过；经 SHA-256 校验的临时 Gitleaks 8.30.1 已证明全历史扫描和合成
+  token 拒绝链路，扫描器随后清理且未做全局安装；`uv --locked` 的 Ruff、13 项 Python 测试与
+  compileall 通过。具体测试数不在设计记录固化，以当前门禁输出为准。

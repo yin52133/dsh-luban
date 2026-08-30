@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 回填安全通道层、工具模板与会话注入实现验证           |
 | v0.3 | 2026-08-30 | Codex | 补齐设备占用预检与 rc2 MCP 工具注册/调用闭环       |
 | v0.4 | 2026-08-30 | Codex | 补齐串口生命周期与真实 MCP/TCP 本机集成验证        |
+| v0.5 | 2026-08-30 | Codex | 补齐串口片段进入持久会话及重放的直接证据           |
 
 ## 1. 概述与目标
 
@@ -124,7 +125,8 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
   返回明确安装指引，不影响其他通道加载。打开支持 timeout/abort，迟到连接会被关闭；热插拔 stop
   排空在途轮询并用 generation 阻止卸载后发布。
 - Settings 面板提供实时滚动、时间戳、文本/正则过滤、高亮和范围选择；片段经正则打码、有界截取、
-  原子落盘后，以文件路径、摘录、通道元数据和时间窗注入 rc2 会话。
+  原子落盘后，以文件路径、摘录、通道元数据和时间窗写入真实 rc2 `Session`/`Inbox` 的持久
+  `next-turn`；非目标会话保持隔离，新会话视图可从 `agent/inbox/spliced` 事件重放。
 - OpenOCD、J-Link、esptool、STM32CubeProgrammer、adb 与 fastboot 内置模板使用固定可执行文件、
   参数数组、根目录约束和 `shell: false`；擦除等危险操作要求精确二次确认，错误行结构化返回。
 - OpenOCD/GDB 托管、adb/fastboot 状态、SSH 命令白名单、telnet/TCP 透传及默认关闭的 stdio MCP

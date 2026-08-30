@@ -7,7 +7,13 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 
 ### Changed
 
-- Awaiting the next reviewed milestone release.
+- Standardized the canonical authentication entry at `/luban-auth/login`.
+- Made night-task capacity reservation and terminal scheduler accounting a
+  single crash-safe ledger transaction across concurrent schedulers and days.
+- Aligned HUD context usage with the DSH rc2 session projection and retained a
+  bounded fallback for missing or unloaded projection services.
+- Strengthened direct acceptance evidence for durable plan rejection feedback,
+  serial snippet injection, and agent-facing context archive retrieval.
 
 ## [0.1.0] - 2026-08-30
 

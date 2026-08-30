@@ -11,6 +11,7 @@
 | v0.3 | 2026-08-30 | Codex | 增加会话定向新鲜采样，消除多 agent 缓存串扰 |
 | v0.4 | 2026-08-30 | Codex | 接入 M03 健康状态与 M02 critical 去重告警 |
 | v0.5 | 2026-08-30 | Codex | 补齐 ReactDOM 可见性与 loopback CLI 热刷新验证 |
+| v0.6 | 2026-08-30 | Codex | 对齐 rc2 SessionProjection context pressure 官方口径 |
 
 ## 1. 概述与目标
 
@@ -120,8 +121,10 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 
 ## 10. 实现与验证记录
 
-- rc2 Session Provider 优先读取 `assistant/message.usage`、`request/context.contextWindow`、request header
-  model/reasoning；缺少官方 used 时，内容估算 Provider 只补 used，不编造 max。
+- rc2 Session Provider 优先读取 `SessionProjectionRegistry` 的 `contextPressure`：used 取
+  `projectedTokens ?? pressureTokens`，max 取 `contextWindow`，比例由两者计算；projection 已存在但
+  字段不完整时保持 `unknown`，不以估算值伪装官方口径。projection key/service 缺失或卸载时才回退
+  `assistant/message.usage`、`request/context.contextWindow` 与内容估算；model/reasoning 仍取 request header。
 - context pressure 口径为 input + cache read + cache write；TPM 使用 input + output + cache read + cache write，
   reasoning token 已包含在 output 中不重复计数。1m/5m 均使用 monotonic 滑动窗口，历史事件按 wall-clock age 映射。
 - `DefaultTelemetryAggregator` 并发采样、按 Provider 注册顺序做字段级 first-wins 合并；generation 防止注册/卸载竞态提交陈旧结果。
@@ -134,11 +137,12 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 - 可选 `lubanTaskStore` 在服务后置出现时动态接通；critical episode 通过串行 active-tag 查询去重，
   恢复后才开启下一 episode，TaskStore 失败只写脱敏诊断且不影响遥测。
 - 真实 ReactDOM/jsdom 覆盖 partial provider、warn/danger/critical 展示和页面隐藏时 SSE
-  close/reopen；loopback CLI 验证 provider 热刷新。本地 Prettier、严格类型、ESLint、构建、31 项
-  M07 测试通过；真实 Cordis mount 另覆盖 keepalive、后置 TaskStore、认证响应与卸载竞态。
+  close/reopen；loopback CLI 验证 provider 热刷新。真实 rc2 `SessionProjectionRegistry + TokenMeter + Session`
+  在初始、surface 追加和 compaction 后与 HUD 的 used/max/ratio 精确一致（满足 ±5% 口径），Cordis mount
+  另覆盖 projection 服务动态发现与卸载回退。本地 Prettier、严格类型、ESLint、构建及 33 项 M07 测试通过。
 
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu DSH profile 核对 workspace/model/reasoning 切换、Web 常驻 HUD、CLI 首行与页面隐藏重连。
-- 仍需用真实 Provider/账单流水验证 TPM/RPM 口径，并在真实长会话复核 M08 的会话定向采样与压缩质量。
+- 仍需用真实 Provider/账单流水验证 TPM/RPM 口径；真实长会话可继续抽查 M08 的会话定向采样与压缩质量。
 - 仍需在真实掉线长任务中核对 M03 巡检到 HUD/Taskboard 的端到端可见时延。

@@ -10,6 +10,7 @@ Codex 式上下文工程的本地实现：阈值触发自动压缩 + 旧上下�
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 回合边界、可审计归档与降级实现验证 |
 | v0.3 | 2026-08-30 | Codex | 补齐会话定向遥测与卸载期间维护任务收口 |
 | v0.4 | 2026-08-30 | Codex | 补齐版本化前后 surface 快照索引与夜间连续性链路验证 |
+| v0.5 | 2026-08-30 | Codex | 补齐模型可见路径经 agent 工具回读归档原文的直接证据 |
 
 ## 1. 概述与目标
 
@@ -117,6 +118,9 @@ M08-F001 ~ M08-F005 共 5 项，与 `checklist.json` 一一对应。
   原始持久事件日志保持不变。
 - workspace 内归档先脱敏再原子写入，以内容摘要唯一命名并建立 SHA-256 索引；重复重试幂等，
   多轮复用同一临时序号时仍保留各代文件，可按范围取最新或按索引路径精确回放。
+- 组合策略把归档相对路径注入真实 rc2 Session surface；测试仅从 `session.deriveMessages()` 的模型可见
+  文本提取路径，再由绑定目标 Agent 的真实 `ToolRuntime` 调用 `read_file`，回读精确原文并与索引
+  SHA-256 双校验。该确定性证据证明 agent-facing 检索边界，不声称外部模型已自主选择文件。
 - 每条新审计记录都在 strategy 执行前后抓取真实 live Session surface，保存 event sequence、segment
   和 token 总量索引；旧记录缺少该字段时解码为显式 `legacy`，不伪造 after identity，也不改变
   `CompactionStrategy`/`CompactionResult` 契约。
@@ -126,5 +130,5 @@ M08-F001 ~ M08-F005 共 5 项，与 `checklist.json` 一一对应。
   auth 等待、engine 前取消、已运行 engine 排空与卸载后拒绝新任务。
 - 另有 1 项跨模块集成场景使用确定性中英双语长会话语料跑通
   `DefaultNightScheduler → DshAgentNightExecutor → Cordis → M08` 生产链及 archive/audit/replay；
-  本地 Prettier、ESLint、严格类型检查、构建、22 项 M08 包测试、发布元数据与 npm pack
+  本地 Prettier、ESLint、严格类型检查、构建、23 项 M08 包测试、发布元数据与 npm pack
   白名单审计通过，未调用外部模型或服务。

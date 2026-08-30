@@ -14,6 +14,7 @@
 | v0.6 | 2026-08-30 | Codex | 增加触屏/键盘迁移控件及拖放校验与同步防重入锁 |
 | v0.7 | 2026-08-30 | Codex | 回填 loopback CLI/SSE 与 claim lease 原子身份验证 |
 | v0.8 | 2026-08-30 | Codex | 增加夜间任务执行器路由与唯一终态所有权契约 |
+| v0.9 | 2026-08-30 | Codex | 将夜间容量预留与任务结算收敛为原子账本事务 |
 
 ## 1. 概述与目标
 
@@ -202,18 +203,23 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
 - 每次认领生成唯一 `leaseId`；progress/complete/fail 在同一次 ledger update 锁内比对
   actor/session/claimedAt/leaseId/executionOwner。夜间 scheduler 和浏览器自动化始终传递启动时捕获的 claim，
   即使同一 agent/session 在同一毫秒 A→B 重领，A 的陈旧写入也全部 `E_VERSION_CONFLICT`。
+- 夜间认领在同一次账本锁内根据 `quotaUsed` 与当日 `doing/nightRunId` 计算已分配容量并写入 claim；
+  成功或失败结算把任务状态、quota 与熔断状态放入同一次原子 publish。跨 scheduler 实例不会超卖，
+  跨日旧任务结算不会污染新日计数，publish 前进程被终止时仍保留可安全重试的旧账本。
 - 夜间 scheduler 为匹配任务选择唯一注册执行器；重叠路由 fail closed。路由执行器只返回
   `TaskOutput`，scheduler 独占 complete/fail；可信 `executionOwner` 随 claim 持久化，HTTP 领单
   无法伪造，普通浏览器监听器据此跳过夜间 claim。
 - `tests/task-store.test.ts` 覆盖状态机、版本冲突、并发原子认领、回写复核、失败与
   幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复、独立
   model/tool scope、结果工具成功日志以及缺报告/验收失败/异常 turn 的 fail-closed；
+  `tests/scheduler-atomic.test.ts` 覆盖双 scheduler 限额、跨日结算、run identity/CAS 与
+  publish 前进程终止后的完整旧状态和安全重试；
   `tests/http-api.test.ts` 覆盖鉴权 CRUD、导入、实时 SSE 与断档基线；
   `tests/client-cli.test.ts` 覆盖客户端槽位、拖拽写 API、触屏/键盘迁移控件的合法目标、
   `expectedVersion`、伪造/陈旧 payload 拒绝、快速双提交/拖放互斥、busy/error/lock 清理
   语义与 CLI 同源调用。
 - 发布包生成 Host ESM、`taskctl` 与 rc2 lazy-CJS `client.js`/`client.d.ts`；夜间模式
-  继续默认关闭。39 项 M02 测试通过；真实无人值守执行仍需在目标 profile 进行部署验收后才启用。
+  继续默认关闭。43 项 M02 测试通过；真实无人值守执行仍需在目标 profile 进行部署验收后才启用。
 
 ## 11. 开放问题
 

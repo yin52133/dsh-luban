@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 工具门禁、认证审批链路与实现验证   |
 | v0.3 | 2026-08-30 | Codex | 补齐任务卡文档直达与 Web 四要素修订交互验证 |
 | v0.4 | 2026-08-30 | Codex | 补齐 canonical/junction 路径身份与 Cordis 验证 |
+| v0.5 | 2026-08-30 | Codex | 补齐驳回反馈进入持久会话及重放的直接证据 |
 
 ## 1. 概述与目标
 
@@ -100,8 +101,8 @@ M04-F001 ~ M04-F004 共 4 项，与 `checklist.json` 一一对应。
 
 ## 10. 开放问题
 
-- 已使用 DSH `0.1.1-rc.2` 的单调 `ctx.tools.guard()` 挂接工具门禁，并通过真实
-  `AgentRegistry` 将结构化审批反馈注入目标会话；仍需在目标 DSH Web profile 中完成浏览器交互验收。
+- 已使用 DSH `0.1.1-rc.2` 的单调 `ctx.tools.guard()` 挂接工具门禁；目标 DSH Web profile
+  的浏览器交互仍作为部署 smoke test 保留，不影响下述显式验收证据。
 
 ## 11. 实现与验证记录
 
@@ -109,6 +110,9 @@ M04-F001 ~ M04-F004 共 4 项，与 `checklist.json` 一一对应。
   lexical/canonical 路径逃逸、symlink/junction、目录换位、同日同 slug 覆盖和乐观版本冲突均被拒绝。
 - `FilePlanService` 实现完整状态机、四要素校验、审批历史、会话当前 plan 以及可选
   `lubanTaskStore` 联动；批准 `todo` 关联任务时推进为 `doing`。
+- 真实 `FilePlanService` 的 submit/reject 事件经 rc2 `AgentRegistry` 写入目标 `Session`/`Inbox`
+  的持久 `next-turn`，驳回意见同时进入 next-step 状态；新建会话视图可从
+  `agent/inbox/spliced` 事件重放，且非目标会话保持隔离。
 - `/luban-plan` 提供认证 REST/SSE API，Settings lazy-CJS 客户端提供提交、批准、驳回、
   `rejected/revising` 四要素修订和文档入口；修订携带当前 `expectedVersion`，冲突错误进入页面告警。
 - M02 看板通过现有 `GET /luban-plan/plans` 与共享 `taskId` 归组关联项，任务卡直接打开对应的认证
