@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { Buffer } from 'node:buffer'
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, parse, resolve } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { generatePlugin } from '../create-plugin.mjs'
@@ -34,6 +34,39 @@ async function temporaryRoot() {
 async function json(path, value) {
   await mkdir(resolve(path, '..'), { recursive: true })
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function registryFetcher(packages, mutate) {
+  const requests = []
+  let index = 0
+  return {
+    requests,
+    fetcher: async (url, options) => {
+      const record = packages[index]
+      if (record === undefined) throw new Error('Unexpected registry request')
+      let metadata = {
+        name: record.name,
+        version: record.version,
+        license: record.license,
+        repository: { type: 'git', url: record.repository },
+        dist: { integrity: record.integrity },
+      }
+      metadata = mutate === undefined ? metadata : mutate(cloneJson(metadata), index)
+      index += 1
+      const body = JSON.stringify(metadata)
+      requests.push({ url, options })
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => String(Buffer.byteLength(body)) },
+        text: async () => body,
+      }
+    },
+  }
 }
 
 function runNode(script, args, cwd) {
@@ -238,24 +271,284 @@ describe('M12 install and safety plans', () => {
     expect(resolvePackageSpecs(lock)).toEqual([
       'dshmarket@1.36.0',
       'dsh-better-sidebar@0.17.1',
-      'dsh-memory@0.1.0',
+      '@furongjun1999/dsh-memory@0.4.0',
     ])
     expect(resolvePackageSpecs(lock, 'latest')).toEqual([
       'dshmarket@latest',
       'dsh-better-sidebar@latest',
-      'dsh-memory@latest',
+      '@furongjun1999/dsh-memory@latest',
     ])
-    const plan = await installThirdParty({ platform: 'windows' })
+    let invoked = false
+    let fetched = false
+    const plan = await installThirdParty({
+      platform: 'windows',
+      fetcher: async () => {
+        fetched = true
+        throw new Error('dry-run must not access the registry')
+      },
+      runner: () => {
+        invoked = true
+        throw new Error('dry-run must not invoke dsh')
+      },
+    })
     expect(plan).toMatchObject({ profile: 'win-debug', dryRun: true })
     expect(plan.args).toEqual(['plugin', '--profile', 'win-debug', 'add', ...plan.specs])
-    expect(dshInvocation(plan.args, 'win32', 'C:\\Windows\\System32\\cmd.exe')).toEqual({
+    expect(plan.packages).toHaveLength(3)
+    expect(plan.packages[2]).toMatchObject({
+      name: '@furongjun1999/dsh-memory',
+      version: '0.4.0',
+      license: 'MIT',
+    })
+    expect(plan.supplyChain).toEqual({
+      mode: 'pinned',
+      verified: false,
+      reason: 'dry-run does not access the registry',
+    })
+    expect(invoked).toBe(false)
+    expect(fetched).toBe(false)
+    expect(dshInvocation(plan.args, 'windows', 'C:\\Windows\\System32\\cmd.exe')).toEqual({
       command: 'C:\\Windows\\System32\\cmd.exe',
       args: ['/d', '/s', '/c', 'dsh.cmd', ...plan.args],
     })
-    expect(dshInvocation(plan.args, 'linux')).toEqual({ command: 'dsh', args: plan.args })
+    expect(dshInvocation(plan.args, 'ubuntu')).toEqual({ command: 'dsh', args: plan.args })
+    expect(() => dshInvocation(plan.args, 'win32')).toThrow(/windows or ubuntu/u)
   })
 
-  it('keeps platform wrappers in preview mode unless apply is explicit', () => {
+  it('rejects supply-chain identity and integrity tampering in the structured lock', async () => {
+    const root = await temporaryRoot()
+    const original = await loadVersionLock()
+    const identityPath = join(root, 'identity.json')
+    const identityTampered = cloneJson(original)
+    identityTampered.packages[2].name = 'dsh-memory'
+    await json(identityPath, identityTampered)
+    await expect(loadVersionLock(identityPath)).rejects.toThrow(/identity mismatch/u)
+
+    const repositoryPath = join(root, 'repository.json')
+    const repositoryTampered = cloneJson(original)
+    repositoryTampered.packages[0].repository = 'https://example.invalid/dsh-market'
+    await json(repositoryPath, repositoryTampered)
+    await expect(loadVersionLock(repositoryPath)).rejects.toThrow(/identity mismatch/u)
+
+    const integrityPath = join(root, 'integrity.json')
+    const integrityTampered = cloneJson(original)
+    integrityTampered.packages[1].integrity = 'sha512-not-a-digest'
+    await json(integrityPath, integrityTampered)
+    await expect(loadVersionLock(integrityPath)).rejects.toThrow(/integrity/u)
+  })
+
+  it('binds an approved apply to the target host and child-only canonical DSH_HOME', async () => {
+    const root = await temporaryRoot()
+    const dshHome = resolve(root, 'acceptance-home')
+    const targetPlatform = process.platform === 'win32' ? 'windows' : 'ubuntu'
+    const parentDshHome = process.env.DSH_HOME
+    const lock = await loadVersionLock()
+    const registry = registryFetcher(lock.packages)
+    const calls = []
+    const result = await installThirdParty({
+      platform: targetPlatform,
+      dshHome,
+      approvedBy: ' release-maintainer ',
+      apply: true,
+      fetcher: registry.fetcher,
+      runner: (command, args, options) => {
+        calls.push({ command, args, options })
+        return { status: 0 }
+      },
+    })
+
+    expect(result).toMatchObject({
+      dryRun: false,
+      dshHome,
+      approvedBy: 'release-maintainer',
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].command).toBe(result.invocation.command)
+    expect(calls[0].args).toEqual(result.invocation.args)
+    expect(calls[0].options).toMatchObject({ shell: false, windowsHide: true })
+    expect(calls[0].options.env.DSH_HOME).toBe(dshHome)
+    expect(calls[0].options.env.npm_config_registry).toBe('https://registry.npmjs.org/')
+    expect(process.env.DSH_HOME).toBe(parentDshHome)
+    expect(registry.requests).toHaveLength(3)
+    expect(
+      registry.requests.every(({ url }) => url.startsWith('https://registry.npmjs.org/')),
+    ).toBe(true)
+    expect(result.supplyChain).toEqual({ mode: 'pinned', verified: true })
+  })
+
+  it('verifies every pinned registry identity field before spawn', async () => {
+    const root = await temporaryRoot()
+    const dshHome = resolve(root, 'acceptance-home')
+    const targetPlatform = process.platform === 'win32' ? 'windows' : 'ubuntu'
+    const lock = await loadVersionLock()
+    const differentIntegrity = `sha512-${Buffer.alloc(64, 0x5a).toString('base64')}`
+    const cases = [
+      {
+        label: 'name',
+        mutate: (metadata) => ({ ...metadata, name: 'substituted-package' }),
+        error: /name mismatch/u,
+      },
+      {
+        label: 'version',
+        mutate: (metadata) => ({ ...metadata, version: '9.9.9' }),
+        error: /version mismatch/u,
+      },
+      {
+        label: 'license',
+        mutate: (metadata) => ({ ...metadata, license: 'UNKNOWN' }),
+        error: /license mismatch/u,
+      },
+      {
+        label: 'repository',
+        mutate: (metadata) => ({
+          ...metadata,
+          repository: { url: 'https://example.invalid/substitution.git' },
+        }),
+        error: /repository mismatch/u,
+      },
+      {
+        label: 'integrity',
+        mutate: (metadata) => ({ ...metadata, dist: { integrity: differentIntegrity } }),
+        error: /integrity mismatch/u,
+      },
+    ]
+
+    for (const testCase of cases) {
+      const registry = registryFetcher(lock.packages, (metadata, index) =>
+        index === 0 ? testCase.mutate(metadata) : metadata,
+      )
+      let invoked = false
+      await expect(
+        installThirdParty({
+          platform: targetPlatform,
+          dshHome,
+          approvedBy: 'maintainer',
+          apply: true,
+          fetcher: registry.fetcher,
+          runner: () => {
+            invoked = true
+            return { status: 0 }
+          },
+        }),
+        testCase.label,
+      ).rejects.toThrow(testCase.error)
+      expect(invoked, testCase.label).toBe(false)
+      expect(registry.requests, testCase.label).toHaveLength(1)
+    }
+  })
+
+  it('requires extra approval for latest and spawns only registry-resolved exact specs', async () => {
+    const root = await temporaryRoot()
+    const dshHome = resolve(root, 'acceptance-home')
+    const targetPlatform = process.platform === 'win32' ? 'windows' : 'ubuntu'
+    const lock = await loadVersionLock()
+    let fetchedWithoutApproval = false
+    await expect(
+      installThirdParty({
+        platform: targetPlatform,
+        version: 'latest',
+        dshHome,
+        approvedBy: 'maintainer',
+        apply: true,
+        fetcher: async () => {
+          fetchedWithoutApproval = true
+          throw new Error('must not fetch without unpinned approval')
+        },
+        runner: () => {
+          throw new Error('must not spawn without unpinned approval')
+        },
+      }),
+    ).rejects.toThrow(/--approve-unpinned/u)
+    expect(fetchedWithoutApproval).toBe(false)
+
+    const versions = ['1.37.0', '0.18.0', '0.4.1']
+    const registry = registryFetcher(lock.packages, (metadata, index) => ({
+      ...metadata,
+      version: versions[index],
+      dist: { integrity: `sha512-${Buffer.alloc(64, index + 1).toString('base64')}` },
+    }))
+    const calls = []
+    const result = await installThirdParty({
+      platform: targetPlatform,
+      version: 'latest',
+      approveUnpinned: true,
+      dshHome,
+      approvedBy: 'maintainer',
+      apply: true,
+      fetcher: registry.fetcher,
+      runner: (command, args, options) => {
+        calls.push({ command, args, options })
+        return { status: 0 }
+      },
+    })
+
+    expect(result.specs).toEqual([
+      'dshmarket@1.37.0',
+      'dsh-better-sidebar@0.18.0',
+      '@furongjun1999/dsh-memory@0.4.1',
+    ])
+    expect(result.specs).not.toContain(expect.stringContaining('@latest'))
+    expect(result.supplyChain).toEqual({ mode: 'registry-resolved', verified: true })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].args.join(' ')).not.toContain('@latest')
+  })
+
+  it('fails before spawn on host mismatch, missing authority, or unsafe DSH_HOME', async () => {
+    const root = await temporaryRoot()
+    const dshHome = resolve(root, 'acceptance-home')
+    const wrongTarget = process.platform === 'win32' ? 'ubuntu' : 'windows'
+    let invoked = false
+    const runner = () => {
+      invoked = true
+      return { status: 0 }
+    }
+
+    await expect(
+      installThirdParty({
+        platform: wrongTarget,
+        dshHome,
+        approvedBy: 'maintainer',
+        apply: true,
+        runner,
+      }),
+    ).rejects.toThrow(/Refusing .* installation/u)
+    await expect(
+      installThirdParty({
+        platform: process.platform === 'win32' ? 'windows' : 'ubuntu',
+        approvedBy: 'maintainer',
+        apply: true,
+        runner,
+      }),
+    ).rejects.toThrow(/--dsh-home is required/u)
+    await expect(
+      installThirdParty({
+        platform: process.platform === 'win32' ? 'windows' : 'ubuntu',
+        dshHome,
+        apply: true,
+        runner,
+      }),
+    ).rejects.toThrow(/--approved-by is required/u)
+    await expect(
+      installThirdParty({
+        platform: process.platform === 'win32' ? 'windows' : 'ubuntu',
+        dshHome: 'relative/dsh-home',
+        approvedBy: 'maintainer',
+        apply: true,
+        runner,
+      }),
+    ).rejects.toThrow(/absolute path/u)
+    await expect(
+      installThirdParty({
+        platform: process.platform === 'win32' ? 'windows' : 'ubuntu',
+        dshHome: parse(dshHome).root,
+        approvedBy: 'maintainer',
+        apply: true,
+        runner,
+      }),
+    ).rejects.toThrow(/filesystem root/u)
+    expect(invoked).toBe(false)
+  })
+
+  it('keeps platform wrappers in preview mode and blocks incomplete apply authority', () => {
     const result =
       process.platform === 'win32'
         ? spawnSync(
@@ -273,6 +566,24 @@ describe('M12 install and safety plans', () => {
           })
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('"dryRun": true')
+
+    const blocked =
+      process.platform === 'win32'
+        ? spawnSync(
+            'pwsh.exe',
+            [
+              '-NoProfile',
+              '-File',
+              join(REPOSITORY_ROOT, 'scripts/install-3rd-party.ps1'),
+              '-Apply',
+            ],
+            { encoding: 'utf8', windowsHide: true },
+          )
+        : spawnSync('bash', [join(REPOSITORY_ROOT, 'scripts/install-3rd-party.sh'), '--apply'], {
+            encoding: 'utf8',
+          })
+    expect(blocked.status).not.toBe(0)
+    expect(`${blocked.stdout}\n${blocked.stderr}`).toMatch(/dsh-home|DshHome/u)
   })
 
   it('builds a read-only gitleaks command', () => {

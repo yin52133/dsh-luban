@@ -1,10 +1,28 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "verifiedAt": "2026-08-30",
   "registry": "https://registry.npmjs.org/",
-  "packages": {
-    "dshmarket": "1.36.0",
-    "dsh-better-sidebar": "0.17.1",
-    "dsh-memory": "0.1.0"
-  }
+  "packages": [
+    {
+      "name": "dshmarket",
+      "version": "1.36.0",
+      "integrity": "sha512-xX8CCoXdIALaxtLosj+5qGg8r1cykW2zo1AOPJcSQepg2r4Vd2K0NmERldDqfeyFV0pCuZsUoAPe1Q/BW7De/g==",
+      "license": "MIT",
+      "repository": "git+https://github.com/dsh-market/dsh-market.git"
+    },
+    {
+      "name": "dsh-better-sidebar",
+      "version": "0.17.1",
+      "integrity": "sha512-7me2X6w+ecbzAMEHtuWkSPUrfLDLTBvL9qugzgBbg1FyWyy2dzS9QNDvnZjjkst4kr4LjUJTTG4rsXBcz41YzQ==",
+      "license": "MIT",
+      "repository": "https://github.com/omdsh-dev/DSH-better-sidebar"
+    },
+    {
+      "name": "@furongjun1999/dsh-memory",
+      "version": "0.4.0",
+      "integrity": "sha512-mr5AmdR2ecf/cWVHEM5BYncXJNi/E/EMMOMTzVEvr7PMtk0ws9RW398FQhZZTOzNP4gExrBz/NXduxslsTwqqg==",
+      "license": "MIT",
+      "repository": "git+https://github.com/FuRongJun-1999/dsh-memory.git"
+    }
+  ]
 }
