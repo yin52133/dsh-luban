@@ -9,7 +9,7 @@ import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-ses
 import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest'
 import type { Clock, SessionRef, TelemetryAggregator, TelemetrySnapshot } from 'dsh-luban-core'
-import { asSessionId } from 'dsh-luban-core'
+import { LubanError, asSessionId } from 'dsh-luban-core'
 import {
   DshCompactionContextFactory,
   DshCompactionCoordinator,
@@ -177,6 +177,35 @@ describe('DSH compaction boundary', () => {
       code: 'E_NOT_FOUND',
     })
     expect(session.surface.nodes).toEqual(originalSurface)
+  })
+
+  it('preserves the persisted workspace lookup failure reason', async () => {
+    const id = asSessionId('persisted-workspace-failure')
+    const failure = new Error('session metadata backend is offline')
+    const factory = new DshCompactionContextFactory(
+      { get: (): undefined => undefined } as unknown as AgentRegistry,
+      {
+        trigger: { ratio: 0.8, minGapRounds: 1 },
+        strategy: 'summarize+virtualfile',
+        keepRecentTokens: 10,
+        archiveDir: '.luban/context-archive',
+        nightProfile: { trigger: { ratio: 0.7 }, keepRecentTokens: 8 },
+      },
+      { now: (): number => 100 },
+      memoryAccountSessions([[ALICE, id]]),
+      (): Promise<never> => Promise.reject(failure),
+    )
+
+    try {
+      await factory.open(id, ALICE)
+      throw new Error('persisted workspace lookup unexpectedly succeeded')
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(LubanError)
+      if (!(error instanceof LubanError)) throw error
+      expect(error.code).toBe('E_IO')
+      expect(error.message).toContain(failure.message)
+      expect(error.cause).toBe(failure)
+    }
   })
 
   it('exposes deterministic agent-facing retrieval of an injected archive path', async () => {

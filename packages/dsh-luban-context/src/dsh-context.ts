@@ -27,6 +27,14 @@ interface SegmentSnapshot {
   readonly content: string
 }
 
+export interface PersistedSessionWorkspace {
+  readonly cwd?: string
+}
+
+export type PersistedSessionWorkspaceResolver = (
+  sessionId: ReturnType<typeof asSessionId>,
+) => Promise<PersistedSessionWorkspace | undefined>
+
 function stringifyEvent(session: Session, event: SessionEvent): string {
   const message = session.deriveEventMessage(event)
   return JSON.stringify(message ?? event.data, null, 2)
@@ -203,17 +211,20 @@ export class DshCompactionContextFactory implements CompactionContextFactory {
   readonly #config: Config
   readonly #clock: Clock
   readonly #accountSessions: AccountSessionRegistry
+  readonly #resolvePersistedWorkspace: PersistedSessionWorkspaceResolver | undefined
 
   public constructor(
     agents: AgentRegistry,
     config: Config,
     clock: Clock,
     accountSessions: AccountSessionRegistry,
+    resolvePersistedWorkspace?: PersistedSessionWorkspaceResolver,
   ) {
     this.#agents = agents
     this.#config = config
     this.#clock = clock
     this.#accountSessions = accountSessions
+    this.#resolvePersistedWorkspace = resolvePersistedWorkspace
   }
 
   public async create(session: SessionRef, accountId: AccountId): Promise<CompactionWorkspace> {
@@ -252,14 +263,45 @@ export class DshCompactionContextFactory implements CompactionContextFactory {
   ): Promise<ContextArchiveRepository> {
     await this.#assertOwner(sessionId, accountId)
     const agent = this.#agents.get(SessionId(sessionId))
-    if (agent === undefined) throw new LubanError('E_NOT_FOUND', `Agent ${sessionId} is not active`)
+    const workspace =
+      agent === undefined
+        ? await this.#persistedWorkspace(sessionId)
+        : resolve(agent.session.header.cwd ?? process.cwd())
     return new ContextArchiveRepository({
-      workspace: resolve(agent.session.header.cwd ?? process.cwd()),
+      workspace,
       archiveDir: this.#config.archiveDir,
       accountId,
       sessionId,
       clock: this.#clock,
     })
+  }
+
+  async #persistedWorkspace(sessionId: ReturnType<typeof asSessionId>): Promise<string> {
+    if (this.#resolvePersistedWorkspace === undefined) {
+      throw new LubanError(
+        'E_NOT_FOUND',
+        `Session ${sessionId} has no live agent or persisted workspace resolver`,
+      )
+    }
+    let persisted: PersistedSessionWorkspace | undefined
+    try {
+      persisted = await this.#resolvePersistedWorkspace(sessionId)
+    } catch (error: unknown) {
+      if (error instanceof LubanError) throw error
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new LubanError(
+        'E_IO',
+        `Unable to resolve persisted workspace for session ${sessionId}: ${reason}`,
+        { cause: error },
+      )
+    }
+    if (persisted === undefined) {
+      throw new LubanError(
+        'E_NOT_FOUND',
+        `Session ${sessionId} has no live agent or persisted workspace`,
+      )
+    }
+    return resolve(persisted.cwd ?? process.cwd())
   }
 
   async #assertOwner(

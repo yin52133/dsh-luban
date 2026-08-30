@@ -4,7 +4,11 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { AuthService, TelemetryAggregator } from 'dsh-luban-core'
 import { LubanError, modulePrefix, systemClock } from 'dsh-luban-core'
 import { Config as ConfigSchema, type Config as ContextConfig, parseConfig } from './config.js'
-import { DshCompactionContextFactory, DshCompactionCoordinator } from './dsh-context.js'
+import {
+  DshCompactionContextFactory,
+  DshCompactionCoordinator,
+  type PersistedSessionWorkspaceResolver,
+} from './dsh-context.js'
 import {
   DefaultCompactionEngine,
   type AccountCompactionDoneEvent,
@@ -28,7 +32,28 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export const name = 'luban-context'
-export const inject = ['agents', 'webServer', 'lubanAuth', 'lubanTelemetry']
+
+interface SessionQueryWorkspaceSource {
+  listSessions(): Promise<
+    readonly {
+      readonly header: { readonly id: unknown; readonly cwd?: string }
+    }[]
+  >
+}
+
+function persistedWorkspaceResolver(
+  sessions: SessionQueryWorkspaceSource,
+): PersistedSessionWorkspaceResolver {
+  return async (sessionId) => {
+    const record = (await sessions.listSessions()).find(
+      (candidate): boolean => String(candidate.header.id) === String(sessionId),
+    )
+    if (record === undefined) return undefined
+    return record.header.cwd === undefined ? {} : { cwd: record.header.cwd }
+  }
+}
+
+export const inject = ['agents', 'webServer', 'lubanAuth', 'lubanTelemetry', 'sessionQuery']
 export const provide = 'lubanCompaction'
 export const Config = ConfigSchema
 export type Config = ContextConfig
@@ -41,6 +66,7 @@ export {
   DshCompactionCoordinator,
   sessionRefFromAgent,
 } from './dsh-context.js'
+export type { PersistedSessionWorkspace, PersistedSessionWorkspaceResolver } from './dsh-context.js'
 export { DefaultCompactionEngine } from './engine.js'
 export type {
   AccountCompactionDoneEvent,
@@ -64,12 +90,22 @@ export function apply(ctx: Context, input: Partial<ContextConfig> = {}): void {
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth') as AuthService | undefined
   const telemetry = ctx.get('lubanTelemetry') as TelemetryAggregator | undefined
-  if (auth === undefined || telemetry === undefined) {
-    throw new LubanError('E_UNAVAILABLE', 'lubanAuth and lubanTelemetry are required')
+  const sessionQuery = ctx.get('sessionQuery') as SessionQueryWorkspaceSource | undefined
+  if (auth === undefined || telemetry === undefined || sessionQuery === undefined) {
+    throw new LubanError(
+      'E_UNAVAILABLE',
+      'lubanAuth, lubanTelemetry, and sessionQuery are required',
+    )
   }
   const engine = new DefaultCompactionEngine({
     config,
-    factory: new DshCompactionContextFactory(ctx.agents, config, systemClock, auth.accountSessions),
+    factory: new DshCompactionContextFactory(
+      ctx.agents,
+      config,
+      systemClock,
+      auth.accountSessions,
+      persistedWorkspaceResolver(sessionQuery),
+    ),
     accountSessions: auth.accountSessions,
     clock: systemClock,
     events: {

@@ -9,7 +9,7 @@ import type { AccountSessionRegistry, AuthService, TelemetryAggregator } from 'd
 import { asSessionId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import plugin from '../src/index.js'
-import { ALICE, memoryAccountSessions } from './account-sessions.js'
+import { ALICE, BOB, memoryAccountSessions } from './account-sessions.js'
 
 function authentication(accountSessions: AccountSessionRegistry): AuthService {
   return {
@@ -44,10 +44,11 @@ describe('Cordis integration', (): void => {
       append,
     } as unknown as Session
     const agent = { id: sessionId, status: 'idle', session } as Agent
+    let agentIsLive = true
     const agents = {
       get: (id: ReturnType<typeof SessionId>): Agent | undefined =>
-        id === sessionId ? agent : undefined,
-      list: (): readonly Agent[] => [agent],
+        agentIsLive && id === sessionId ? agent : undefined,
+      list: (): readonly Agent[] => (agentIsLive ? [agent] : []),
     } as unknown as AgentRegistry
     const telemetry = {
       snapshot: (): Promise<never> => Promise.reject(new Error('not used by direct engine call')),
@@ -73,12 +74,21 @@ describe('Cordis integration', (): void => {
         ctx.provide('lubanTelemetry', telemetry)
       },
     })
+    const listSessions = vi.fn(() =>
+      Promise.resolve([{ header: { id: sessionId, cwd: workspace } }]),
+    )
+    const sessionQueryFiber = context.plugin({
+      name: 'luban-context-test-session-query',
+      apply(ctx: Context): void {
+        ctx.provide('sessionQuery', { listSessions })
+      },
+    })
     const unregisterEvent = context.on('luban.compaction.done', (payload): void => {
       published.push(payload)
     })
 
     try {
-      await Promise.all([webFiber, agentsFiber, authFiber, telemetryFiber])
+      await Promise.all([webFiber, agentsFiber, authFiber, telemetryFiber, sessionQueryFiber])
       const fiber = context.plugin(plugin, {
         trigger: { ratio: 0.5, minGapRounds: 1 },
         keepRecentTokens: 1,
@@ -116,12 +126,33 @@ describe('Cordis integration', (): void => {
       ])
       expect(append).toHaveBeenCalledOnce()
       await fiber.dispose()
+
+      agentIsLive = false
+      const restartedFiber = context.plugin(plugin, {
+        trigger: { ratio: 0.5, minGapRounds: 1 },
+        keepRecentTokens: 1,
+      })
+      await restartedFiber
+      await expect(
+        context.lubanCompaction.archives(asSessionId(sessionId), BOB),
+      ).rejects.toMatchObject({ code: 'E_ACCOUNT_SCOPE_MISMATCH' })
+      expect(listSessions).not.toHaveBeenCalled()
+      const persistedEntries = await context.lubanCompaction.archives(asSessionId(sessionId), ALICE)
+      expect(persistedEntries).not.toHaveLength(0)
+      const persistedEntry = persistedEntries[0]
+      if (persistedEntry === undefined) throw new Error('persisted archive entry is missing')
+      await expect(
+        context.lubanCompaction.replayFile(asSessionId(sessionId), persistedEntry.path, ALICE),
+      ).resolves.toContain('Decision')
+      expect(listSessions).toHaveBeenCalledOnce()
+      await restartedFiber.dispose()
     } finally {
       unregisterEvent()
       await Promise.allSettled([
         telemetryFiber.dispose(),
         authFiber.dispose(),
         agentsFiber.dispose(),
+        sessionQueryFiber.dispose(),
         webFiber.dispose(),
       ])
       await rm(workspace, { recursive: true, force: true })
