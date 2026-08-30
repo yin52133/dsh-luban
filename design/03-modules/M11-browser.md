@@ -17,6 +17,7 @@
 | v0.9 | 2026-08-30 | Codex | 固定 uv/Python 版本并收口桥接环境生命周期 |
 | v0.10 | 2026-08-30 | Codex | 收口为真实浏览器/provider 与双平台功能验收 |
 | v0.11 | 2026-08-30 | Codex | 浏览器任务、事件、产物与持久 profile 按登录账号隔离 |
+| v0.12 | 2026-08-30 | Codex | 插件启动时恢复持久化的浏览器任务 claim |
 
 ## 1. 概述与目标
 
@@ -120,6 +121,9 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
   自动任务仅响应已由 agent 认领且带 `browser`、`auto-ok` 和唯一模板标签的看板卡片。
 - 自动任务按 claim `leaseId` 分代去重并串行；同毫秒 A→B 重领时 A 的 progress/complete/fail
   全部被账本拒绝，B 仍继续 queue/progress/artifact 并进入 `review(autoDone)`。
+- Taskboard 监听器注册后会查询持久化账本中的 `doing + browser` 任务，按任务自身 `accountId`
+  恢复中断执行；查询期间到达的同一 claim 继续由 generation 去重。账本查询失败会中止该集成启动，
+  单任务执行失败保留原始错误并写入插件日志，不再静默丢失。
 - 夜间浏览器任务通过共享 `NightTaskExecutorRoute` 进入 queue；browser 只上报进度并返回产物，
   scheduler 独占 complete/fail。持久化 `executionOwner` 防止重复执行和终态重复写入。
 - 本地 ESLint、严格类型、构建、M11 包测试、跨模块集成与 `uv --locked` Python 测试、Ruff、
