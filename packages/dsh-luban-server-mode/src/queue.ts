@@ -17,6 +17,8 @@ import type { ResourceProbe } from './resources.js'
 import { compileTemplate } from './templates.js'
 
 const DEFAULT_RESOURCE_PROBE_TIMEOUT_MS = 5_000
+const UNOWNED_RECOVERY_REASON =
+  'Legacy build job has no account owner; automatic recovery was skipped'
 
 export type BuildQueueEvent =
   | {
@@ -116,6 +118,7 @@ export class BuildQueue {
   readonly #onError: (error: unknown) => void
   readonly #listeners = new Set<(event: BuildQueueEvent) => void>()
   readonly #activeAlerts = new Set<Promise<void>>()
+  readonly #guardAlertAccounts = new Set<AccountId>()
   readonly #running = new Map<
     string,
     { readonly controller: AbortController; readonly task: Promise<void> }
@@ -161,23 +164,52 @@ export class BuildQueue {
     this.#started = true
     this.#stopping = false
     try {
-      const recovered: BuildJob[] = []
+      const recoveryEvents: Extract<BuildQueueEvent, { readonly type: 'job' }>[] = []
+      const unowned: { readonly id: string; readonly status: 'queued' | 'running' }[] = []
       await this.#store.update((ledger): BuildLedger => ({
         ...ledger,
         records: Object.fromEntries(
           Object.entries(ledger.records).map(([id, record]) => {
+            if (
+              record.job.accountId === undefined &&
+              (record.job.status === 'queued' || record.job.status === 'running')
+            ) {
+              const from = record.job.status
+              const job: BuildJob = {
+                ...record.job,
+                status: 'failed',
+                errorLogExcerpt: UNOWNED_RECOVERY_REASON,
+                version: record.job.version + 1,
+              }
+              recoveryEvents.push({ type: 'job', job, from, to: 'failed' })
+              unowned.push({ id, status: from })
+              return [
+                id,
+                copyRecord(record, job, {
+                  ...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
+                  finishedAt: this.#now(),
+                }),
+              ]
+            }
             if (record.job.status !== 'running') return [id, record]
             const job: BuildJob = {
               ...record.job,
               status: 'queued',
               version: record.job.version + 1,
             }
-            recovered.push(job)
+            recoveryEvents.push({ type: 'job', job, from: 'running', to: 'queued' })
             return [id, { job, createdAt: record.createdAt }]
           }),
         ),
       }))
-      for (const job of recovered) this.#emit({ type: 'job', job, from: 'running', to: 'queued' })
+      for (const event of recoveryEvents) this.#emit(event)
+      for (const item of unowned) {
+        this.#onError(
+          new LubanError('E_ACCOUNT_SCOPE_MISMATCH', UNOWNED_RECOVERY_REASON, {
+            details: { jobId: item.id, previousStatus: item.status },
+          }),
+        )
+      }
       this.#timer = setInterval((): void => {
         this.#schedule()
       }, this.#checkIntervalMs)
@@ -190,6 +222,9 @@ export class BuildQueue {
   }
 
   public async enqueue(input: BuildJobInput): Promise<BuildJob> {
+    if (input.accountId === undefined) {
+      throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'Build jobs require an account owner')
+    }
     const template = this.#templates.get(input.templateId)
     if (template === undefined) {
       throw new LubanError('E_INVALID_INPUT', `unknown build template ${input.templateId}`)
@@ -197,7 +232,7 @@ export class BuildQueue {
     const id = randomUUID()
     const job: BuildJob = {
       id,
-      ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
+      accountId: input.accountId,
       templateId: template.id,
       params: { ...input.params },
       status: 'queued',
@@ -318,6 +353,7 @@ export class BuildQueue {
     await Promise.allSettled([...this.#running.values()].map((entry) => entry.task))
     await this.#waitForAlerts()
     this.#drainRequested = false
+    this.#guardAlertAccounts.clear()
     this.#listeners.clear()
   }
 
@@ -362,20 +398,34 @@ export class BuildQueue {
   async #performDrain(): Promise<void> {
     const report = await this.resourceReport()
     if (this.#isStopping()) return
-    const changedToPaused = report.paused && !this.#paused
-    this.#paused = report.paused
     this.#emit({ type: 'resource', report })
-    if (changedToPaused && this.#alerts !== undefined) {
-      this.#trackAlert(this.#alerts.guardExceeded(report))
+    const records = Object.values((await this.#store.read()).records)
+      .filter(
+        (record): boolean => record.job.status === 'queued' && record.job.accountId !== undefined,
+      )
+      .sort((left, right): number => left.createdAt - right.createdAt)
+    if (report.paused) {
+      this.#paused = true
+      if (this.#alerts !== undefined) {
+        const accounts = new Set(
+          records.flatMap((record): readonly AccountId[] =>
+            record.job.accountId === undefined ? [] : [record.job.accountId],
+          ),
+        )
+        for (const accountId of accounts) {
+          if (this.#guardAlertAccounts.has(accountId)) continue
+          this.#guardAlertAccounts.add(accountId)
+          this.#trackAlert(this.#alerts.guardExceeded(report, accountId))
+        }
+      }
+      return
     }
-    if (report.paused) return
+    if (this.#paused) this.#guardAlertAccounts.clear()
+    this.#paused = false
     const available = this.#maxConcurrent - this.#running.size
     if (available <= 0) return
-    const records = Object.values((await this.#store.read()).records)
-      .filter((record): boolean => record.job.status === 'queued')
-      .sort((left, right): number => left.createdAt - right.createdAt)
-      .slice(0, available)
-    for (const record of records) {
+    const selected = records.slice(0, available)
+    for (const record of selected) {
       if (this.#isStopping()) return
       await this.#launch(record.job.id)
     }
@@ -516,7 +566,13 @@ export class BuildQueue {
         (entry): boolean => entry[1].job.status === 'done' || entry[1].job.status === 'failed',
       )
       .sort((left, right): number => (right[1].finishedAt ?? 0) - (left[1].finishedAt ?? 0))
-    const expired = completed.slice(this.#retainRuns).map(([id]) => id)
+    const retainedByAccount = new Map<AccountId | undefined, number>()
+    const expired = completed.flatMap(([id, record]): readonly string[] => {
+      const accountId = record.job.accountId
+      const retained = retainedByAccount.get(accountId) ?? 0
+      retainedByAccount.set(accountId, retained + 1)
+      return retained < this.#retainRuns ? [] : [id]
+    })
     if (expired.length === 0) return
     await this.#artifacts.prune(expired)
     const expiredSet = new Set(expired)

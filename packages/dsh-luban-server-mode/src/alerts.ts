@@ -1,7 +1,7 @@
-import type { BuildJob, ResourceReport, TaskStore } from 'dsh-luban-core'
+import type { AccountId, BuildJob, ResourceReport, TaskStore } from 'dsh-luban-core'
 
 export interface BuildAlertSink {
-  guardExceeded(report: ResourceReport): Promise<void>
+  guardExceeded(report: ResourceReport, accountId: AccountId): Promise<void>
   jobFailed(job: BuildJob): Promise<void>
 }
 
@@ -12,14 +12,16 @@ export class TaskboardBuildAlertSink implements BuildAlertSink {
     this.#store = store
   }
 
-  public async guardExceeded(report: ResourceReport): Promise<void> {
+  public async guardExceeded(report: ResourceReport, accountId: AccountId): Promise<void> {
     const tag = 'server-resource-guard'
     const existing = await this.#store.query({
+      accountId,
       statuses: ['backlog', 'todo', 'doing', 'review'],
       tags: [tag],
     })
     if (existing.length > 0) return
     await this.#store.create({
+      accountId,
       title: 'Server build queue paused by resource guard',
       description: `diskFreeGb=${report.diskFreeGb.toFixed(2)}, load1=${report.load1.toFixed(2)}`,
       status: 'todo',

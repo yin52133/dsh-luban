@@ -2,7 +2,13 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { AccountSessionRegistry, ArtifactRef, BuildJob, ResourceReport } from 'dsh-luban-core'
+import type {
+  AccountId,
+  AccountSessionRegistry,
+  ArtifactRef,
+  BuildJob,
+  ResourceReport,
+} from 'dsh-luban-core'
 import { asAccountId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BuildAlertSink } from '../src/alerts.js'
@@ -16,6 +22,8 @@ import type { ResourceProbe, ResourceSample } from '../src/resources.js'
 import type { WorkerResult } from '../src/worker-protocol.js'
 
 const directories = new Set<string>()
+const ALICE = asAccountId('alice')
+const BOB = asAccountId('bob')
 
 const TEMPLATE: BuildTemplateConfig = {
   id: 'fake-build',
@@ -152,10 +160,10 @@ class FailingArtifactManager extends ArtifactManager {
 }
 
 class CapturingAlerts implements BuildAlertSink {
-  public readonly guards: ResourceReport[] = []
+  public readonly guards: { readonly report: ResourceReport; readonly accountId: AccountId }[] = []
   public readonly failures: BuildJob[] = []
-  public guardExceeded(report: ResourceReport): Promise<void> {
-    this.guards.push(report)
+  public guardExceeded(report: ResourceReport, accountId: AccountId): Promise<void> {
+    this.guards.push({ report, accountId })
     return Promise.resolve()
   }
   public jobFailed(job: BuildJob): Promise<void> {
@@ -274,19 +282,17 @@ describe('BuildQueue', (): void => {
       ownerOf: () => Promise.resolve(null),
     }
     const { queue, workspace } = await fixture({ accountSessions })
-    const alice = asAccountId('alice')
-    const bob = asAccountId('bob')
     const job = await queue.enqueue({
-      accountId: alice,
+      accountId: ALICE,
       templateId: TEMPLATE.id,
       params: { workspace, mode: 'ok' },
     })
     await queue.start()
     await queue.waitForIdle()
 
-    expect((await queue.queue(alice)).map((item) => item.id)).toEqual([job.id])
-    expect(await queue.queue(bob)).toEqual([])
-    await expect(queue.get(job.id, bob)).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+    expect((await queue.queue(ALICE)).map((item) => item.id)).toEqual([job.id])
+    expect(await queue.queue(BOB)).toEqual([])
+    await expect(queue.get(job.id, BOB)).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
     expect(bindings).toEqual([`alice:luban-server-build-${job.id}`])
   })
 
@@ -296,9 +302,21 @@ describe('BuildQueue', (): void => {
       concurrencyBarrier: 2,
     })
     await Promise.all([
-      queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } }),
-      queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } }),
-      queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'fail' } }),
+      queue.enqueue({
+        accountId: ALICE,
+        templateId: TEMPLATE.id,
+        params: { workspace, mode: 'ok' },
+      }),
+      queue.enqueue({
+        accountId: ALICE,
+        templateId: TEMPLATE.id,
+        params: { workspace, mode: 'ok' },
+      }),
+      queue.enqueue({
+        accountId: ALICE,
+        templateId: TEMPLATE.id,
+        params: { workspace, mode: 'fail' },
+      }),
     ])
     await queue.start()
     await queue.waitForIdle()
@@ -325,6 +343,7 @@ describe('BuildQueue', (): void => {
     probe.value = { diskFreeGb: 2, load1: 1 }
     await queue.start()
     const queued = await queue.enqueue({
+      accountId: ALICE,
       templateId: TEMPLATE.id,
       params: { workspace, mode: 'ok' },
     })
@@ -334,6 +353,7 @@ describe('BuildQueue', (): void => {
       setImmediate(resolve)
     })
     expect(alerts.guards).toHaveLength(1)
+    expect(alerts.guards[0]?.accountId).toBe(ALICE)
 
     probe.value = { diskFreeGb: 100, load1: 1 }
     await queue.waitForIdle()
@@ -346,6 +366,7 @@ describe('BuildQueue', (): void => {
     probe.behavior = 'reject'
     await queue.start()
     const queued = await queue.enqueue({
+      accountId: ALICE,
       templateId: TEMPLATE.id,
       params: { workspace, mode: 'ok' },
     })
@@ -370,6 +391,7 @@ describe('BuildQueue', (): void => {
     probe.behavior = 'stall'
     await queue.start()
     const queued = await queue.enqueue({
+      accountId: ALICE,
       templateId: TEMPLATE.id,
       params: { workspace, mode: 'ok' },
     })
@@ -393,22 +415,31 @@ describe('BuildQueue', (): void => {
     await queue.dispose()
   })
 
-  it('retains only the configured number of completed artifact runs', async (): Promise<void> => {
+  it('applies completed artifact retention independently for Alice and Bob', async (): Promise<void> => {
     const { artifacts, queue, workspace } = await fixture({ maxConcurrent: 1, retainRuns: 1 })
     await queue.start()
-    const first = await queue.enqueue({
+    const alice = await queue.enqueue({
+      accountId: ALICE,
       templateId: TEMPLATE.id,
       params: { workspace, mode: 'ok' },
     })
-    const second = await queue.enqueue({
+    const bobFirst = await queue.enqueue({
+      accountId: BOB,
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'ok' },
+    })
+    const bobSecond = await queue.enqueue({
+      accountId: BOB,
       templateId: TEMPLATE.id,
       params: { workspace, mode: 'ok' },
     })
     await queue.waitForIdle()
 
-    expect(await queue.artifacts(first.id)).toEqual([])
-    expect(await artifacts.discover(first.id)).toEqual([])
-    expect(await queue.artifacts(second.id)).toHaveLength(1)
+    expect(await queue.artifacts(alice.id, ALICE)).toHaveLength(1)
+    expect(await artifacts.discover(alice.id)).toHaveLength(1)
+    expect(await queue.artifacts(bobFirst.id, BOB)).toEqual([])
+    expect(await artifacts.discover(bobFirst.id)).toEqual([])
+    expect(await queue.artifacts(bobSecond.id, BOB)).toHaveLength(1)
     await queue.dispose()
   })
 
@@ -416,6 +447,7 @@ describe('BuildQueue', (): void => {
     const { queue, workspace } = await fixture({ failArtifactDiscovery: true })
     await queue.start()
     const job = await queue.enqueue({
+      accountId: ALICE,
       templateId: TEMPLATE.id,
       params: { workspace, mode: 'ok' },
     })
@@ -436,6 +468,7 @@ describe('BuildQueue', (): void => {
         [id]: {
           job: {
             id,
+            accountId: ALICE,
             templateId: TEMPLATE.id,
             params: { workspace, mode: 'ok' },
             status: 'running',
@@ -455,10 +488,84 @@ describe('BuildQueue', (): void => {
     await queue.dispose()
   })
 
+  it('fails legacy unowned queued and running jobs on recovery without executing them', async (): Promise<void> => {
+    const { errors, executor, queue, store, workspace } = await fixture({ maxConcurrent: 1 })
+    const queuedId = randomUUID()
+    const runningId = randomUUID()
+    await store.update((ledger) => ({
+      ...ledger,
+      records: {
+        [queuedId]: {
+          job: {
+            id: queuedId,
+            templateId: TEMPLATE.id,
+            params: { workspace, mode: 'ok' },
+            status: 'queued',
+            artifacts: [],
+            version: 1,
+          },
+          createdAt: Date.now(),
+        },
+        [runningId]: {
+          job: {
+            id: runningId,
+            templateId: TEMPLATE.id,
+            params: { workspace, mode: 'ok' },
+            status: 'running',
+            sessionId: `luban-server-build-${runningId}`,
+            artifacts: [],
+            version: 2,
+          },
+          createdAt: Date.now(),
+          startedAt: Date.now(),
+        },
+      },
+    }))
+
+    await queue.start()
+    await queue.waitForIdle()
+
+    expect(executor.maximum).toBe(0)
+    for (const [id, version] of [
+      [queuedId, 2],
+      [runningId, 3],
+    ] as const) {
+      const recovered = await queue.get(id)
+      expect(recovered).toMatchObject({
+        status: 'failed',
+        version,
+      })
+      expect(recovered.errorLogExcerpt).toContain(
+        'Legacy build job has no account owner; automatic recovery was skipped',
+      )
+    }
+    expect(
+      errors.filter(
+        (error): boolean =>
+          typeof error === 'object' &&
+          error !== null &&
+          Reflect.get(error, 'code') === 'E_ACCOUNT_SCOPE_MISMATCH',
+      ),
+    ).toHaveLength(2)
+    await queue.dispose()
+  })
+
+  it('rejects newly enqueued jobs without an account owner', async (): Promise<void> => {
+    const { queue, workspace } = await fixture()
+    await expect(
+      queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } }),
+    ).rejects.toMatchObject({ code: 'E_ACCOUNT_SCOPE_MISMATCH' })
+    await queue.dispose()
+  })
+
   it('waits for an in-flight drain and does not launch queued work while disposing', async (): Promise<void> => {
     const probe = new GatedProbe()
     const { directory, executor, queue, workspace } = await fixture({ probe })
-    await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } })
+    await queue.enqueue({
+      accountId: ALICE,
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'ok' },
+    })
     await queue.start()
     await probe.started
 
@@ -487,7 +594,11 @@ describe('BuildQueue', (): void => {
     const alerts = new GatedFailureAlerts()
     const { queue, workspace } = await fixture({ alerts, maxConcurrent: 1 })
     await queue.start()
-    await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'fail' } })
+    await queue.enqueue({
+      accountId: ALICE,
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'fail' },
+    })
     await alerts.started
 
     let disposed = false
@@ -510,8 +621,16 @@ describe('BuildQueue', (): void => {
       concurrencyBarrier: 1,
       maxConcurrent: 1,
     })
-    await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } })
-    await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } })
+    await queue.enqueue({
+      accountId: ALICE,
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'ok' },
+    })
+    await queue.enqueue({
+      accountId: ALICE,
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'ok' },
+    })
     await queue.start()
 
     await expect
@@ -536,6 +655,7 @@ describe('BuildQueue', (): void => {
     })
     if (gatedStore === undefined) throw new Error('gated ledger store was not created')
     const queued = await queue.enqueue({
+      accountId: ALICE,
       templateId: TEMPLATE.id,
       params: { workspace, mode: 'ok' },
     })
