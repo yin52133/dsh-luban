@@ -13,6 +13,7 @@
 | v0.5 | 2026-08-30 | Codex | 补齐串口片段进入持久会话及重放的直接证据           |
 | v0.6 | 2026-08-30 | Codex | 将约束聚焦于防误操作、会话隔离与真实设备验收       |
 | v0.7 | 2026-08-30 | Codex | 通道、日志、片段、GDB、SSE 与会话注入按认证账号隔离 |
+| v0.8 | 2026-08-30 | Codex | Desktop MCP 输出与生命周期控制绑定账号 owner      |
 
 ## 1. 概述与目标
 
@@ -113,8 +114,9 @@ export interface WinDebugService {
   并保留账号归属。
 - 外部工具路径经配置解析，缺失时给出安装指引而非崩溃。
 - endpoint 列表、设备占用和 OpenOCD/GDB/Desktop MCP 生命周期属于部署级共享物理状态；账号只看到
-  自己打开的 channel、日志、片段与 GDB 输出。跨账号操作会被拒绝且不返回对方内容；GDB 归属冲突
-  使用明确的 `E_ACCOUNT_SCOPE_MISMATCH`/403，便于定位实际问题。历史无账号片段不自动归属任何用户。
+  自己打开的 channel、日志、片段、GDB 与 Desktop MCP 输出。跨账号操作会被拒绝且不返回对方内容；
+  GDB/Desktop MCP 归属冲突使用明确的 `E_ACCOUNT_SCOPE_MISMATCH`/403，便于定位实际问题。历史无账号
+  片段不自动归属任何用户。
 
 ## 9. checklist 映射
 
@@ -146,11 +148,14 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
   完成 `initialize -> tools/list -> tools/call`，服务端未发布 allowlist 任一项即拒绝连接；协议
   消息、stderr、生命周期和取消均有界。集成测试启动真实 Node stdio MCP 子进程完成
   initialize/list/call/stop，并以真实 loopback TCP server 验证网络串口读写关闭。
+- Desktop MCP 物理 stdio runtime 保持单实例，但 starting/running/stopping 全程绑定账号 owner；
+  非 owner 看不到 `recentOutput`，也不能启动、停止或调用该上下文。DSH tool 调用通过已绑定账号的
+  session 解析 owner，正常停止或进程退出后释放；启动与停止的原始结构化错误继续传给调用者。
 - `/luban-win-debug` REST/SSE 只采用 M01 middleware 给出的 `accountId`，不接受 query/body 覆盖；
   channel 列表、日志、写入、命令、片段、关闭及 SSE replay/live 都按账号过滤。每个账号使用独立的
   replay cursor/ring；断档时客户端收到 `resync` 并重新读取当前状态与日志。客户端使用 DSH rc2
   lazy-CJS 加载器，服务注册为 `ctx.lubanWinDebug`。GDB owner 可读取输出、生成快照和停止进程；
   其他账号只看到部署级 running/stopped 状态。
 - 本机原生 `serialport` 枚举读取到 Microsoft COM3/COM4（只读，未打开端口）。本地 Prettier、
-  ESLint、严格类型检查、构建、66 项 M10 测试、发布元数据和 npm pack 内容检查通过；
+  ESLint、严格类型检查、构建、70 项 M10 测试、发布元数据和 npm pack 内容检查通过；
   未连接真实目标板、调试器或外部网络设备。
