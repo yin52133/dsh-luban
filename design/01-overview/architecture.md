@@ -6,6 +6,7 @@
 | ---- | ---------- | ----- | ----------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：L0-L4 分层、模块矩阵、双端公用原则 |
 | v0.2 | 2026-08-30 | Codex | 对齐 DSH 0.1.1 manifest，并确定 M01 认证 sidecar |
+| v0.3 | 2026-08-30 | Codex | 明确账号身份贯穿插件服务并隔离上下文数据 |
 
 ## 1. 分层模型（L0-L4）
 
@@ -44,13 +45,14 @@ flowchart TD
 - 每个插件是一个 npm 包：顶层 `engines.dsh` 声明版本基线；`dsh.bundle.patch` 指向随包的 `cordis.patch.yml`；有浏览器端的包通过 `dsh.client` + `exports["./client"]` 暴露预构建的 lazy-CJS client bundle。
 - 挂载：profile 的 `package.json` 依赖本包 → `dsh.profile.bundles` 有序追加 → 热启停靠 profile 的 `cordis.patch.yml` 写 `disabled`（约 1s HMR 生效）。
 - 插件配置一律放在 patch 条目的 `config:` 段（顶层字段会被静默忽略，这是 cordis-plugin-loader 的已核实行为）。
-- DSH `WebServer` 没有全局 middleware，路由匹配为 exact → 最长 prefix → fallback；M01 因此以认证 sidecar 作为唯一 LAN 入口，内部 DSH WebServer 只监听 `127.0.0.1`。sidecar 认证后反代 SPA、`/api`、WebSocket、SSE 与 `/plugins`，普通插件路由不得自行暴露到 LAN。
+- DSH `WebServer` 没有全局 middleware，路由匹配为 exact → 最长 prefix → fallback；M01 因此使用认证 sidecar 统一承接登录和浏览器请求。规范登录地址为 `/luban-auth/login`，旧式 `/luban/auth/login` 不作为兼容入口。sidecar 反代 SPA、`/api`、WebSocket、SSE 与 `/plugins`，认证账号身份由 M01 契约提供给插件服务。
+- 会话、任务、plan、附件、HUD 与上下文归档均以认证账号作为命名空间。跨机共享只在同一账号或用户明确选择的共享会话内发生；账号隔离不扩展为复杂 RBAC，也不承担可信局域网内的攻击防护。
 
 ## 3. 模块矩阵（双端公用 vs 平台专属）
 
 | 模块 | 名称 | 层 | 平台属性 | 需求 |
 | --- | --- | --- | --- | --- |
-| M01 | auth 局域网认证 | L2+L3 | **双端公用** | R01, R10 |
+| M01 | auth 简单账号登录与上下文隔离 | L2+L3 | **双端公用** | R01, R10 |
 | M02 | taskboard 任务看板 + 自主调度 | L2+L3+L4 | **双端公用**（任务带 host 标签） | R03 |
 | M03 | keepalive 保活 | L1+L2 | 双端公用（tmux=ubuntu，计划任务/服务=win，经 HAL 收口） | R02 |
 | M04 | plan 工作模式 | L2+L3 | 双端公用 | R05 |

@@ -71,8 +71,11 @@ unknown tools, a missing/failed/duplicate report, unmet acceptance, or a
 non-completed final turn all fail closed and return the task to `todo`.
 
 `taskctl` talks to the same `/luban-taskboard` HTTP API. Put the complete Cookie
-header in `LUBAN_SESSION_COOKIE` and the CSRF value in `LUBAN_CSRF_TOKEN`; secrets
-are intentionally not accepted as command-line arguments.
+header in `LUBAN_SESSION_COOKIE` and the authenticated request token in
+`LUBAN_CSRF_TOKEN`; neither value is accepted as a command-line argument.
+
+Task lists, claims, and event streams are intended to be scoped to the M01
+`accountId`; one account must not see or mutate another account's tasks.
 
 ```sh
 taskctl list --status todo --tag auto-ok

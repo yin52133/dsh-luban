@@ -7,6 +7,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：pnpm monorepo 结构与包命名规范          |
 | v0.2 | 2026-08-30 | Codex | 对齐 DSH 0.1.1 bundle/client manifest 契约    |
 | v0.3 | 2026-08-30 | Codex | 校正 A 档三方包身份并记录受控安装入口          |
+| v0.4 | 2026-08-30 | Codex | 移除安全扫描目标并保留发布质量门禁              |
 
 ## 1. 总览
 
@@ -15,10 +16,10 @@ dsh-luban/
 ├── README.md                    # 项目门面（遵循 06-release README 规范）
 ├── checklist.json               # 功能进度台账（与设计文档 F 编号双向一致）
 ├── LICENSE                      # MIT
-├── .gitignore                   # 含敏感文件红线（06-release）
+├── .gitignore                   # 本机配置、构建输出与临时文件忽略规则
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml               # lint + typecheck + test + gitleaks 密钥扫描
+│       ├── ci.yml               # lint + typecheck + build + test
 │       └── release.yml          # tag → GitHub Release → npm publish 同步
 ├── design/                      # 设计文档（本目录，唯一设计权威来源）
 │   ├── README.md

@@ -7,12 +7,13 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：捕获/落盘/注入/预览清理 四功能 |
-| v0.2 | 2026-08-30 | Codex | 回填 rc2 注入、附件安全边界与验证证据 |
+| v0.2 | 2026-08-30 | Codex | 回填 rc2 注入、附件边界与验证证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐 Settings 挂载、paste/drop 路由与多文件边界验证 |
 | v0.4 | 2026-08-30 | Codex | 补齐 ReactDOM 客户端与真实 Sharp resize 验证 |
 | v0.5 | 2026-08-30 | Codex | 增加 mounted live 视觉读图验收与证据边界 |
-| v0.6 | 2026-08-30 | Codex | live 验收绑定实际挂载服务、fresh challenge 与 OS listener/process 身份 |
-| v0.7 | 2026-08-30 | Codex | 定义 provider request-ID adapter 契约并绑定精确响应身份 |
+| v0.6 | 2026-08-30 | Codex | live 验收绑定实际挂载服务与现场视觉会话 |
+| v0.7 | 2026-08-30 | Codex | 完善视觉响应与目标会话关联验证 |
+| v0.8 | 2026-08-30 | Codex | 非功能口径改为稳定性，收敛为真实视觉功能验收 |
 
 ## 1. 概述与目标
 
@@ -93,16 +94,14 @@ export interface ImageIngestService {
   `shell: false`、超时和输出上限执行，其他平台显式拒绝。
 - 平台属性：双端公用；剪贴板适配器分 win/ubuntu 两实现（HAL）。
 
-## 8. 非功能与安全
+## 8. 非功能与稳定性
 
 - 上传大小限制（默认 ≤ 10MB/张）与类型白名单（png/jpeg/webp）。
 - 附件目录可配 `.gitignore`（用户决定是否入库）；清理只动自己目录，绝不碰 workspace 其他文件。
-- `attachDir` 必须是 canonical workspace 子目录；运行期校验目录设备/inode/birthtime 身份，目录被替换、
-  symlink 逃逸或文件哈希不符时 fail closed。临时文件用 hard-link 原子发布，启动仅回收满足严格命名与宽限期的孤儿。
+- `attachDir` 必须留在 workspace 内；临时文件原子发布，启动仅回收满足插件命名与宽限期的孤儿。
 - `attachDir` 是插件专用目录，不应混放手工命名文件；孤儿恢复按插件日期命名规则识别陈旧 crash artifact。
 - 开启压缩时 `sharp` 必须完成整图解码并验证最终尺寸；仅 metadata 可读的截断图、缺少 peer、解码或缩放失败均不落盘。
-- 注入只允许同一 canonical workspace 的 live rc2 root，并额外拒绝 durable `origin=subagent` 与
-  `delegationDepth > 0`；不在插件内重建 cold session。
+- 附件、最近列表、内容、删除、cleanup 与会话引用均按 M01 `accountId` 隔离；注入前确认目标 session 属于同一账号和 workspace。
 
 ## 9. checklist 映射
 
@@ -110,10 +109,9 @@ M06-F001 ~ M06-F004 共 4 项，与 `checklist.json` 一一对应。
 
 ## 10. 实现与验证记录
 
-- `/luban-image-paste` 提供认证上传、最近列表、原图预览、注入、删除与 TTL cleanup；M01 统一处理
-  Cookie/CSRF，内部 DSH WebServer 必须保持 loopback。
+- `/luban-image-paste` 提供登录后的上传、最近列表、原图预览、注入、删除与 TTL cleanup，并传播 M01 `accountId`。
 - Web Settings 客户端通过 `settings.section` 插槽挂载，覆盖 paste/drop、预览、注入、删除和 cleanup；
-  多文件输入会跳过类型不符、空文件和超限文件再选择首个合法图片。`luban-img` 从环境读取 Cookie/CSRF，
+  多文件输入会跳过类型不符、空文件和超限文件再选择首个合法图片。`luban-img` 复用当前登录会话，
   可只上传或立即注入 Markdown/绝对路径引用。
 - 附件索引记录 SHA-256、压缩报告与 `referencedBy`。注入在 per-image/session mutex 内先登记引用，
   `followup` 失败则回滚；被引用附件无论年龄都不会被自动或手动删除。
@@ -122,27 +120,15 @@ M06-F001 ~ M06-F004 共 4 项，与 `checklist.json` 一一对应。
   Cordis route/timer 卸载、release metadata 与 pack dry-run 通过；具体测试数以当前门禁输出为准。
 - `ctx.lubanImageVisualAcceptance` 在已挂载 Cordis 中执行生产
   `AttachmentRepository → FileImageIngestService → DshImageSessionInjector.followup` 链路。runner
-  只使用 `apply()` 实际提供的同一 repository/service/冻结 config，配置的压缩与注入样式不会被验收
-  硬编码绕过；每次注入还绑定当次已验证的同一 Agent 实例。runner 要求 clean Git、Windows/Ubuntu、
-  空 idle inbox 与 top-level live session；像素 nonce 不进入 prompt、
-  文件名或证据，并绑定精确 message→turn、单一实际 provider/model route 及模型 image capability。
+  使用 `apply()` 实际提供的同一 repository/service/config，配置的压缩与注入样式进入真实链路；
+  runner 在 Windows/Ubuntu 的 live session 中验证图片确实进入指定会话且模型能够读取。
   turn 未确定结束时不取消其他 inbox 工作且保留已引用附件，只有确定 settlement 后才移除本次附件。
-- standalone CLI 不重建 Host 拥有的模型/工具组合；注入 fake 的结果永久标记 `simulated`，不能升级为
-  live pass。服务端对 fresh challenge 仅返回 challenge/request 摘要与 PID，且自身只能产出 endpoint
-  pending candidate；CLI 复验本地 current-HEAD build，并在 Windows 通过系统 `netstat`、Ubuntu 通过
-  `/proc` 两次确认同一 PID 持有 literal IPv4 loopback listener，同时核验该进程由 workspace 中的精确
-  DSH entrypoint 启动，最终证据仅记录 Node/DSH entry/command/HTTP response 摘要。
-- 可选 `ctx.lubanProviderRequestIdentity` 契约只接受 provider wire adapter 对精确
-  session/assistant event seq/turn/step/message/provider/model/fresh challenge 的全字段回显；错配、额外字段、
-  非法 runtime 摘要或 adapter 异常均 fail closed。原始 provider request ID 只在进程内短暂存在，M06
-  evidence 仅保存 request/session/message 与 adapter runtime 的 SHA-256。CLI 将该绑定列为 final pass
-  必需项，并再次核对 session/turn/route/challenge，test-double 无法补造生产 pass。
+- standalone CLI 不重建 Host 拥有的模型/工具组合；模拟结果只用于测试。真实验收以指定账号上传图片、
+  注入其所属 session、模型正确描述图片内容以及附件引用/清理状态正确为准。
 
 ## 11. 目标环境验收
 
-- 仍需在真实 Windows/Ubuntu profile 抽查系统剪贴板、浏览器 paste/drop 与长期 TTL；M06-F003 的
-  本地 adapter 消费与验证边界已完成，但 rc2 公共成功事件本身不暴露 provider request ID，仓库内也
-  没有可替代真实 provider wire observer 的通用实现。明确 blocker 是安装并信任对应 provider 的
-  adapter 后，用真实 mounted 视觉 session 完成读图 pass 与 provider request-ID direct evidence。
+- 仍需在真实 Windows/Ubuntu profile 抽查系统剪贴板、浏览器 paste/drop、长期 TTL，并使用可读图模型
+  完成一次 mounted session 的上传→注入→读图功能验收；不再要求 provider request-ID 或进程身份链。
 - 最近列表返回数量受 `recentLimit` 限制，但当前 UI 读取原图而非缩略图；大图工作区应调低该值，缩略图列入后续优化。
 - Web 与 CLI API 请求均有 10 秒完整 deadline；该期限覆盖 headers 与 JSON body，JSON 响应另有显式字节上限。

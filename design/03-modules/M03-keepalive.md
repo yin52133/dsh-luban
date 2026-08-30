@@ -12,6 +12,8 @@
 | v0.4 | 2026-08-30 | Codex | 增加可恢复里程碑执行器与跳过已完成步骤验证 |
 | v0.5 | 2026-08-30 | Codex | 补齐卸载排空与 Windows 原生只读探针验证 |
 | v0.6 | 2026-08-30 | Codex | 固化 systemd 精确哨兵强制恢复语义并补 Cordis 生命周期验证 |
+| v0.7 | 2026-08-30 | Codex | 增加 Windows 注销/重启分阶段实机验收 |
+| v0.8 | 2026-08-30 | Codex | 收敛为保活、恢复与实机功能验收 |
 
 ## 1. 概述与目标
 
@@ -60,7 +62,8 @@ export interface KeepaliveAdapter {
   attach(id: string): Promise<void>;          // 供人接管（本地终端/ssh）
   list(): Promise<ManagedSession[]>;
   isAlive(id: string): Promise<boolean>;
-  destroy(id: string): Promise<void>;
+  /** 仅删除账本明确记录为本插件创建的会话；归属不明时保留并提示。 */
+  destroy(spec: SessionSpec): Promise<void>;
 }
 
 /** KeepaliveService —— L2 */
@@ -112,13 +115,12 @@ runCheckpointedTask({
 - 复用档位：tmux（B 档外部工具）、NSSM（B 档，license 待核实，可退化为原生 `schtasks`）。
 - 平台属性：双端公用（差异全在 HAL）。
 
-## 8. 非功能与安全
+## 8. 非功能与稳定性
 
-- 巡检与恢复日志脱敏（不含会话内容，只含元数据）。
-- `luban.keepalive.health` 的 `detail` 视为不可信诊断文本；M07 在进入 REST/SSE/Web/CLI
-  前统一去控制字符、脱敏并限长，最多保留 256 个当前异常会话。
+- 巡检与恢复日志有界，不保存完整会话内容。
+- `luban.keepalive.health` 的 `detail` 限长，最多保留 256 个当前异常会话，避免异常风暴拖垮 HUD。
 - 恢复策略幂等：重复调用不产生重复会话；账本损坏时降级为「只列出孤儿会话待人工处理」而非自作主张清理。
-- Windows 计划任务以当前用户或 SYSTEM 运行在部署文档中给出选择建议与安全差异。
+- Windows 计划任务采用部署账号可用的启动方式，并记录失败原因以便恢复。
 
 ## 9. checklist 映射
 
@@ -149,6 +151,10 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   detail 中的凭据型文本不会进入响应。
 - 真实 Cordis 生命周期测试以 `bootRestore: false` 挂载插件，证明精确环境值
   `LUBAN_BOOT_RESTORE=1` 仍会调用一次 `restore()`；其他类 truthy 文本不会取得强制恢复语义。
-- 本机 `schtasks.exe` 只读列表探针已通过且未创建计划任务；命令构造和写操作继续由 fake runner
-  隔离验证。本地 Prettier、ESLint、严格类型检查、构建、27 项测试、发布元数据与 npm pack
-  白名单审计通过；真实 tmux、注销与重启恢复仍需目标主机验收。
+- 本机 `schtasks.exe` 只读列表探针已通过且未创建计划任务；命令构造和写操作由测试 runner 验证。
+- Windows `prepare` 在任务不存在时注册并启动 host/child task；后续阶段核对任务状态、host/session
+  heartbeat 与系统 boot 时间。注销验证要求 heartbeat 在注销后继续推进；重启验证要求任务在新 boot
+  启动，并从已保存 checkpoint 继续未完成步骤。
+- Windows checkpoint 丢失或损坏时不从验收参数重建；恢复保持幂等，并保留孤儿任务供人工处理。
+- 本地 M03 Windows 相关 67 项测试、Prettier、ESLint、严格类型检查与构建通过；真实 tmux、
+  Windows 注销及双端重启恢复仍需在目标主机上完成最终功能验收。

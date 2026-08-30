@@ -11,6 +11,7 @@
 | v0.3 | 2026-08-30 | Codex | 核实三项 taskboard 参考许可，仅保留 C 档功能描述参考 |
 | v0.4 | 2026-08-30 | Codex | 记录 A 档 npm metadata/lock v2 与源码许可待核边界 |
 | v0.5 | 2026-08-30 | Codex | 记录 lock v3 原生构建边界与安装后许可证核验链 |
+| v0.6 | 2026-08-30 | Codex | 将 A 档验收收口为版本、许可、挂载与双平台实际安装 |
 
 ## 1. A 档 · 插件级安装原版（不进入本仓库代码）
 
@@ -20,10 +21,9 @@
 | dsh-better-sidebar | npm `dsh-better-sidebar@0.17.1`（github.com/omdsh-dev/DSH-better-sidebar） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | Trae 式 diff 展示回退、VSCode 式工作区树（相对路径） | 同上；仅允许锁定的 `node-pty@1.1.0` 原生构建 | 同上；界面体验直接使用原版，不复制其代码 |
 | @furongjun1999/dsh-memory | npm `@furongjun1999/dsh-memory@0.4.0`（github.com/FuRongJun-1999/dsh-memory） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | 长期记忆（本套件不做记忆功能，避免重复） | 同上 | 同上 |
 
-> lock v3 记录三项顶层包及 `node-pty@1.1.0` 的包名、版本、SHA-512 integrity、license metadata
-> 与 repository；安装器在 apply 前向官方 npm registry 逐项复核，并在安装后读取每个常规
-> LICENSE 文件、记录 SHA-256、核对唯一 bundle 挂载及 native load。verifier 能力本身不等于已经
-> 生成双平台 live 证据，也不替代 release notices 登记；两项仍是 M12-F004 目标环境验收内容。
+> lock v3 记录三项顶层包及 `node-pty@1.1.0` 的包名、精确版本与 license metadata；安装器在 apply
+> 后核对实际版本、常规 LICENSE 文件、唯一 bundle 挂载及 native load。Windows/Ubuntu 双平台实际
+> 安装与 release notices 登记仍是 M12-F004 的目标环境验收内容。
 
 ## 2. B 档 · 依赖/服务级集成（只写适配层）
 
@@ -47,7 +47,7 @@
 | cloader/dsh-taskboard | github.com/cloader/dsh-taskboard | **Apache-2.0（已核实：[LICENSE](https://github.com/cloader/dsh-taskboard/blob/main/LICENSE)）** | 人建卡→agent 认领执行→人验收的协作流；任务挂项目（workspace）；指定模型；手动+定时执行 | **代码与界面一律不参考**；仅按公开描述原创实现 | M02 |
 | maochiy/dsh-taskboard-plugin | github.com/maochiy/dsh-taskboard-plugin | **MIT（已核实：[LICENSE](https://github.com/maochiy/dsh-taskboard-plugin/blob/master/LICENSE)）** | 本地 JSON 存储、六列拖拽、任务-会话联动 | 同上 | M02 |
 | dsh-web-ui / dsh-task-board | github.com/zhu1090093659/dsh-web-ui | **Apache-2.0（已核实：[LICENSE](https://github.com/zhu1090093659/dsh-web-ui/blob/main/LICENSE)）** | Host 权威任务账本、真实会话执行、Host cron 调度 | 同上 | M02 |
-| @linxin666/dsh-web-all（本机已装，观察对象） | npm | 待核实 | LAN 访问/任务板的**需求形态**（其 LAN 无认证是本项目的反面教材） | 不参考代码；作为运行中的参照系观察行为 | M01/M02 |
+| @linxin666/dsh-web-all（本机已装，观察对象） | npm | 待核实 | LAN 访问/任务板的**需求形态**；Luban 入口使用 M01 登录 | 不参考代码；作为运行中的参照系观察行为 | M01/M02 |
 | pi-mono（badlogic） | github.com/badlogic/pi-mono | 待核实（MIT 预期） | 极简 agent 上下文工程理念；RPC headless 模式 | license 核实前不读源码 | M08/M09 |
 | pi-agentic-compaction | pi 生态扩展（地址待查证） | 待核实 | 虚拟文件系统式上下文压缩：旧上下文外置为可检索文件 | 同上，仅策略形态参考 | M08 |
 | 各 coding-agent 状态栏（ccusage 等） | — | — | 状态栏字段口径（context/rate） | 仅字段需求参考 | M07 |

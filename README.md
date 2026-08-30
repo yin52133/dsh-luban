@@ -1,6 +1,6 @@
 # dsh-luban
 
-🛠️ Custom workbench plugin suite for DeepSeek Harness (DSH) — LAN auth, task board, SSH + tmux keep-alive, shared Windows/Ubuntu sessions, context HUD & serial/debug tooling. Built for embedded devs: Windows debug box + LAN Ubuntu build server. Monorepo of dsh-luban-* plugins.
+🛠️ Custom workbench plugin suite for DeepSeek Harness (DSH) — simple account-separated contexts, task board, SSH + tmux keep-alive, shared Windows/Ubuntu sessions, context HUD & serial/debug tooling. Built for embedded devs: Windows debug box + LAN Ubuntu build server. Monorepo of dsh-luban-* plugins.
 
 > 鲁班（Luban）：为嵌入式工程师打造的 DSH 定制工作台。
 
@@ -13,7 +13,7 @@ dsh-luban 是一套运行在 [DeepSeek Harness](https://github.com/deepseek-ai/d
 | A · 本地调试机       | Windows | dsh 本机运行 + 串口/adb/GDB 调试 + 桌面自动化   |
 | B · 局域网编译服务器 | Ubuntu  | dsh 后台常驻（tmux 保活）+ 网页访问 + 编译/构建 |
 
-核心能力：局域网账号密码认证（端口可配）、任务看板（agent 可自主领单、夜间无人值守研究）、会话保活与跨机共享、上下文 HUD、上下文压缩、plan 工作模式、串口/远程/浏览器自动化集成。
+核心能力：简单账号登录与账号级上下文隔离（端口可配）、任务看板（agent 可自主领单、夜间无人值守研究）、会话保活与跨机共享、上下文 HUD、上下文压缩、plan 工作模式、串口/远程/浏览器自动化集成。本项目以功能和稳定性为主，不把可信局域网内的攻击防护或安全加固证明作为产品目标。
 
 ## 文档导航
 
@@ -26,7 +26,7 @@ dsh-luban 是一套运行在 [DeepSeek Harness](https://github.com/deepseek-ai/d
 | [03-modules](design/03-modules/M01-auth.md)                 | 12 个模块详细设计（功能/流程图/接口/数据模型）  |
 | [04-interfaces](design/04-interfaces/api-overview.md)       | 跨模块契约与数据结构                            |
 | [05-deployment](design/05-deployment/deploy-windows.md)     | Windows / Ubuntu 双端部署设计                   |
-| [06-release](design/06-release/release-principles.md)       | 发布原则与安全红线（key/.env 禁提交等）         |
+| [06-release](design/06-release/release-principles.md)       | 发布流程、版本一致性、失败恢复与仓库卫生        |
 | [07-references](design/07-references/reference-analysis.md) | 参考项目分析与复用档位（license 合规）          |
 
 ## 快速开始
@@ -39,9 +39,9 @@ pnpm install
 pnpm check
 ```
 
-本地联调时先构建工作区，再把所需 `dsh-luban-*` 包加入目标 profile。局域网入口必须
-使用 `dsh-luban-auth` sidecar（默认 `http://<host>:42600/luban-auth/login`），DSH 自带
-WebServer 保持 loopback 监听。各插件路由遵循 `/luban-<module>`，例如
+本地联调时先构建工作区，再把所需 `dsh-luban-*` 包加入目标 profile。浏览器入口使用
+`dsh-luban-auth` sidecar（默认 `http://<host>:42600/luban-auth/login`）；登录后，各插件按
+当前账号读取对应的会话与上下文。各插件路由遵循 `/luban-<module>`，例如
 `/luban-taskboard/tasks` 与 `/luban-browser/jobs`。
 
 浏览器桥接使用仓库锁文件，不使用全局 pip：
@@ -62,9 +62,12 @@ uv run --project tools/browser-bridge --locked python -m unittest discover -s to
   覆盖完整口径的直接证据；`blocked` 表示明确验收因环境、设备、授权或外部依赖暂时无法继续。
   `done` 只表示设计验收已有直接证据，不等同于已经发布。
 - npm 发布、GitHub Release、市场 PR 与 topic 修改均是独立的外部操作，未经明确授权不会执行。
-- 市场交接使用 `scripts/release/prepare-market-handoff.mjs`：默认仅预览；`--write` 只会基于 clean
-  `mainline` 在 `.luban/market-handoffs/` create-once 生成绑定 SHA/版本/上游 schema 的本地
-  审核物。产物中的 PR/topic 命令均为未执行计划，不能替代维护者明确批准。
+- 市场交接使用 `scripts/release/prepare-market-handoff.mjs`：默认仅预览；`--write` 在
+  `.luban/market-handoffs/` 生成包含包版本、上游 schema 与候选 diff 的本地审核物。产物中的
+  PR/topic 命令均为未执行计划，不能替代维护者明确批准。
+- A 档第三方安装验收使用 `scripts/acceptance/m12-third-party-install.mjs`，默认仅输出零写入计划。
+  真实验收安装到仓库外的 disposable profile，分别检查 Windows/Ubuntu 的安装、重复执行、启动、
+  列表/config 与卸载结果。脚本和 workflow 就绪不等于已获准修改目标环境；真实双端运行仍需明确授权。
 
 ## 许可
 

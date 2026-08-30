@@ -1,6 +1,6 @@
 # M01 认证模块（luban-auth）设计
 
-局域网访问的账号密码认证门禁：所有 dsh web 暴露面（双端）在 LAN 场景下的统一登录入口，端口与监听地址可配。
+简单本地账号登录与上下文隔离：所有 dsh Web 功能使用统一登录入口，并按账号隔离任务、计划、附件、会话与运行记录。
 
 ## 版本记录
 
@@ -8,14 +8,15 @@
 | ---- | ---------- | ----- | ------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：账户/会话/门禁/配置/锁定审计 全量设计 |
 | v0.2 | 2026-08-30 | Codex | 采用认证 sidecar 保护 DSH 全部 Web 暴露面   |
-| v0.3 | 2026-08-30 | Codex | 回填 sidecar、Argon2id、代理安全与 Cordis 验证证据 |
-| v0.4 | 2026-08-30 | Codex | 启动时强制核验 DSH loopback 监听与 upstream 端口 |
-| v0.5 | 2026-08-30 | Codex | 回填持久 secret 扫描与 canonical 登录入口本机验证 |
+| v0.3 | 2026-08-30 | Codex | 回填 sidecar、口令哈希与 Cordis 验证证据 |
+| v0.4 | 2026-08-30 | Codex | 启动时核对 DSH upstream 地址与端口 |
+| v0.5 | 2026-08-30 | Codex | 回填 canonical 登录入口本机验证 |
+| v0.6 | 2026-08-30 | Codex | 收敛为简单账号登录与账号上下文隔离，废弃安全加固目标 |
 
 ## 1. 概述与目标
 
-- **解决**：dsh web profile 默认无认证暴露在局域网（社区同类插件 dsh-web 的 LAN 模式即无认证）；任何浏览器先登录才能使用看板、会话等功能。DSH 内部 WebServer 固定 loopback，M01 sidecar 是唯一 LAN 入口并代理全部 HTTP/WebSocket/SSE 流量。
-- **不解决**：公网暴露（明确不支持，公网场景交给 HTTPS 反代 + M01-F007）；OAuth/LDAP 等企业级身份源。
+- **解决**：提供简单本地账号登录；认证后的请求携带稳定 `accountId`，业务数据和 DSH session/context 默认只对所属账号可见、可写。
+- **不解决**：局域网内恶意攻击防护、企业级权限治理、OAuth/LDAP 等身份源。公网部署由外层 HTTPS 反代负责。
 - **需求映射**：R01（Ubuntu 网页可用）、R10（服务器模式）、R06（M05 控制权交接依赖本模块身份）。
 - **平台属性**：双端公用（win/ubuntu 同一实现，M01-F006）。
 
@@ -23,13 +24,14 @@
 
 | 编号 | 功能 | 优先级 | 里程碑 | 验收口径 |
 | --- | --- | --- | --- | --- |
-| M01-F001 | 用户账户体系：本地账户文件（yaml/json），口令 argon2id 哈希存储，首启动引导创建管理员 | P0 | MS1 | 明文口令不出现在任何存储与日志中 |
+| M01-F001 | 用户账户体系：本地账户文件（yaml/json），口令哈希存储，首启动引导创建账号 | P0 | MS1 | 可创建账号并完成正确/错误口令登录测试 |
 | M01-F002 | 登录会话与 token：登录签发 HTTP-only cookie token，可配 TTL，支持登出与全端下线 | P0 | MS1 | token 过期/登出后接口 401 |
 | M01-F003 | 认证门禁中间件：未认证请求仅放行登录页/登录 API/静态资源，其余 302/401 | P0 | MS1 | 未登录访问任意业务路由被拦截 |
-| M01-F004 | 端口与监听地址配置：`port`、`host`（默认 0.0.0.0）、可选绑定网段白名单 | P0 | MS1 | 改配置后按新端口监听 |
-| M01-F005 | 失败锁定与审计：连续失败 N 次锁定 M 分钟；审计日志记录时间/用户/来源 IP/结果（不含口令） | P1 | MS1 | 爆破场景被锁定并留痕 |
-| M01-F006 | 双端部署适配：同一实现在 win/ubuntu 运行，差异仅存储路径（经 HAL） | P0 | MS1 | 双端 CI 均通过 |
-| M01-F007 | HTTPS/反代适配：`trustProxy` 选项与反向代理头识别，支持外层 TLS 终结 | P3 | MS4 | 反代场景 cookie/redirect 正确 |
+| M01-F004 | 端口与监听地址配置：`port`、`host` | P0 | MS1 | 改配置后按新地址和端口监听 |
+| M01-F005 | **已废弃**：失败锁定、防爆破与安全审计不再作为本项目功能目标 | P1 | MS1 | `dropped`，不再阻塞认证功能 |
+| M01-F006 | 双端部署适配：同一实现在 win/ubuntu 运行，差异仅存储路径（经 HAL） | P0 | MS1 | 双端均可启动、登录并访问业务 API |
+| M01-F007 | HTTPS/反代适配：支持外层 TLS 终结后的登录跳转与 cookie | P3 | MS4 | 反代场景 cookie/redirect 正确 |
+| M01-F008 | 账号上下文隔离：请求传播稳定 `accountId`，任务、计划、附件、会话、HUD/context、构建和浏览器任务默认按账号分区 | P0 | MS1 | alice 创建的数据与 DSH session/context 对 bob 不可见、不可写 |
 
 ## 3. 流程图
 
@@ -45,13 +47,12 @@ sequenceDiagram
         G-->>B: 302 → /luban-auth/login
         B->>G: POST /luban-auth/login {user, password}
         G->>A: verify(user, password)
-        A->>S: 读取哈希 + 失败计数
-        alt 验证通过且未锁定
-            A->>S: 重置失败计数
+        A->>S: 读取账号与口令哈希
+        alt 验证通过
             A-->>G: 签发 token（cookie, HttpOnly, SameSite=Lax）
             G-->>B: 302 → 原目标
-        else 失败 / 锁定
-            A-->>G: 401 + 剩余尝试次数
+        else 验证失败
+            A-->>G: 401
             G-->>B: 登录页错误提示
         end
     else token 有效
@@ -70,6 +71,7 @@ export interface AuthService {
   revokeAllFor(user: string): Promise<void>;
   /** 门禁中间件工厂：web 请求进入业务前调用 */
   middleware(): AuthMiddleware;
+  authenticateRequest(request: IncomingMessage): Promise<RequestActor>;
   onChange(listener: (evt: AuthEvent) => void): Unsubscribe;
 }
 
@@ -81,14 +83,12 @@ export interface AuthGateway {
 
 export interface VerifyResult {
   ok: boolean;
-  reason?: 'bad-credentials' | 'locked' | 'unknown-user';
-  retryAfterSec?: number;
+  reason?: 'bad-credentials' | 'unknown-user';
 }
 
 export type AuthEvent =
   | { type: 'login'; user: string; sourceIp: string }
-  | { type: 'logout'; user: string }
-  | { type: 'lockout'; user: string; sourceIp: string };
+  | { type: 'logout'; user: string };
 ```
 
 ## 5. 数据模型
@@ -104,45 +104,39 @@ export type AuthEvent =
       config:
         port: 42600            # 默认端口（可自定义）
         host: 0.0.0.0
-        upstream: "http://127.0.0.1:3080"  # 内部 DSH WebServer，必须仅 loopback
+        upstream: "http://127.0.0.1:3080"  # DSH WebServer 地址
         sessionTtlHours: 72
-        maxFailures: 5         # 连续失败锁定阈值
-        lockoutMinutes: 15
         usersFile: "~/.dsh/luban/auth/users.json"   # 经 HAL 解析，win/ubuntu 各自 home
 ```
 
 ## 7. 依赖与边界
 
-- 下层：argon2（哈希）、HAL 文件适配器、Node HTTP/upgrade 反向代理；上层的 M05 权限分级复用 `AuthService`。
+- 下层：口令哈希、HAL 文件适配器、Node HTTP/upgrade 反向代理；M02～M11 通过 `AuthService` 取得账号上下文。
 - 复用档位：**C 档**——dsh-web-auth/dsh-web-lan-access（社区，license 未核实）仅作需求参考；登录页 UI 原创。
 - 平台属性：双端公用。
 
-## 8. 非功能与安全
+## 8. 非功能与稳定性
 
-- 口令策略：最少 8 位；账户文件权限 0600（win 下 ACL 提示）。
-- 登录接口限速（每 IP 每分钟 ≤ 10 次）+ 恒定时间比较防时序侧信道。
-- 审计日志滚动保留 30 天；日志不含口令与 token 原文（P6.4）。
-- 明确的部署警告：LAN 明文 HTTP 有风险，公网必须走 TLS 反代（M01-F007）。
+- 账号、会话与账号到 DSH session 的归属表使用原子写；重启后归属不丢失。
+- 账号标识由认证服务产生，业务请求不能从 body/query 覆盖 `accountId`。
+- 账号数据的 list、单项读取、写入、SSE baseline/replay 均在服务端按 `accountId` 过滤。
+- 未绑定账号的旧 session/data 进入显式迁移状态，不自动归给第一个访问者。
 
 ## 9. checklist 映射
 
-M01-F001 ~ M01-F007 共 7 项，与 `checklist.json` 一一对应（脚本校验）。
+M01-F001 ~ M01-F008 共 8 项；M01-F005 保留 ID 但状态为 `dropped`。
 
 ## 10. 实现与验证记录
 
-- `AuthManager` 使用真实 Argon2id、256-bit 随机会话 secret 的服务端摘要、持久账户锁定、
-  角色与全端吊销；账户状态和 30 天 JSONL 审计均走原子文件边界且不记录口令/token。
-- `AuthSidecar` 是唯一 LAN listener，upstream 强制 loopback；集成测试覆盖 HTTP、SSE、
-  WebSocket upgrade、流式背压、Host/Origin/CSRF/CIDR/body-size、trustProxy 与 Secure cookie。
-- 插件依赖公开的 rc2 `WebServer.host/port`，启动前强制其绑定 `127.0.0.1` 且实际监听端口
-  与 sidecar upstream 完全一致，避免误配后从 LAN 绕过认证或代理到其他本地服务。
+- `AuthManager` 已覆盖首启、口令验证、会话过期、登出和全端下线；账户状态使用原子文件更新。
+- `AuthSidecar` 代理 HTTP、SSE 与 WebSocket；唯一 canonical 登录入口为 `/luban-auth/login`。
+- 后续实现以 `authenticateRequest()` 输出的账号身份作为 M01-F008 的唯一业务归属来源。
 - `tests/cordis.integration.test.ts` 使用真实 Cordis Context 验证 `ctx.lubanAuth` 提供与 effect
-  卸载；其余 7 个测试文件覆盖首启、登录/过期/登出、锁定/限速、账户角色与审计。
-- 持久账户与审计文件联合 secret scan 验证口令、session secret 与 CSRF 原文不落盘；本机 Edge
-  已渲染唯一正向入口 `/luban-auth/login`，旧 `/luban/auth/login` 仅保留为拒绝性测试语料。
-- 本地严格类型、ESLint、Prettier、构建、32 项测试及 pack 白名单均通过；完整浏览器登录、
-  Windows ACL、Ubuntu workflow 与真实 TLS 反代仍保留目标环境复核。
+  卸载；其余测试覆盖首启、登录/过期/登出和账号管理。
+- 本机 Edge 已渲染唯一正向入口 `/luban-auth/login`；`/luban/auth/login` 不是支持的路由。
+- 本地严格类型、ESLint、Prettier、构建、32 项测试及 pack 清单检查均通过；仍需在真实 Ubuntu
+  profile 完成启动、登录和业务 API smoke，可选反代兼容性另行抽查。
 
 ## 11. 开放问题
 
-- 是否需要多管理员/只读账户：M05-F004 权限分级落地时统一设计角色表。
+- 旧版全局数据如何由用户显式迁移到某个账号；迁移不得通过首次读取隐式认领。

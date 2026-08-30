@@ -1,7 +1,7 @@
 # dsh-luban-session-share
 
-Authenticated Windows/Ubuntu views of the same DSH session estate, with
-owner-approved exclusive control transfer and reconnectable, redacted output.
+Account-isolated Windows/Ubuntu views of the same user's DSH sessions, with
+confirmed exclusive control transfer and reconnectable output.
 Sessions continue running on their original host; this plugin shares the view
 and input authority, not the process.
 
@@ -15,10 +15,9 @@ and input authority, not the process.
   granted. Concurrent requests are rejected and unanswered requests expire.
 - Per-session SSE carries redacted output/status fragments, supports bounded
   `Last-Event-ID` replay, and returns a current baseline when history has a gap.
-- `owner`, `operator`, and `observer` permissions are derived from the M01
-  identity plus session ownership. Observers cannot inject input.
-- Peer M01 Cookie/CSRF credentials are read only from environment variables;
-  their values are never accepted in Cordis config, logs, or API responses.
+- Sessions are scoped by the M01 `accountId`: another account cannot list,
+  subscribe to, take over, or inject input into them. Explicit cross-account
+  sharing is not currently supported.
 
 ## Installation
 
@@ -52,18 +51,11 @@ Keep the DSH WebServer on loopback and access `/luban-session-share` through the
 ```
 
 Set `LUBAN_SESSION_SHARE_WIN_COOKIE` in the host service environment to the
-complete M01 Cookie header containing both `luban_session` and `luban_csrf`.
-Never place its value in YAML, shell arguments, source control, or logs. Use an
-M01 account with only the permissions this peer needs and rotate it normally.
-The peer cookie user must have the same M01 username as the local actor who
-requests a cross-host mutation. Before takeover, input, or release, the plugin
-checks `/luban-auth/session` with that same cookie and fails closed on any
-identity mismatch. A different local user may still see an observation view,
-but any remote mutation fails closed with `403`.
+current M01 login Cookie. The account must be the same on both hosts. A
+different account does not receive an observation view.
 
-`ownerUser` must name the local M01 account that owns newly observed local DSH
-sessions. An M01 `observer` account remains an observer even if a stale role
-binding says otherwise.
+`ownerUser` is a compatibility default for existing single-account profiles.
+New session ownership comes from the M01 account/session registry.
 
 Session IDs must be globally unique across configured hosts. A cross-origin
 collision is reported as `session-id-collision`; the existing registry entry is
@@ -72,14 +64,13 @@ preserved and no control operation is routed through the conflicting peer.
 ## Demo
 
 Sign in at `/luban-auth/login` on both hosts. Open **Session Share** on Windows
-to observe an Ubuntu session, choose **Request control**, then approve the
-pending request from the owner's Ubuntu view. The requester becomes the sole
-operator and can send a follow-up; the owner becomes an observer until release.
+to observe an Ubuntu session, choose **Request control**, then confirm the
+pending request from the Ubuntu view. The Windows side becomes the sole input
+holder until release.
 Opening the output stream again with its last SSE id replays missed fragments or
 returns a baseline if the bounded history has rolled over.
 
-For direct mutation API calls, first read `/luban-auth/session` and pass its
-value as `x-luban-csrf`; browser requests also carry the M01 session cookies.
+Direct API calls reuse the current M01 login session and its request token.
 
 ## Compatibility
 
@@ -90,10 +81,9 @@ session-controller APIs.
 
 ## Platform Support
 
-The same package runs on Windows and Ubuntu. Peer URLs may use HTTP only on a
-trusted private LAN behind the M01 boundary; use HTTPS through a reverse proxy
-when traffic crosses an untrusted network. Tests use an in-memory peer network
-and never open a real LAN connection.
+The same package runs on Windows and Ubuntu. Validate discovery, reconnect, and
+control transfer on the actual two-host profile. Tests use an in-memory peer
+network and never open a real LAN connection.
 
 ## License
 

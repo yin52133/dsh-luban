@@ -7,6 +7,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：契约汇总、依赖关系、事件总线登记表 |
 | v0.2 | 2026-08-30 | Codex | 统一插件 HTTP 路由为 `/luban-<module>/...` |
 | v0.3 | 2026-08-30 | Codex | 登记 HUD 对健康事件与可选 TaskStore 的松耦合消费 |
+| v0.4 | 2026-08-30 | Codex | 增加 M01-F008 账号上下文隔离约定并收敛基础认证契约 |
 
 ## 1. 契约一览与依赖方向
 
@@ -66,7 +67,11 @@ flowchart LR
 
 ## 2. 公共约定
 
-- **Actor**：一切操作者统一为 `{ kind: 'user' | 'agent'; id: string; displayName?: string }`；agent actor 必须携带会话 id，供审计。
+- **账号上下文（M01-F008）**：M01 将登录 cookie 解析为
+  `AccountContext { accountId, username, role }`。业务服务接收已经解析的账号上下文，所有账号数据的
+  查询、写入、事件与文件引用均按 `accountId` 隔离，不得把一个账号的记录返回或写入另一个账号。
+- **Actor**：操作者统一为用户 actor 或 agent actor；用户 actor 的 `id` 为 `AccountId`，agent actor
+  同时携带所属 `accountId` 与会话 id，使任务、计划、会话和附件能保持同一账号归属。
 - **乐观锁**：一切可变实体带 `version: number`，更新必须带 `expectedVersion`，冲突返回 409 语义错误。
 - **时间**：一律 epoch ms（UTC）；展示层本地化。
 - **错误**：跨契约错误统一 `LubanError { code: string; message: string; retriable: boolean; cause? }`；错误码登记于下表，新增需登记。
@@ -74,7 +79,7 @@ flowchart LR
 | 错误码 | 含义 | 典型来源 |
 | --- | --- | --- |
 | `E_AUTH_REQUIRED` | 未认证 | M01 |
-| `E_AUTH_LOCKED` | 触发锁定 | M01 |
+| `E_ACCOUNT_SCOPE_MISMATCH` | 请求与目标记录不属于同一账号 | M01/各业务模块 |
 | `E_VERSION_CONFLICT` | 乐观锁冲突 | M02 等 |
 | `E_INVALID_TRANSITION` | 非法状态迁移 | M02/M04 |
 | `E_ACCEPTANCE_REQUIRED` | 缺验收标准不可领单 | M02 |
@@ -89,11 +94,11 @@ flowchart LR
 
 | 事件名 | 载荷要点 | 发布方 | 消费方 |
 | --- | --- | --- | --- |
-| `luban.task.changed` | taskId、from→to、actor、version | M02 | 看板 UI、M03、M09 |
-| `luban.task.claimed` | taskId、actor(agent 会话)、hostScope | M02 | M03、M07 |
-| `luban.night.status` | windowActive、quotaUsed、circuit | M02 | HUD、看板 |
-| `luban.keepalive.health` | sessionId、alive、detail（消费方对外前脱敏限长） | M03 | 看板告警、HUD |
-| `luban.session.lock` | sessionId、holder、role | M05 | 看板、HUD |
+| `luban.task.changed` | accountId、taskId、from→to、actor、version | M02 | 看板 UI、M03、M09 |
+| `luban.task.claimed` | accountId、taskId、actor(agent 会话)、hostScope | M02 | M03、M07 |
+| `luban.night.status` | accountId、windowActive、quotaUsed、circuit | M02 | HUD、看板 |
+| `luban.keepalive.health` | accountId、sessionId、alive、有界诊断摘要 | M03 | 看板告警、HUD |
+| `luban.session.lock` | accountId、sessionId、holder、role | M05 | 看板、HUD |
 | `luban.telemetry.snapshot` | TelemetrySnapshot（节流 1s） | M07 | 扩展插件 |
 | `luban.compaction.done` | sessionId、strategy、前后 token | M08 | HUD、审计 |
 | `luban.channel.data` | endpointId、kind、方向 | M10 | 监视 UI |
@@ -103,10 +108,11 @@ flowchart LR
 ## 4. Web API 组织约定
 
 - 各插件的 HTTP 端点统一前缀 `/luban-<module>/...`（如 `/luban-taskboard/tasks`、`/luban-auth/login`），与 cordis 插件 id `luban-<module>` 一致并避免和 dsh 内建路由冲突。
-- 除 `/luban-auth/login` 外所有端点经 M01 门禁中间件（P6.2）。
+- 除 `/luban-auth/login` 外，业务端点复用 M01 登录会话并取得 `AccountContext`；账号数据的查询与
+  mutation 均使用该上下文限定范围。
 - SSE 端点约定 `GET /luban-<module>/events`，断线重连携带 `Last-Event-ID` 做补发。
 - `GET /luban-hud/snapshot` 与 HUD SSE envelope 可选携带 `keepalive { healthy, alerts[] }`；
-  这是向后兼容扩展，alerts 只含有界、脱敏的 `sessionId/detail` 元数据。
+  这是向后兼容扩展，alerts 只包含当前账号的 `sessionId` 与有界诊断摘要，不包含会话正文。
 
 ## 5. 变更流程
 

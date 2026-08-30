@@ -62,7 +62,7 @@ The first two responses expose the chosen strategy, token estimates, compaction 
           keepRecentTokens: 16000
 ```
 
-`archiveDir` must be relative to the session workspace. An unknown telemetry ratio is safe-by-default and does not trigger compaction.
+`archiveDir` must be relative to the session workspace. An unknown telemetry ratio does not trigger compaction.
 
 ## Runtime behavior
 
@@ -95,9 +95,11 @@ Range replay selects the newest matching surface generation. Exact historical re
 verifies its stored SHA-256 digest, and never reads an arbitrary path. Content-addressed filenames make retry
 idempotent while preserving older generations that reused the same temporary surface range.
 
-## Persistence and security
+## Persistence and stability
 
-- Archives, indexes, and audits use private modes and atomic JSON replacement.
+- Archives, indexes, and audits use atomic JSON replacement. Archive, audit, replay,
+  and scope routes are intended to resolve sessions within the current M01
+  `accountId`, so another account cannot address them by session id.
 - Session ids and paths are normalized and checked against their workspace roots.
 - Common API keys, bearer tokens, passwords, private keys, and platform token formats are redacted before archive or summary injection.
 - Original DSH events remain in the append-only durable log; only the model-visible surface is replaced, enabling explanation and replay.

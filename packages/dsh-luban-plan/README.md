@@ -35,7 +35,7 @@ The plugin provides the cross-module service key `lubanPlan`. If `lubanTaskStore
 
 ## Demo
 
-Log in, read the CSRF token from the authenticated session, then submit and approve a four-element plan:
+Log in, read the request token from the authenticated session, then submit and approve a four-element plan:
 
 ```sh
 curl -c cookies.txt -H 'content-type: application/json' \
@@ -91,9 +91,9 @@ All endpoints are under `/luban-plan`:
 - `GET /events` (bounded SSE feedback stream)
 - `GET /template`
 
-The DSH Settings page exposes plan submission, plan-document links, approve/reject controls, comments, four-section revision for `rejected`/`revising` plans, and live refresh. Revision requests include the displayed optimistic version; stale-version and other endpoint errors remain visible in the page alert. Browser writes reuse the auth session's CSRF token.
+The DSH Settings page exposes plan submission, plan-document links, approve/reject controls, comments, four-section revision for `rejected`/`revising` plans, and live refresh. Revision requests include the displayed optimistic version; stale-version and other endpoint errors remain visible in the page alert. Browser writes reuse the authenticated session's request token. Plans, decisions, and document links are intended to be scoped to the M01 `accountId`.
 
-## Persistence and security
+## Persistence and stability
 
 - The local JSON index is atomically replaced with a cross-process lock and rolling backups through `dsh-luban-core`.
 - Plan Markdown is written with private file modes and cannot escape the selected workspace.

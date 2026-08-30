@@ -9,7 +9,8 @@
 | v0.3 | 2026-08-30 | Codex | 落地默认预览且拒绝覆盖的 win-debug 生成脚本 |
 | v0.4 | 2026-08-30 | Codex | 同步 A 档 lock v2、安装授权门禁与 profile smoke |
 | v0.5 | 2026-08-30 | Codex | 同步 A 档 lock v3、精确原生构建许可与安装后验收链 |
-| v0.6 | 2026-08-30 | Codex | 将 profile smoke 证据绑定到 CI commit、run identity 与 attempt |
+| v0.6 | 2026-08-30 | Codex | 增加 profile smoke 双端结果聚合 |
+| v0.7 | 2026-08-30 | Codex | 收敛安装与 smoke 为版本一致、幂等和真实宿主功能验收 |
 
 ## 1. 目标形态
 
@@ -37,8 +38,7 @@ flowchart LR
 4. **A 档直装**：先运行 `scripts/install-3rd-party.ps1 -Profile win-debug -DryRun` 审核本地
    lock v3 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
    `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Windows 宿主提供绝对且非根目录的
-   `-DshHome` 与 `-ApprovedBy`，并使用 pnpm `11.24.0`；latest/显式 semver 还需
-   `-ApproveUnpinned`。
+   `-DshHome` 与 `-ApprovedBy`；变更 lock 中的版本前必须重新 dry-run 并明确确认计划。
 5. **保活注册**：M03-F002 注册计划任务（登录时启动/开机按用户选择）；账本与配置目录 `%DSH_HOME%\luban\`。
 6. **认证初始化**：首次访问 web 引导创建管理员（M01-F001）；端口默认 42600 可配。
 
@@ -64,12 +64,9 @@ dsh --profile win-debug --dump-config
   -DshHome C:\dsh-acceptance -ApprovedBy operator-name -ApproveUnpinned -Apply
 ```
 
-apply 只向子进程注入 `DSH_HOME`、固定官方 npm registry 与无敏感字段的验收身份，不修改当前
-PowerShell 环境。执行前会核对三包及 `node-pty@1.1.0` 的包名、版本、license metadata、
-repository、integrity、bundle 与依赖边界；任一不一致即拒绝安装。安装使用 `--save-exact` 与
-`--allow-build=node-pty@1.1.0` 连续执行两次，随后核对精确依赖清单、`--dump-config`、唯一 bundle、
-安装 manifest、LICENSE SHA-256 和 `node-pty` native load。npm metadata 中的 MIT 声明仍不等于
-双端 live notices 证据已经生成。
+apply 在指定 `DSH_HOME` 中按 dry-run 展示的精确版本安装，不修改当前 PowerShell 环境。安装后核对
+依赖清单、`--dump-config`、bundle 挂载与 `node-pty` native load；相同计划重复执行应保持相同版本和
+配置，不重复写入 bundle。版本或安装结果不一致时停止并保留现有 profile，供用户检查或回退。
 
 M12-F001 的目标宿主 smoke runner 默认只打印无写入计划。Windows 现场验收时使用项目本地
 DSH `0.1.1-rc.2` 执行：
@@ -77,18 +74,13 @@ DSH `0.1.1-rc.2` 执行：
 ```powershell
 node scripts/acceptance/m12-profile-smoke.mjs
 node scripts/acceptance/m12-profile-smoke.mjs --live `
-  --expected-git-sha "$env:GITHUB_SHA" `
-  --workflow-run-id "$env:GITHUB_RUN_ID" `
-  --workflow-run-attempt "$env:GITHUB_RUN_ATTEMPT" `
   --output "$env:TEMP\m12-win-debug.json"
 ```
 
 live runner 在隔离 `DSH_HOME` 中安装临时 host/client fixture，验证唯一挂载、lazy-CJS client、
-热停/热启、重启和清理。可聚合证据必须从 CI 注入 `GITHUB_SHA`、`GITHUB_RUN_ID` 与
-`GITHUB_RUN_ATTEMPT`；手工虚构这些值不构成可信 workflow 证据。聚合器要求双端同一 SHA/run/
-attempt、不同一次性 smoke run ID、完整有序 canonical check 集合，并记录原始输入 SHA-256；
-旧 attempt 与重复输入 fail closed。runner 存在不代表 Windows/Ubuntu 双端已验收；两端必须各自
-产出真实 live pass 证据。
+热停/热启、重启和 owned cleanup。Windows 与 Ubuntu 必须针对同一项目版本各自产出真实 live pass；
+汇总只核对项目版本、DSH 版本与功能检查项一致，不要求额外的执行环境证明。runner 文件存在不
+代表已经完成双端验收，只有两台目标宿主的实际运行结果都通过才算完成。
 
 ## 3. 配置分层
 
@@ -104,11 +96,12 @@ attempt、不同一次性 smoke run ID、完整有序 canonical check 集合，�
 
 ## 4. 平台注意点
 
-- 原生构建：A 档 profile 只允许精确 `node-pty@1.1.0`，不得改成包名级或其他版本的宽泛许可。
-- 串口：本套件其他原生模块必须按各自审查结果单独登记，不能复用 A 档的构建许可。
-- 桌面自动化（M10-F006）：MCP 服务以独立进程配置接入，凭据走系统凭据管理器。
-- 浏览器桥接（M11）：插件以 `uv run --locked` 启动随包 Python 项目，隔离环境位于 `%DSH_HOME%\luban\browser\uv-env`，禁止使用全局 pip。
-- 防火墙：首次监听提示放行私网；文档明确「仅限可信局域网」。
+- 原生构建：当前验收版本使用 `node-pty@1.1.0`；调整版本时重新执行安装 dry-run 与 profile smoke。
+- 串口：本套件其他原生模块按各自包声明的版本安装并做设备功能测试。
+- 桌面自动化（M10-F006）：MCP 服务以独立进程配置接入。
+- 浏览器桥接（M11）：插件以 `uv run --locked` 启动随包 Python 项目，环境位于
+  `%DSH_HOME%\luban\browser\uv-env`，不依赖全局 pip 环境。
+- 防火墙：需要从其他设备访问时，为配置的 Web 端口添加对应 Windows 防火墙规则。
 
 ## 5. 升级与回退
 

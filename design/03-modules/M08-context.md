@@ -12,6 +12,7 @@ Codex 式上下文工程的本地实现：阈值触发自动压缩 + 旧上下�
 | v0.4 | 2026-08-30 | Codex | 补齐版本化前后 surface 快照索引与夜间连续性链路验证 |
 | v0.5 | 2026-08-30 | Codex | 补齐模型可见路径经 agent 工具回读归档原文的直接证据 |
 | v0.6 | 2026-08-30 | Codex | 校正 A 档长期记忆插件的 scoped npm 身份 |
+| v0.7 | 2026-08-30 | Codex | 将归档约束收口为会话隔离、原子写入与可回放性 |
 
 ## 1. 概述与目标
 
@@ -95,12 +96,13 @@ export interface CompactionEngine {
 - 复用档位：**C 档**——pi-agentic-compaction / pi-mono（参考「虚拟文件系统式上下文外置」的需求与策略形态，license 落实前不读其源码，台账登记）；实现原创。
 - 平台属性：双端公用。
 
-## 8. 非功能与安全
+## 8. 运行约束
 
 - 压缩期间会话不可被打断（回合边界保证）；失败重试一次后降级为「只归档不摘要」并告警。
 - 插件卸载先拒绝新维护任务和 HTTP 请求；遥测等待中的任务在进入 engine 前取消，已进入 engine 的任务由
   disposer 排空后才完成卸载，避免卸载返回后继续修改会话 surface。
-- 归档目录遵守 P6.1：不含密钥等敏感内容（归档来源本就是会话内容，正常情况下无密钥；仍做正则扫描打码）。
+- 归档按 profile/session 隔离，不写入其他会话目录；写入失败不得覆盖已有归档，回放只读取索引指向的
+  当前 workspace 文件。
 
 ## 9. checklist 映射
 
@@ -117,13 +119,13 @@ M08-F001 ~ M08-F005 共 5 项，与 `checklist.json` 一一对应。
   telemetry 比例未知时安全跳过，达到阈值与最小回合间隔后才进入维护边界。
 - DSH 适配器只替换旧 surface 的连续前缀，保留近期消息；摘要提取决策、约束和验收条件，
   原始持久事件日志保持不变。
-- workspace 内归档先脱敏再原子写入，以内容摘要唯一命名并建立 SHA-256 索引；重复重试幂等，
+- workspace 内归档原子写入，以内容摘要唯一命名并建立 SHA-256 索引；重复重试幂等，
   多轮复用同一临时序号时仍保留各代文件，可按范围取最新或按索引路径精确回放。
 - 组合策略把归档相对路径注入真实 rc2 Session surface；测试仅从 `session.deriveMessages()` 的模型可见
   文本提取路径，再由绑定目标 Agent 的真实 `ToolRuntime` 调用 `read_file`，回读精确原文并与索引
   SHA-256 双校验。该确定性证据证明 agent-facing 检索边界，不声称外部模型已自主选择文件。
 - 每条新审计记录都在 strategy 执行前后抓取真实 live Session surface，保存 event sequence、segment
-  和 token 总量索引；旧记录缺少该字段时解码为显式 `legacy`，不伪造 after identity，也不改变
+  和 token 总量索引；旧记录缺少该字段时解码为显式 `legacy`，不合成缺失的 after identity，也不改变
   `CompactionStrategy`/`CompactionResult` 契约。
 - 主策略失败重试一次，再降级为仅归档；day/night profile 可独立选策略、阈值和预算，
   `/luban-context` 提供认证审计、索引、回放和 scope API。

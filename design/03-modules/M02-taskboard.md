@@ -15,6 +15,7 @@
 | v0.7 | 2026-08-30 | Codex | 回填 loopback CLI/SSE 与 claim lease 原子身份验证 |
 | v0.8 | 2026-08-30 | Codex | 增加夜间任务执行器路由与唯一终态所有权契约 |
 | v0.9 | 2026-08-30 | Codex | 将夜间容量预留与任务结算收敛为原子账本事务 |
+| v0.10 | 2026-08-30 | Codex | 非功能口径改为稳定性，并纳入账号上下文隔离 |
 
 ## 1. 概述与目标
 
@@ -96,7 +97,7 @@ export interface ClaimSession {
   actor: Actor;
   sessionId: SessionId;
   host: HostId;
-  executionOwner?: 'night-scheduler'; // 仅可信进程内调用可设置，HTTP claim 不透传
+  executionOwner?: 'night-scheduler'; // 仅 scheduler 内部设置，HTTP claim 不透传
 }
 export interface ClaimMutationOptions {
   expectedClaim?: TaskClaim; // 防止旧执行实例写入已被重领的新 claim
@@ -144,7 +145,7 @@ export interface NightScheduler {
         claim:
           requireAcceptance: true  # 无验收标准不可被 agent 领
         night:
-          enabled: false           # 默认关闭，显式开启（P6 安全默认）
+          enabled: false           # 默认关闭，显式开启
           window: "23:30-06:30"
           dailyQuota: 5
           hostScopeWhitelist: ["ubuntu"]   # 夜间只跑编译服务器侧任务
@@ -164,7 +165,7 @@ export interface NightScheduler {
 - 复用档位：**C 档**——dashi-taskboard（Apache-2.0，只参考功能：任务版本化乐观锁、SSE 广播、CLI 与 UI 同源）、cloader/dsh-taskboard（认领-验收流，license 待核实）、maochiy/dsh-taskboard-plugin（六列交互，license 待核实）。全部只读其公开文档，实现原创。
 - 平台属性：双端公用。
 
-## 8. 非功能与安全
+## 8. 非功能与稳定性
 
 - 存储原子写（tmp + rename）；账本文件每日滚动备份保留 7 份。
 - 夜间模式默认**关闭**；白名单 + 限额 + 熔断三重防失控；`enabled=true` 时独立
@@ -174,7 +175,8 @@ export interface NightScheduler {
   `luban_report_night_result`；只有对应 `tool/call`/无错误 `tool/result` 已进入 durable
   session log、最终 `turn/end` 为 `completed` 且 `acceptanceMet=true` 时才写入
   `review(autoDone)`，其余路径全部回到 `todo` 并累计失败/熔断。
-- 所有写操作经 M01 认证；审计日志记录 actor（人 / agent 会话 id）。
+- 所有任务由服务端写入 `accountId`；查询、单项读取、变更、SSE 与 scheduler 均只处理当前账号的数据。
+- 审计记录 actor（人 / agent 会话 id），夜间 agent 与浏览器执行器继承来源任务的 `accountId`。
 
 ## 9. checklist 映射
 
@@ -185,8 +187,7 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
 - Host 使用 DSH `0.1.1-rc.2` 已发布的 `AgentRegistry.create({ agentOptions, setup })`、
   agent-scoped `tools.restrict()`、`followup()`、`whenIdle()` 与 session events；每轮结束
   释放活动 handle，会话 id 与产出引用保留在任务账本。
-- Host API 统一挂载在 `/luban-taskboard`，所有入口复用 M01 身份，写请求由外层
-  sidecar 校验 Origin/`x-luban-csrf`。Web 与 CLI 不自行复制认证逻辑。
+- Host API 统一挂载在 `/luban-taskboard`，所有入口复用 M01 身份并传播 `accountId`；Web 与 CLI 不自行复制认证逻辑。
 - 每张非终态任务卡同时提供拖拽和原生 `select` + `button` 迁移入口；控件只列出状态机
   允许的目标，适配触屏与纯键盘操作。两种入口共用 `moveTask(id, to, expectedVersion)`、
   错误提示与成功后的刷新流程。统一 mutation boundary 用当前任务的 `status` 校验目标，
@@ -207,8 +208,7 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
   成功或失败结算把任务状态、quota 与熔断状态放入同一次原子 publish。跨 scheduler 实例不会超卖，
   跨日旧任务结算不会污染新日计数，publish 前进程被终止时仍保留可安全重试的旧账本。
 - 夜间 scheduler 为匹配任务选择唯一注册执行器；重叠路由 fail closed。路由执行器只返回
-  `TaskOutput`，scheduler 独占 complete/fail；可信 `executionOwner` 随 claim 持久化，HTTP 领单
-  无法伪造，普通浏览器监听器据此跳过夜间 claim。
+  `TaskOutput`，scheduler 独占 complete/fail；`executionOwner` 随 claim 持久化，普通浏览器监听器据此跳过夜间 claim。
 - `tests/task-store.test.ts` 覆盖状态机、版本冲突、并发原子认领、回写复核、失败与
   幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复、独立
   model/tool scope、结果工具成功日志以及缺报告/验收失败/异常 turn 的 fail-closed；

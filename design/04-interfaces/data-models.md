@@ -7,11 +7,38 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：任务/认证/保活/遥测等公共结构 + checklist.json schema |
 | v0.2 | 2026-08-30 | Codex | 增加 claim lease 身份及压缩前后 surface 快照兼容类型 |
 | v0.3 | 2026-08-30 | Codex | 明确 checklist 状态类型、需求汇总规则与里程碑派生状态 |
-| v0.4 | 2026-08-30 | Codex | 增加夜间调度 claim 的可信执行所有权标记 |
-| v0.5 | 2026-08-30 | Codex | 增加 M12 create-once 发布账本与摘要链事件模型 |
-| v0.6 | 2026-08-30 | Codex | 将 M12 模型细化为 fixed-sequence entry、逐序号 immutable commit、本地 canonical head 与逐包 publish attempt authority |
+| v0.4 | 2026-08-30 | Codex | 增加夜间调度 claim 的执行来源标记 |
+| v0.5 | 2026-08-30 | Codex | 增加 M12 多包发布恢复账本模型 |
+| v0.6 | 2026-08-30 | Codex | 细化发布事件、恢复位置与逐包发布状态 |
+| v0.7 | 2026-08-30 | Codex | 增加 M01-F008 账号归属模型并将发布账本收敛为失败恢复模型 |
 
 > 本文档定义跨模块公共数据结构与 `checklist.json` 的 schema。模块专属字段在各模块文档「数据模型」章节补充。通用字段约定（version 乐观锁、epoch ms、Actor、LubanError）见 [api-overview.md](api-overview.md) §2。
+
+<a id="account-context"></a>
+## 0. AccountContext 账号上下文（M01-F008）
+
+```typescript
+export type AccountId = string;
+
+export interface AccountContext {
+  accountId: AccountId;
+  username: string;
+  role: 'admin' | 'operator' | 'observer';
+}
+
+export interface AccountOwned {
+  accountId: AccountId;
+}
+
+export type Actor =
+  | { kind: 'user'; id: AccountId; displayName?: string }
+  | { kind: 'agent'; id: SessionId; accountId: AccountId; displayName?: string };
+```
+
+M01 负责把登录 cookie 解析为 `AccountContext`。M01-F008 的最小跨模块约定是：任务、托管会话、
+计划、共享会话、附件、遥测、压缩记录、构建任务、通道片段与浏览器任务等用户数据都带稳定的
+`accountId`；查询、mutation、事件投影与文件引用均按当前 `AccountContext.accountId` 限定范围。
+旧数据升级时必须由用户或迁移配置明确指定归属，不根据用户名、路径或当前登录账号猜测归属。
 
 <a id="task"></a>
 ## 1. Task 任务（M02）
@@ -20,7 +47,7 @@
 export type TaskStatus = 'backlog' | 'todo' | 'doing' | 'review' | 'done' | 'dropped';
 export type HostScope = 'win' | 'ubuntu' | 'any';
 
-export interface Task {
+export interface Task extends AccountOwned {
   id: TaskId;                        // "T-20260829-xxxx"
   title: string;
   description: string;               // GFM markdown
@@ -34,7 +61,7 @@ export interface Task {
   claim?: {
     actor: Actor; sessionId: SessionId; claimedAt: number;
     leaseId?: string;                // 新 claim 必有；仅旧账本解码时可缺省
-    executionOwner?: 'night-scheduler'; // 仅可信进程内调度器可设置；HTTP claim 不透传
+    executionOwner?: 'night-scheduler'; // 调度来源标记，不作为账号身份依据
   } | null;
   outputs: TaskOutput[];             // 产出引用（笔记/commit/产物路径）
   autoDone?: boolean;                // 夜间自动完成，待人复核
@@ -58,14 +85,14 @@ export interface TaskOutput {
 
 ```typescript
 export interface UserRecord {
+  id: AccountId;
   username: string;
   passwordHash: string;              // argon2id（哈希+盐合一编码）
   role: 'admin' | 'operator' | 'observer';
   createdAt: number;
-  failedCount: number; lockedUntil?: number;
 }
 export interface SessionToken {
-  id: string; user: string; issuedAt: number; expiresAt: number; sourceIp: string;
+  id: string; accountId: AccountId; user: string; issuedAt: number; expiresAt: number;
 }
 ```
 
@@ -73,7 +100,7 @@ export interface SessionToken {
 ## 3. Keepalive 托管会话与断点（M03）
 
 ```typescript
-export interface ManagedSession {
+export interface ManagedSession extends AccountOwned {
   id: string;                        // tmux 会话名 / 服务名
   host: HostId; kind: 'tmux' | 'service';
   purpose: 'dsh-main' | 'task' | 'build';
@@ -81,6 +108,7 @@ export interface ManagedSession {
   createdAt: number;
 }
 export interface Checkpoint {
+  accountId: AccountId;
   taskId: TaskId; stepList: string[]; currentStep: number;
   artifacts: string[]; savedAt: number;
 }
@@ -90,7 +118,7 @@ export interface Checkpoint {
 ## 4. Plan 计划（M04）
 
 ```typescript
-export interface Plan {
+export interface Plan extends AccountOwned {
   id: PlanId; taskId?: TaskId; sessionId?: SessionId;
   status: 'draft' | 'in-review' | 'approved' | 'executing' | 'completed' | 'rejected' | 'revising';
   sections: { background: string; impact: string; changes: string; verification: string };
@@ -104,7 +132,7 @@ export interface Plan {
 ## 5. SharedSession 共享会话（M05）
 
 ```typescript
-export interface SharedSession {
+export interface SharedSession extends AccountOwned {
   id: SessionId; host: HostId; ownerTaskId?: TaskId;
   lockHolder?: Actor | null;         // 当前操作者（互斥）
   roles: Record<ActorId, 'owner' | 'operator' | 'observer'>;
@@ -116,10 +144,11 @@ export interface SharedSession {
 ## 6. IngestedImage 粘贴图片（M06）
 
 ```typescript
-export interface IngestedImage {
+export interface IngestedImage extends AccountOwned {
   relPath: string;                   // workspace 相对路径（git 可管理）
   absPath: string;
-  sha256: string; source: 'paste' | 'drop' | 'clipboard-cli';
+  sha256: string;                    // 附件去重与写入一致性，不作为来源证明
+  source: 'paste' | 'drop' | 'clipboard-cli';
   referencedBy: SessionId[]; createdAt: number;
 }
 ```
@@ -128,7 +157,7 @@ export interface IngestedImage {
 ## 7. TelemetrySnapshot 遥测快照（M07）
 
 ```typescript
-export interface TelemetrySnapshot {
+export interface TelemetrySnapshot extends AccountOwned {
   context: { used: number | 'unknown'; max: number | 'unknown'; ratio: number | 'unknown' };
   workspace: { name: string | 'unknown' };
   model: { name: string | 'unknown'; thinkingDepth: string | 'unknown' };
@@ -158,8 +187,8 @@ export interface CompactionSurfaceSnapshotIndex {
 }
 export type CompactionSurfaceSnapshots =
   | { kind: 'captured'; before: CompactionSurfaceSnapshotIndex; after: CompactionSurfaceSnapshotIndex }
-  | { kind: 'legacy' };                  // 旧审计不伪造前后 identity
-export interface CompactionAuditRecord {
+  | { kind: 'legacy' };                  // 旧记录没有前后 surface snapshot
+export interface CompactionAuditRecord extends AccountOwned {
   sessionId: SessionId; at: number; strategyId: string;
   beforeTokens: number; afterTokens: number;
   archiveFiles: string[]; plan: CompactionPlan;
@@ -171,7 +200,7 @@ export interface CompactionAuditRecord {
 ## 9. BuildJob 构建任务（M09）
 
 ```typescript
-export interface BuildJob {
+export interface BuildJob extends AccountOwned {
   id: string; templateId: string; params: Record<string, string>;
   status: 'queued' | 'running' | 'failed' | 'done';
   sessionId?: string;                // tmux 托管会话
@@ -186,11 +215,11 @@ export interface ResourceReport { diskFreeGb: number; load1: number; queueDepth:
 ## 10. Channel 通道（M10）
 
 ```typescript
-export interface ChannelEndpoint {
+export interface ChannelEndpoint extends AccountOwned {
   kind: 'serial' | 'adb' | 'fastboot' | 'gdb' | 'ssh' | 'telnet' | 'tcp-serial';
   id: string; label: string; params: Record<string, string>;  // 如 { port:'COM3', baud:'115200' }
 }
-export interface SnippetFile {
+export interface SnippetFile extends AccountOwned {
   path: string;                      // 落盘路径（.luban/snippets/...）
   content: string; timeFrom: number; timeTo: number;
   endpoint: ChannelEndpoint;         // 通道元数据随片段进会话
@@ -201,11 +230,11 @@ export interface SnippetFile {
 ## 11. Browser 浏览器任务（M11）
 
 ```typescript
-export interface BrowserTaskSpec {
+export interface BrowserTaskSpec extends AccountOwned {
   templateId?: string; goal: string; startUrl?: string;
   constraints?: { maxSteps?: number; allowDomains?: string[]; timeoutSec?: number };
 }
-export interface BrowserResult {
+export interface BrowserResult extends AccountOwned {
   runId: string; status: 'ok' | 'failed' | 'timeout';
   screenshots: string[]; text: string; structured?: unknown;
   steps: number; durationMs: number;
@@ -221,7 +250,7 @@ export interface ReleaseRecord {
   npmVersions: Record<PackageName, string>;
   dshBaseline: string;               // engines.dsh 基线
   changelog: string; marketPrUrl?: string;
-  securityScan: { gitleaks: 'clean' | 'findings'; filesAudit: 'pass' | 'fail' };
+  packageAudit: { pack: 'pass' | 'fail'; dryRun: 'pass' | 'fail' };
   at: number;
 }
 
@@ -231,47 +260,33 @@ export interface PublishLedger {
   createdAt: string;                 // ISO-8601 UTC
   release: {
     version: string; tag: string; manifestSha256: string;
-    authority: PublishReleaseAuthority;
-    packages: Array<{ name: PackageName; version: string; file: string; sha256: string }>;
+    packages: Array<{
+      name: PackageName;
+      version: string;
+      file: string;
+      sha256: string;                // 对账本地 pack 与 registry tarball
+      status: 'pending' | 'publishing' | 'published' | 'failed';
+    }>;
   };
-}
-
-export interface PublishReleaseAuthority {
-  repository: string;                // owner/name
-  repositoryId: string;
-  repositoryOwnerId: string;
-  workflowPath: '.github/workflows/release.yml';
-  ref: string;                       // refs/tags/v<semver>
-  commitSha: string;
-}
-
-export interface PublishAttemptAuthority {
-  eventName: 'push';
-  runId: string;
-  runAttempt: string;
-  runnerEnvironment: 'github-hosted';
-  workflowRef: string;               // owner/name/.github/workflows/release.yml@refs/tags/v<semver>
-  workflowSha: string;
 }
 
 export interface PublishLedgerEventBase {
   schemaVersion: 1;
   ledgerId: string;
   sequence: number;                  // fixed file name: 00000001.json, ...
-  previousDigest: string;
   at: string;                        // ISO-8601 UTC
 }
 
 export type PublishLedgerEvent = PublishLedgerEventBase & (
   | {
       type: 'attempt-started'; package: PackageName; attemptId: string;
-      authority: PublishAttemptAuthority;
     }
   | { type: 'publish-confirmed'; package: PackageName; attemptId: string }
+  | { type: 'publish-failed'; package: PackageName; attemptId: string; reason: string }
   | { type: 'reconciled-absent'; package: PackageName; attemptId: string }
   | { type: 'reconciled-matching'; package: PackageName; attemptId: string }
   | {
-      type: 'release-verified'; repository: string; expectedCommitSha: string;
+      type: 'release-verified'; repository: string; tag: string;
       githubReleaseId: number;
     }
 );
@@ -282,37 +297,25 @@ export interface PublishLedgerCommit {
   sequence: number;                  // publish-ledger-commit-00000000.json, ...
   entryName: string;
   entrySize: number;
-  entryDigest: string;
-  previousDigest: string | null;
-  previousCommitDigest: string | null;
+  recordedAt: string;
 }
 
 export interface LocalPublishLedgerHead {
   schemaVersion: 1;
   ledgerId: string;
   sequence: number;
-  digest: string;                    // local canonical entry digest only; never a Release asset
 }
 ```
 
-`PublishLedger` 初始文件是 sequence 0；事件使用 fixed-sequence 文件名，而不是把摘要编码进文件名。
-每个初始文件/事件 entry 都必须有同序号 `PublishLedgerCommit`：commit 绑定 entry 名称、大小和 SHA-256，
-并通过 `previousDigest`、`previousCommitDigest` 同时链接前一 entry 与前一 commit。entry/commit 的最终名
-都由完整临时文件经 `fsync` 和原子 no-replace link 安装，并以无 clobber 的 create-once asset 上传到
-同 tag draft Release。同名逐字节一致是幂等重试；异字节是 fork，必须 fail closed。
+`PublishLedger` 和按序事件用于多包发布的失败恢复。每次发布包前先落盘
+`attempt-started`，成功后写 `publish-confirmed`；命令结果不明确时先查询 registry：版本不存在可重试，
+版本与本地 pack 校验和一致可记为 `reconciled-matching`，版本存在但内容不一致或状态未知则停止并交给
+人工处理。不得通过 unpublish、覆盖或盲目重复发布来伪装成功。
 
-远端不保存 mutable head；`LocalPublishLedgerHead` 仅用于本地 canonical 恢复。draft 恢复只允许完整
-连续 entry/commit 前缀，或恰好一个缺 commit 的尾部 entry；prefix barrier 必须在任何 registry 读取
-或 npm 副作用前补齐该 commit 并逐项确认完整远端前缀。public Release 禁止 orphan、gap、fork、未知
-资产和非 `published` 状态。读取方还必须拒绝非 core-first 前缀及非法状态迁移，不能把 `npm publish`
-子进程退出不明直接解释为成功。
-
-`attempt-started.authority` 在包被 `publish-confirmed` 或 `reconciled-matching` 后成为该包的持久
-`publishAuthority`。后续 workflow attempt 必须使用包自身的原 authority 校验 registry 返回的同一
-Sigstore bundle：repository/owner IDs、原 run ID/attempt、workflow ref/SHA、tag ref、commit SHA、
-SLSA subject PURL 与 tarball SHA-512 必须全部匹配。pending 包不得依据 registry 现状认领已有版本。
-`release-verified` 绑定 immutable release repository/SHA 与实际 GitHub Release ID，但它及对应本地
-commit/head 只进入 Actions artifact，不作为已公开 Release 的远端 checkpoint。
+账本事件使用连续序号并以临时文件加原子 rename 写入；`PublishLedgerCommit` 只记录同序号事件已完整
+落盘，`LocalPublishLedgerHead` 记录本地恢复位置。恢复时从首个非 `published` 包继续，重复执行同一
+已确认步骤不产生第二次发布。GitHub Release、tag、pack 文件名/版本与 npm registry 版本在最终阶段
+做普通一致性对账；真实发布失败时保留账本和错误信息供后续恢复。
 
 <a id="checklist-json-v1"></a>
 ## 13. checklist.json Schema（checklist-json-v1）

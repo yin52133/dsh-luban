@@ -11,10 +11,11 @@
 | v0.3 | 2026-08-30 | Codex | 补齐任务卡文档直达与 Web 四要素修订交互验证 |
 | v0.4 | 2026-08-30 | Codex | 补齐 canonical/junction 路径身份与 Cordis 验证 |
 | v0.5 | 2026-08-30 | Codex | 补齐驳回反馈进入持久会话及重放的直接证据 |
+| v0.6 | 2026-08-30 | Codex | 非功能口径改为稳定性，并补充账号默认隔离 |
 
 ## 1. 概述与目标
 
-- **解决**：R05——重要变更先 plan 后执行；夜间自主任务（M02-F005）的产出也更可信（先 plan 再动手）。
+- **解决**：R05——重要变更先 plan 后执行；夜间自主任务（M02-F005）也先 plan 再动手，便于次日复核。
 - **不解决**：替 dsh 内建的工具审批机制（不 hack L0）。
 - **需求映射**：R05。
 - **平台属性**：双端公用。
@@ -90,9 +91,9 @@ export interface PlanGuard {
 - 复用档位：**C 档**——参考 dsh/codex 类工具的 plan-approve 交互模式（需求级），实现原创。
 - 平台属性：双端公用。
 
-## 8. 非功能与安全
+## 8. 非功能与稳定性
 
-- plan 文档属于 workspace 仓库内容，遵循用户现有 git 流程；审批操作经认证。
+- plan 文档属于 workspace 仓库内容，遵循用户现有 git 流程；索引、列表、文档和审批默认按 `accountId` 隔离。
 - 夜间自主任务的 plan 审批策略单独配置（默认：夜间任务必须有 plan，但「执行豁免清单」为空，即全走人审——若无人在线则只做研究不落改动，M02-F006 复核时一并处理）。
 
 ## 9. checklist 映射
@@ -107,7 +108,7 @@ M04-F001 ~ M04-F004 共 4 项，与 `checklist.json` 一一对应。
 ## 11. 实现与验证记录
 
 - `PlanRepository` 以原子 JSON 索引为事实源，在 workspace 内生成私有权限 Markdown 投影；
-  lexical/canonical 路径逃逸、symlink/junction、目录换位、同日同 slug 覆盖和乐观版本冲突均被拒绝。
+  路径必须留在目标 workspace；同日同 slug 不覆盖既有文档，乐观版本冲突会明确返回错误。
 - `FilePlanService` 实现完整状态机、四要素校验、审批历史、会话当前 plan 以及可选
   `lubanTaskStore` 联动；批准 `todo` 关联任务时推进为 `doing`。
 - 真实 `FilePlanService` 的 submit/reject 事件经 rc2 `AgentRegistry` 写入目标 `Session`/`Inbox`

@@ -1,16 +1,18 @@
-# 发布原则与安全红线（Release Principles & Security Red Lines）
+# 发布原则与操作流程（Release Principles & Operations）
 
-> 本章是发布行为的强制规范（P0 一票否决）。M12 是其流程化落地；任何与发布相关的 CI/脚本/文档都不得与本章冲突。
+> 本章定义版本、打包、发布、对账与失败恢复流程。M12 是其流程化落地；验收关注发布结果一致、
+> 可预览、可恢复且不会误发。
 
 ## 版本记录
 
 | 版本 | 日期       | 作者  | 变更说明                                        |
 | ---- | ---------- | ----- | ----------------------------------------------- |
-| v0.1 | 2026-08-29 | Maintainers | 初稿：README 规范/版本与 tag/npm 注册/敏感红线/应急 |
-| v0.2 | 2026-08-30 | Codex | 要求 tag 发布 job 在制品生成前独立复验密钥门禁 |
+| v0.1 | 2026-08-29 | Maintainers | 初稿：README、版本、tag/npm 注册与失败处理规范 |
+| v0.2 | 2026-08-30 | Codex | 增加 tag 发布前的独立预检 |
 | v0.3 | 2026-08-30 | Codex | 明确包可按公开 API 需求提高 DSH 最低版本       |
-| v0.4 | 2026-08-30 | Codex | 固化多包发布远端恢复账本、受信 provenance 与三方核验 |
-| v0.5 | 2026-08-30 | Codex | 将发布恢复规范同步为 fixed-sequence entry、逐序号 immutable commit、无 mutable remote head 与逐包 attempt provenance |
+| v0.4 | 2026-08-30 | Codex | 增加多包发布恢复账本与三方结果核验 |
+| v0.5 | 2026-08-30 | Codex | 细化顺序事件记录、本地恢复位置与逐包状态 |
+| v0.6 | 2026-08-30 | Codex | 收敛发布门禁并保留 pack 复核、幂等发布与失败对账恢复 |
 
 ## 1. README 规范
 
@@ -47,76 +49,56 @@
 | CHANGELOG | 按里程碑/模块分组；由发布脚本从 commit（`feat/fix/docs(<模块>):`）生成草稿，人工修订 |
 | GitHub ↔ npm 同步 | 同一 tag 触发：GitHub Release（changelog+产物）与 npm publish 同内容；发布后核对三者一致（M12-F003 口径） |
 
-多包 npm publish 不是事务。账本初始文件为 sequence 0，事件使用固定序号文件名；每个 entry 都必须
-配有同序号、create-once 的 immutable commit，commit 绑定 entry 名称/大小/SHA-256、前一 entry
-SHA-256 与前一 commit SHA-256。远端 draft Release 只保存这些不可变 entry/commit assets，不保存
-mutable head，也不得使用 clobber；本地 canonical head 仅用于修复缺失/落后一位的本地恢复窗口。
-同名 asset 逐字节一致视为幂等重试，异字节视为 fork 并 fail closed。
+多包 npm publish 不是事务。发布脚本按 core-first 顺序处理包，并在每个包发布前后写本地顺序账本；
+同一已确认步骤重复执行不得再次发布。命令结果不明确时先停止后续包并查询 registry：版本不存在时可
+从该包重试，版本与本地 `npm pack` 产物校验和一致时可记为已发布，版本存在但内容不一致或状态未知时
+停止并交给人工处理。不得使用 unpublish、覆盖或盲目重复发布来消除不确定状态。
 
-draft 恢复只接受完整连续前缀，或恰好一个可证明的缺 commit 尾部 entry；任意 registry 读取或 npm
-副作用前，prefix barrier 必须补齐该 commit 并逐项确认远端前缀。两个 orphan、中间 gap、fork 或非法
-状态一律停止；public Release 不允许任何 orphan/gap/fork、未知资产或非 `published` 账本。每次
-`npm publish` 前还必须先持久化唯一 attempt 的 event/commit，结果不明时不得继续后续包，也不得以
-盲目重发、unpublish 或覆盖伪造“原子发布”。
-
-恢复只读固定的官方 npm registry。matching 要求 registry tarball 与本地制品逐字节一致，并用 npm
-随附的官方 Sigstore verifier 验证 registry 返回的同一 bundle；SLSA subject PURL/tarball SHA-512、
-repository 名称及 repository/owner IDs、tag/workflow ref、workflow/commit SHA、`push` event、
-GitHub-hosted runner、原 publish `runId`/`runAttempt` 必须全部精确匹配。每个包保留自己的原 publish
-attempt，post-verify 或后续 workflow rerun 不得改绑当前 attempt。明确 absent 才可 resume；pending
-包不得认领已有版本，conflict/unknown 不得继续。发布完成后必须核验 remote tag commit、非 draft/
-非 prerelease 的精确 entry/commit 资产集以及 npm tarball/provenance；全部通过后方可在本地追加
-`release-verified`，该审计尾与 local head 仅归档到 Actions artifact，不进入公开 Release。
+恢复从账本中首个未确认包继续。发布完成后核对 tag、GitHub Release、pack 文件名和版本、npm 版本与
+tarball 内容一致；失败记录、当前包和已确认包列表保留到下一次恢复。该对账只确认发布结果，不绑定
+额外的执行平台标识或来源证明。
 
 ## 3. npm 包注册规范
 
 - 包名 `dsh-luban-<module>`（无 scope）；首次 publish 前在 npmjs.com 确认名称可用并占用。
 - `package.json` 必填：`license: MIT`、`repository`、`engines`（node + dsh）、`dsh` 字段（M12 §4 基线）。
-- **`files` 白名单发布**：只发布 `dist/`、`README.md`、`cordis.patch.yml`、`LICENSE`、`THIRD-PARTY-NOTICES.md`；绝不发布源码外的任何本地配置、数据、测试夹具。
-- 发布前强制 `npm publish --dry-run` 审计输出清单；CI 中固化为门禁步骤。
-- npm access public；provenance（`--provenance`）开启以绑定仓库与构建。
+- **pack 文件清单**：`package.json#files` 只包含 `dist/`、`README.md`、`cordis.patch.yml`、
+  `LICENSE`、`THIRD-PARTY-NOTICES.md`；本地配置、运行数据和测试夹具不进入发布包。
+- 发布前运行 `npm pack --dry-run` 和 `npm publish --dry-run`，人工复核包名、版本、目标 registry、
+  文件清单与体积后再批准真实发布。
+- npm access 为 public；是否由本地或 CI 执行不改变上述功能验收口径。
 
 ## 4. GitHub 仓库规范（dsh-plugin 生态可见性）
 
 - topics：`dsh-plugin`、`dsh`、`deepseek-harness`、`workbench`、`embedded`——插件商店与社区目录按 `topic:dsh-plugin` 收录（M12-F002）。
 - 市场注册：向 awesome-dsh-plugin 提 PR（entry：npm 包名/仓库/分类/描述），随版本更新 PR。
 - Release notes 中标注「兼容 dsh 版本」与「破坏性变更」；建议附 30 秒演示 GIF。
-- Discussion/Issue 模板：bug 报告必须含 dsh 版本与 profile bundles 列表（脱敏）。
+- Discussion/Issue 模板：bug 报告包含 dsh 版本与 profile bundles 列表。
 
-## 5. 敏感信息红线（P0，一票否决）
+## 5. 发布内容复核
 
-**任何提交（代码/文档/issue/截图/commit message）不得出现**：
+- 配置示例使用占位值，确保用户复制后知道哪些字段需要填写。
+- 发布计划在真实 tag/npm/市场操作前展示包名、统一版本、目标 registry、Release 资产和市场变更，
+  由用户明确批准后执行。
+- `npm pack --dry-run` 与 `npm publish --dry-run` 的文件清单是防止误发的主要检查；发现多余文件时
+  修改 `package.json#files` 后重新运行。
+- lint、typecheck、test、build、pack 与 dry-run 是本项目的发布质量门禁；不再增加与功能结果无关的
+  证明步骤作为 feature 状态或发布 blocker。
 
-- API key、token、密码、口令哈希、`credentials.yaml` 内容；
-- `.env` 及其变体内容（占位示例只允许 `.env.example`，且值必须为假数据）；
-- 内网 IP/主机名的真实拓扑细节（文档用 `<win-lan-host>` 类占位）；
-- 会话日志原文（含密钥的报错输出等）。
+## 6. 发布失败与恢复
 
-落地机制（M12-F005）：
-
-| 层 | 机制 |
-| --- | --- |
-| 提交前 | pre-commit 跑 gitleaks（`scripts/release/install-hooks.mjs` 一键安装） |
-| 服务端 | CI 每次跑 gitleaks 全历史扫描；命中即红 |
-| 发布 | tag job 独立复跑全历史 gitleaks + 合成泄漏证明；随后执行 `files` 白名单与 `npm publish --dry-run` 清单审计 |
-| 本地 | `.gitignore` 基线：`.env`/`.env.*`（保留 `!.env.example`）、`.dsh/`、`*.credentials.*`、`~密钥类文件` |
-| 文档 | 设计文档中一律占位符；示例配置值必须为假数据 |
-
-## 6. 泄漏应急（发现已提交敏感信息时）
-
-1. **立即 rotate**（吊销/更换 key、改密码）——先止血，再清理。
-2. 从历史中移除（filter-repo）+ force push，通知所有克隆方重新克隆。
-3. 在 07-references/事故记录追加一条（时间、类型、处置），不写敏感内容本身。
-4. 复盘：补充红线规则或门禁，更新本章版本记录。
-
-> 原则：**rotation 优先于历史清理**；历史不可信时一律按已泄漏处理。
+1. 发布命令失败或超时时立即停止后续包，保存 stdout/stderr 摘要和本地发布账本。
+2. 查询 npm registry 与 GitHub Release 的实际状态，不以子进程退出码之外的猜测推进状态。
+3. registry 不存在该版本时从当前包重试；版本和 pack 内容一致时补记确认；不一致或未知时人工处理。
+4. 恢复完成后再次核对全仓统一版本、tag、GitHub Release、npm 包和市场记录。
 
 ## 7. 发布前检查清单（每版本勾选）
 
-- [ ] CI 全绿（lint/typecheck/test/gitleaks）
+- [ ] lint、typecheck、test、build 全部通过
 - [ ] 版本号统一更新 + CHANGELOG 修订
 - [ ] `engines.dsh` 基线与兼容矩阵核对
 - [ ] 每包 README 与 checklist.json 状态一致（不宣传未实现功能）
-- [ ] `npm publish --dry-run` 清单审计通过（files 白名单）
+- [ ] `npm pack --dry-run` 与 `npm publish --dry-run` 文件清单复核通过
+- [ ] 真实发布计划已列出包名、版本、目标和外部变更，并获用户明确批准
 - [ ] tag 推送 → GitHub Release 与 npm 同步完成 → 三处版本核对
 - [ ] 市场 PR 更新（新包/版本变化时）

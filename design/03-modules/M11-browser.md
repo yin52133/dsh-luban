@@ -12,7 +12,10 @@
 | v0.4 | 2026-08-30 | Codex | 收紧自动任务域名白名单，拒绝裸 `*` wildcard |
 | v0.5 | 2026-08-30 | Codex | 收口 bridge 子进程退出与 task claim 轮换竞态 |
 | v0.6 | 2026-08-30 | Codex | 夜间执行改由 scheduler 路由并独占终态 claim 写入 |
-| v0.7 | 2026-08-30 | Codex | 增加同一 clean SHA 的双平台 production live 验收 |
+| v0.7 | 2026-08-30 | Codex | 增加双平台 production live 验收 |
+| v0.8 | 2026-08-30 | Codex | 补齐 Windows/Ubuntu 结果聚合与 disposable profile |
+| v0.9 | 2026-08-30 | Codex | 固定 uv/Python 版本并收口桥接环境生命周期 |
+| v0.10 | 2026-08-30 | Codex | 收口为真实浏览器/provider 与双平台功能验收 |
 
 ## 1. 概述与目标
 
@@ -88,7 +91,7 @@ export interface BrowserTaskSpec {
 - 协作：M02（任务卡联动）、M10（win 桌面侧可与浏览器任务互补）。
 - 平台属性：双端公用。
 
-## 8. 非功能与安全
+## 8. 运行约束
 
 - 域名白名单默认为空=仅手动触发；夜间自动执行必须模板 + 域名白名单齐备（继承 M02 夜间三重防护）。
 - `allowDomains` 仅接受精确域名与 `*.example.com` 子域模式；裸 `*`（及归一化后为 `*` 的写法）在 TS 配置/模板/任务入口和 Python 执行端均拒绝。空列表仍只表示手动无约束，自动任务 fail closed。
@@ -101,7 +104,8 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
 ## 10. 实现与验证记录
 
 - TypeScript Host 通过有界串行队列管理 `uv run --locked` JSONL 子进程；协议覆盖启动、
-  进度、截图、结构化结果、取消、超时和稳定错误码，敏感环境变量仅按名称白名单传递。每个
+  进度、截图、结构化结果、取消、超时和稳定错误码，桥接只接收任务运行所需配置且错误结果不回显
+  provider 凭据。每个
   listener 与 child state 绑定；shutdown 响应后继续等待真实 `close`，超时按 TERM→KILL 收口，
   旧 child 的迟到事件不能影响 replacement，listener/stdin/stdout/stderr 最终全部释放。
 - Python 3.12 桥接项目固定 `browser-use==0.13.8` 并提交 `uv.lock`；发布构建将桥接项目和
@@ -111,7 +115,7 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
 - 自动任务按 claim `leaseId` 分代去重并串行；同毫秒 A→B 重领时 A 的 progress/complete/fail
   全部被账本拒绝，B 仍继续 queue/progress/artifact 并进入 `review(autoDone)`。
 - 夜间浏览器任务通过共享 `NightTaskExecutorRoute` 进入 queue；browser 只上报进度并返回产物，
-  scheduler 独占 complete/fail。持久化 `executionOwner` 防止普通 listener 双执行且不能由 HTTP 伪造。
+  scheduler 独占 complete/fail。持久化 `executionOwner` 防止重复执行和终态重复写入。
 - 本地 ESLint、严格类型、构建、M11 包测试、跨模块集成与 `uv --locked` Python 测试、Ruff、
   compileall、ESM 导入及 npm pack 白名单均通过。真实 uv JSONL 子进程已完成
   ping→shutdown→exit 0 且剥离模型凭据；本机 browser-use/Chrome 已加载 loopback DOM，并验证
@@ -119,12 +123,15 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
 - M11-F002/M11-F003 域名策略复核：TS 配置、YAML 模板和任务解析拒绝裸 `*`，自动任务
   仍要求非空白名单；Python 桥接在执行前再次拒绝，精确域名与 `*.example.com` 继续可用。
 - `luban-browser-acceptance` 提供 production run 与双端 aggregate：真实路径固定构造
-  `BridgeProcess → BrowserService`，用 loopback nonce 页面验证 progress、结构化结果与 PNG screenshot；
-  Windows/Ubuntu 证据必须来自同一 clean Git SHA、同一 canonical task/fixture。凭据与 nonce 不写入
-  evidence，注入引擎只能生成 `test-only` 且聚合器拒绝 test-double。runner 就绪不等于已通过现场验收。
+  `BridgeProcess → BrowserService`，用本地 fixture 验证 progress、结构化结果与 PNG screenshot；Windows
+  使用本地 Chrome/Edge，Ubuntu 使用 headless Chromium，并运行相同的 canonical task/fixture。
+- 每个平台按提交的 `uv.lock` 和固定 Python 版本创建 disposable bridge/profile，运行完成后只清理自身
+  创建的目录。fixture 只验证桥接协议；真实验收还必须使用可用 provider，在两端实际启动浏览器并
+  汇总任务结果、截图和错误信息。
 
 ## 11. 开放问题
 
 - browser-use 在 Ubuntu 无桌面环境下的 headless 稳定性实测；若依赖 playwright，其浏览器下载与离线部署方式写入部署文档。
-- M11-F001/M11-F004 仍需可用 provider，在同一 clean SHA 的 Windows 与 Ubuntu 上分别完成 canonical
-  loopback live task 并聚合两份 production evidence；该确定性口径不依赖站点登录态。
+- M11-F001/M11-F004 仍需获授权的 provider 凭据，并在 Windows 本地 Chrome/Edge 与 Ubuntu headless
+  Chromium 上分别完成同一真实任务。当前缺少这两份外部环境结果，因此状态应为 `blocked`，而不是
+  `done`。

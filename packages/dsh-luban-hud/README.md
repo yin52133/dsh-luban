@@ -60,17 +60,11 @@ window.
 Every HTTP endpoint is authenticated through `lubanAuth` at `/luban-hud/snapshot`, `/luban-hud/history`, `/luban-hud/rate-capture`, and `/luban-hud/events`.
 The event stream uses the registered `luban.telemetry.snapshot` name and bounded `Last-Event-ID` replay; a replay gap receives the latest immutable envelope.
 The mounted host keeps at most 10,000 durable assistant-event records from the latest five minutes.
-`GET /luban-hud/rate-capture` requires canonical `startUtc`/`endUtc` query values for an exact
-one- or five-minute `[start,end)` window plus a 32–128 character `challenge`. It also requires an
-installed `lubanProviderRequestIdentity` provider-wire adapter. Every durable assistant event is bound
-to an exact session/event sequence/turn/step/message/provider/model and the fresh challenge; the HUD
-export then uses the real provider request ID as its record ID. Persisted capture metadata contains only
-session/message/request digests and adapter id/version/runtime SHA-256. Adapter-private replay state is
-neither inspected nor returned. Missing or malformed usage becomes `unknownTokens=1` so
-reconciliation fails closed. Stable message identity deduplicates forked history. Capture is unavailable
+`GET /luban-hud/rate-capture` uses canonical `startUtc`/`endUtc` query values for an exact
+one- or five-minute `[start,end)` window. Stable message identity deduplicates forked history,
+and missing usage is reported as unknown rather than guessed. Capture is unavailable
 until a complete one-minute window has elapsed after mount, and any retention/capacity eviction,
-identity conflict, invalid route, adapter timeout/mismatch/drift, duplicate provider request ID, ledger
-change during attestation, or wall/monotonic clock discontinuity advances or invalidates the coverage
+identity conflict, invalid route, ledger changes, or wall/monotonic clock discontinuity advances the coverage
 watermark rather than silently exporting a partial ledger.
 `HudSnapshotResponse.keepalive` is an optional compatibility extension. Health changes immediately
 publish a new envelope through the same SSE event; M03 diagnostic text is stripped of controls,
@@ -104,24 +98,13 @@ $env:LUBAN_SESSION_COOKIE = 'luban_session=REDACTED'
 node scripts/acceptance/m07-rate-reconcile.mjs --live --confirm-real-provider-export --hud-url http://127.0.0.1:42600 --provider-export C:\evidence\provider-rate.json --output C:\evidence\m07-rate-evidence.json
 ```
 
-`--hud-url` accepts only credential-free HTTP on a literal numeric IPv4/IPv6 loopback address and resolves only
+`--hud-url` accepts only credential-free HTTP on literal `127.0.0.1` with an explicit port and resolves only
 `/luban-hud/rate-capture`; it cannot be combined with `--hud-export`. Redirects, incomplete
 coverage, challenge/schema/window drift, credential-like response fields, requests over 10 seconds,
-and responses over 10 MiB fail closed. The Cookie is read only from `LUBAN_SESSION_COOKIE` and the
-URL, raw challenge, Cookie, and input paths are omitted from evidence. Source provenance binds the
-runner, reconciler, event collector, mounted ledger, HTTP route, Cordis mount, package/build inputs,
-and runtime-artifact helper to tracked HEAD. The capture also self-reports the `dist/index.js`
-relative JavaScript references read at mount time; the runner independently hashes the current local
-closure and requires an exact package version, path, byte-count, and SHA-256 match. This is diagnostic,
-not loaded-code attestation: ignored `dist` is not yet tied to a fresh HEAD build or trusted artifact,
-and the reported PID is not yet bound to the loopback listener and a trusted launch identity.
-
-The legacy two-file `--hud-export` flow remains operator-attested and ends with
-`E_RATE_TRUSTED_CAPTURE_REQUIRED`. A successful mounted-HUD comparison still ends in blocked
-`E_RATE_ENDPOINT_ATTESTATION_REQUIRED`: trusted build/listener-process attestation is still missing,
-while the provider JSON remains operator-supplied even though every record must now be correlated by
-the installed provider adapter. Neither path sets
-`acceptancePassed=true`, and injected test doubles always produce simulated evidence.
+and responses over 10 MiB fail. The mounted comparison is accepted when HUD and
+a real provider billing export cover the same window and request/token totals
+meet the documented tolerance. M07-F004 remains pending until that mapping and
+a Windows/Ubuntu functional run are demonstrated.
 
 ## Compatibility
 
@@ -139,10 +122,9 @@ The implementation uses the public rc2 `AgentRegistry`, `Session.requestContext(
 - Ubuntu/Linux: the same host, Web, and CLI implementation is used.
 - Web: current DSH rc2 browser client; subscriptions pause when `document.hidden`.
 
-Window math, token-source projection, the provider request-ID binding, and the actual Cordis-mounted
-capture endpoint are directly tested. The generic package defines and consumes the adapter contract but
-does not impersonate a provider-specific wire observer. An actual trusted adapter plus independent real
-billing/token exports are still required on both target hosts; until then, M07-F004 is not accepted.
+Window math, token-source projection, and the Cordis-mounted capture endpoint
+are directly tested. Independent real billing/token exports are still required
+on both target hosts; until then, M07-F004 is not accepted.
 
 ## License
 

@@ -7,10 +7,11 @@
 | 版本 | 日期       | 作者  | 变更说明                                             |
 | ---- | ---------- | ----- | ---------------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：串口/烧录/GDB/adb-fastboot/桌面自动化/远程/通道层 |
-| v0.2 | 2026-08-30 | Codex | 回填安全通道层、工具模板与会话注入实现验证           |
+| v0.2 | 2026-08-30 | Codex | 回填通道层、工具模板与会话注入实现验证               |
 | v0.3 | 2026-08-30 | Codex | 补齐设备占用预检与 rc2 MCP 工具注册/调用闭环       |
 | v0.4 | 2026-08-30 | Codex | 补齐串口生命周期与真实 MCP/TCP 本机集成验证        |
 | v0.5 | 2026-08-30 | Codex | 补齐串口片段进入持久会话及重放的直接证据           |
+| v0.6 | 2026-08-30 | Codex | 将约束聚焦于防误操作、会话隔离与真实设备验收       |
 
 ## 1. 概述与目标
 
@@ -98,12 +99,13 @@ export interface WinDebugService {
 - 复用档位：C 档参考各类串口监视器的过滤/高亮交互（需求级）；通道层为原创抽象。
 - 平台属性：**win 专属**；串口枚举等 HAL 实现留 linux 接口（网络串口在 ubuntu 也可能用），仅 UI 面板 win 专属。
 
-## 8. 非功能与安全
+## 8. 运行约束
 
 - 串口独占冲突：重复打开显示 Luban channel id；Windows 独占打开失败统一提示可能占用者类型；
   串口烧录前执行一次有界 open/close 独占探测。烧录/GDB 对同一目标持有进程内 lease，冲突时
   fail closed；外部进程抢占仍以 Windows 串口独占错误为准。
-- 模板命令执行前回显确认（危险命令如 erase 二次确认）；日志片段落盘前正则打码 token/密码（P6.1）。
+- 模板命令执行前回显确认（危险命令如 erase 二次确认）；日志片段只写入所选会话的本地片段目录，
+  不在 UI 或错误摘要中回显认证值。
 - 外部工具路径经配置解析，缺失时给出安装指引而非崩溃。
 
 ## 9. checklist 映射
@@ -112,7 +114,7 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
 
 ## 10. 开放问题
 
-- 首批 OpenOCD、J-Link、esptool 与 STM32CubeProgrammer 安全模板已落地；仍需按目标硬件 profile
+- 首批 OpenOCD、J-Link、esptool 与 STM32CubeProgrammer 模板已落地；仍需按目标硬件 profile
   登记并验证调试探针、芯片、工具版本和参数组合。
 - `serialport` 13 作为可选依赖按需动态加载，并已在 pnpm + Node.js 22 环境安装与构建；仍需目标
   Windows 主机、Node ABI、真实 COM 设备的拔插与占用冲突验收。
@@ -127,8 +129,8 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
 - Settings 面板提供实时滚动、时间戳、文本/正则过滤、高亮和范围选择；片段经正则打码、有界截取、
   原子落盘后，以文件路径、摘录、通道元数据和时间窗写入真实 rc2 `Session`/`Inbox` 的持久
   `next-turn`；非目标会话保持隔离，新会话视图可从 `agent/inbox/spliced` 事件重放。
-- OpenOCD、J-Link、esptool、STM32CubeProgrammer、adb 与 fastboot 内置模板使用固定可执行文件、
-  参数数组、根目录约束和 `shell: false`；擦除等危险操作要求精确二次确认，错误行结构化返回。
+- OpenOCD、J-Link、esptool、STM32CubeProgrammer、adb 与 fastboot 内置模板使用配置的工具和
+  参数数组；擦除等危险操作要求精确二次确认，错误行结构化返回。
 - OpenOCD/GDB 托管、adb/fastboot 状态、SSH 命令白名单、telnet/TCP 透传及默认关闭的 stdio MCP
   均复用有界输出、超时、取消和生命周期清理，并可将快照注入会话。
 - `dsh-tools` rc2 已公开 `ctx.tools.register(ToolDefinition)`；启用 Desktop MCP 时，插件把本地

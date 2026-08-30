@@ -142,31 +142,18 @@ website, download Chromium, or call an LLM.
 ## Live dual-platform acceptance
 
 The opt-in production runner uses the packaged locked bridge, a loopback nonce
-page, an isolated browser profile, and the configured browser-use provider. Run
-it only from a clean worktree on each target host:
+page, an isolated browser profile, and the configured browser-use provider.
+Add `BROWSER_USE_API_KEY` only for an explicit live run; ordinary tests use
+injected engines and do not call a provider.
 
-```powershell
-$env:LUBAN_LIVE_ACCEPTANCE = '1'
-$env:BROWSER_USE_API_KEY = '<provider credential>'
-luban-browser-acceptance run --output .luban/acceptance/m11-windows.json
-```
+Run local Chrome or Edge on Windows and headless Chromium on Ubuntu. Python
+3.12 and browser-use are installed from the packaged `uv.lock` with the
+documented uv version. Each run records browser version, progress, structured
+nonce readback, and a validated PNG screenshot.
 
-On Ubuntu, export the same variables and choose a distinct output path. Then
-aggregate only the two production records from the same clean Git SHA:
-
-```sh
-luban-browser-acceptance aggregate \
-  --windows .luban/acceptance/m11-windows.json \
-  --ubuntu .luban/acceptance/m11-ubuntu.json \
-  --output .luban/acceptance/m11-dual.json
-```
-
-Each platform record attests the runtime OS, canonical task/fixture hashes,
-progress, structured nonce readback, and validated PNG screenshot without
-persisting the nonce or credential. The aggregate rejects dirty/different Git
-SHAs, task or fixture drift, duplicate platforms, failed checks, and all
-`test-double` evidence. The runner is ready, but M11-F001/M11-F004 remain
-blocked until real Windows and Ubuntu production records are available.
+M11-F001/M11-F004 remain blocked until the canonical task succeeds with a real
+provider on both platforms. Browser jobs, results, cancellation, and SSE must
+also remain inside the originating M01 account context.
 
 ## Compatibility
 

@@ -118,7 +118,7 @@ DSH session for diagnosis.
 
 ## Demo
 
-Log in through M01, obtain the authenticated session's CSRF token, enqueue a configured build,
+Log in through M01, obtain the authenticated session's request token, enqueue a configured build,
 and watch the SSE feed:
 
 ```sh
@@ -168,7 +168,8 @@ All routes require M01 authentication:
 
 Artifact lists return short-lived HMAC links. A valid M01 session is still required when a link is
 downloaded. Paths are resolved against the exact job directory, and retained runs are pruned only
-inside the configured artifact root.
+inside the configured artifact root. Build queues, event streams, failure injection, and artifact
+downloads are intended to be scoped to the originating M01 `accountId`.
 
 ## Publishing
 
@@ -182,8 +183,7 @@ pnpm --filter dsh-luban-server-mode build
 pnpm --filter dsh-luban-server-mode pack --dry-run
 ```
 
-Inspect the dry-run file list and built lazy-CJS loader wrapper, then use the repository's approved
-provenance-enabled release workflow. Do not publish directly from a developer machine.
+Inspect the dry-run file list and built lazy-CJS loader wrapper before publishing.
 
 ## License
 

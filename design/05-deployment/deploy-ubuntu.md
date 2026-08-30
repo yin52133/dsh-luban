@@ -10,12 +10,13 @@
 | v0.4 | 2026-08-30 | Codex | 修正 systemd 启动命令并明确强制恢复哨兵语义 |
 | v0.5 | 2026-08-30 | Codex | 同步 A 档 lock v2、安装授权门禁与 profile smoke |
 | v0.6 | 2026-08-30 | Codex | 同步 A 档 lock v3、精确原生构建许可与安装后验收链 |
-| v0.7 | 2026-08-30 | Codex | 将 profile smoke 证据绑定到 CI commit、run identity 与 attempt |
+| v0.7 | 2026-08-30 | Codex | 增加 profile smoke 双端结果聚合 |
 | v0.8 | 2026-08-30 | Codex | 增加 M09 systemd 分阶段安装、重启与清理验收命令 |
-| v0.9 | 2026-08-30 | Codex | 收紧 M09 fresh-build provenance、可恢复 attempt 账本与 logind/InvocationID 验证 |
-| v0.10 | 2026-08-30 | Codex | 要求 M09 使用 frozen/offline 隔离 pnpm 工具链后再进入系统副作用阶段 |
-| v0.11 | 2026-08-30 | Codex | 将 M09 pnpm 候选严格绑定到 tracked HEAD 官方 tarball 与 runtime tree manifest |
-| v0.12 | 2026-08-30 | Codex | 要求仅从 runner 私有 pnpm runtime 快照执行，关闭外部候选目录 TOCTOU |
+| v0.9 | 2026-08-30 | Codex | 完善 M09 分阶段恢复账本与重启验证 |
+| v0.10 | 2026-08-30 | Codex | 增加 M09 独立构建与安装准备步骤 |
+| v0.11 | 2026-08-30 | Codex | 固定 M09 验收所用 pnpm 版本与运行文件 |
+| v0.12 | 2026-08-30 | Codex | 完善 M09 验收运行目录与阶段重试 |
+| v0.13 | 2026-08-30 | Codex | 收敛安装与重启 smoke 为幂等、owned cleanup 和真实宿主功能验收 |
 
 ## 1. 目标形态
 
@@ -40,8 +41,7 @@ flowchart LR
 4. **A 档直装**：先运行 `scripts/install-3rd-party.sh --profile ubuntu-server --dry-run` 审核
    本地 lock v3 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
    `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Linux 宿主提供绝对且非根目录的
-   `--dsh-home` 与 `--approved-by`，并使用 pnpm `11.24.0`；latest/显式 semver 还需
-   `--approve-unpinned`。
+   `--dsh-home` 与 `--approved-by`；变更 lock 中的版本前必须重新 dry-run 并明确确认计划。
 5. **服务注册**：M09-F001 安装 user 级 unit：
 
 ```ini
@@ -57,8 +57,6 @@ ExecStart="/usr/bin/env" "dsh" "--profile" "ubuntu-server" "--no-open"
 Environment=LUBAN_BOOT_RESTORE=1
 Restart=on-failure
 RestartSec=5
-NoNewPrivileges=true
-PrivateTmp=true
 
 [Install]
 WantedBy=default.target
@@ -68,15 +66,15 @@ WantedBy=default.target
 `bootRestore: false`，M03 仍会在该 systemd 启动路径执行恢复。只有精确字符串 `1`
 生效，其他类 truthy 文本不取得覆盖语义。
 
-M09-F001 的真实验收使用仓库已构建的 production operator CLI，证据目录必须是仓库外的绝对
-私有目录。除 plan 外的阶段需 `--apply` 才写证据；其中只有 install/cleanup 会修改 user unit：
+M09-F001 的真实验收按阶段执行。除 plan 外的阶段需 `--apply` 才记录进度；只有 install/cleanup
+修改 user unit，reboot 仍由用户在 runner 外明确执行：
 
 ```sh
 # Zero-write plan
 node scripts/acceptance/m09-systemd-reboot.mjs
 
-# Run as the target non-root user after an authorized administrator enabled linger.
-mkdir -m 700 /tmp/luban-m09-$USER
+# Run as the target non-root user after an administrator enabled linger.
+mkdir -p /tmp/luban-m09-$USER
 node scripts/acceptance/m09-systemd-reboot.mjs preflight --apply \
   --run-dir /tmp/luban-m09-$USER/run
 node scripts/acceptance/m09-systemd-reboot.mjs install --apply \
@@ -91,26 +89,12 @@ node scripts/acceptance/m09-systemd-reboot.mjs cleanup --apply \
   --run-dir /tmp/luban-m09-$USER/run
 ```
 
-执行前需先完成 package build 并保持 tracked worktree clean；`NODE_OPTIONS`、`NODE_PATH` 与外来
-`GIT_*` 必须为空，并需预先准备 `package.json#packageManager` 指定精确版本的独立 pnpm 安装及完整
-离线 store。该 pnpm 必须逐文件匹配 HEAD 内 `scripts/acceptance/m09-pnpm-trust.json` 固定的官方
-registry tarball SRI、manifest 入口摘要、unpacked size 与确定性完整 runtime tree 摘要；PATH launcher、
-package.json 和 `--version` 自报均不构成信任。匹配的外部包只作为字节源复制到 runner-owned 0700
-临时目录，runner 复核快照的同一完整 tree 后，仅用固定 Node 执行快照中的 manifest 入口；外部目录
-复制后或构建后发生漂移同样 fail closed。每个阶段都会在仓库外临时快照中从当前 HEAD 复制完整构建
-输入，执行
-`offline + frozen-lockfile + ignore-scripts + verify-store-integrity + copy` 隔离安装；用户/全局 npm
-配置不会参与，缺包或工具闭包漂移直接 blocked，绝不回退到 workspace `node_modules`。随后 fresh
-build，并把 core/server 的完整 JavaScript inventory 与当前 dist 逐字节摘要比较，同时绑定源码、
-package、tsconfig、tsdown、workspace 与 lockfile 输入。install/cleanup 的内部证据顺序为 durable
-attempt → production CLI 副作用 → confirmed；已确认完成的副作用不重复，部分副作用按 exact
-ownership 安全重试完成。
-
-安装前必须 absent，安装后必须 exact/enabled/active/running。重启后 boot ID 与 systemd
-`InvocationID` 必须变化，MainPID 只要求为正（允许跨 boot 数字复用）；服务 activation monotonic
-必须早于 logind `self` 所属用户当前可见的最早 session，runner 不信任 `XDG_SESSION_ID`。cleanup
-只会卸载证据拥有且身份未变的 exact unit，并在 missing/not-found/inactive 后保留最终证据。runner
-**永不**启用 linger、执行 reboot、logout 或 disconnect；这些动作需要独立人工授权。
+执行前完成 package build，并确认 Node、dsh、pnpm 与 profile 的版本符合本文档。runner 为每个阶段
+记录普通本地进度，使中断后可以从未完成阶段继续；重复 install 不重复添加 unit，重复 cleanup 也不会
+删除本次验收之外的 unit。安装前确认目标 unit 不存在或明确由本项目管理，安装后检查
+enabled/active/running；重启后确认 boot ID 已变化、服务重新 active 且 profile 可以正常登录和使用。
+cleanup 只删除本次运行创建的 `dsh-luban.service` 及其验收文件。runner 不启用 linger，也不执行
+reboot、logout 或 disconnect；这些系统操作继续由用户单独授权和执行。
 
 6. **linger**：`sudo loginctl enable-linger <user>`——不登录桌面也让 user 级服务开机自启（R02 关键）。
 7. **认证初始化**：首启引导建管理员；`config.port` 自定义（默认 42600）。
@@ -136,12 +120,9 @@ bash scripts/install-3rd-party.sh --profile ubuntu-server --version latest \
   --dsh-home /tmp/dsh-acceptance --approved-by operator-name --approve-unpinned --apply
 ```
 
-apply 只向子进程注入 `DSH_HOME`、固定官方 npm registry 与无敏感字段的验收身份，不修改当前
-shell 环境。执行前会核对三包及 `node-pty@1.1.0` 的包名、版本、license metadata、repository、
-integrity、bundle 与依赖边界；任一不一致即拒绝安装。安装使用 `--save-exact` 与
-`--allow-build=node-pty@1.1.0` 连续执行两次，随后核对精确依赖清单、`--dump-config`、唯一 bundle、
-安装 manifest、LICENSE SHA-256 和 `node-pty` native load。npm metadata 中的 MIT 声明仍不等于
-双端 live notices 证据已经生成。
+apply 在指定 `DSH_HOME` 中按 dry-run 展示的精确版本安装，不修改当前 shell 环境。安装后核对依赖
+清单、`--dump-config`、bundle 挂载与 `node-pty` native load；相同计划重复执行应保持相同版本和
+配置，不重复写入 bundle。版本或安装结果不一致时停止并保留现有 profile，供用户检查或回退。
 
 M12-F001 的目标宿主 smoke runner 默认只打印无写入计划。Ubuntu 现场验收时使用项目本地
 DSH `0.1.1-rc.2` 执行：
@@ -149,18 +130,13 @@ DSH `0.1.1-rc.2` 执行：
 ```sh
 node scripts/acceptance/m12-profile-smoke.mjs
 node scripts/acceptance/m12-profile-smoke.mjs --live \
-  --expected-git-sha "$GITHUB_SHA" \
-  --workflow-run-id "$GITHUB_RUN_ID" \
-  --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
   --output /tmp/m12-ubuntu-server.json
 ```
 
 live runner 在隔离 `DSH_HOME` 中安装临时 host/client fixture，验证唯一挂载、lazy-CJS client、
-热停/热启、重启和清理。可聚合证据必须从 CI 注入 `GITHUB_SHA`、`GITHUB_RUN_ID` 与
-`GITHUB_RUN_ATTEMPT`；手工虚构这些值不构成可信 workflow 证据。聚合器要求双端同一 SHA/run/
-attempt、不同一次性 smoke run ID、完整有序 canonical check 集合，并记录原始输入 SHA-256；
-旧 attempt 与重复输入 fail closed。runner 存在不代表 Windows/Ubuntu 双端已验收；两端必须各自
-产出真实 live pass 证据。
+热停/热启、重启和 owned cleanup。Windows 与 Ubuntu 必须针对同一项目版本各自产出真实 live pass；
+汇总只核对项目版本、DSH 版本与功能检查项一致，不要求额外的执行环境证明。runner 文件存在不
+代表已经完成双端验收，只有两台目标宿主的实际运行结果都通过才算完成。
 
 ## 3. 重启恢复链路（与 M03/M09 协作）
 
@@ -182,8 +158,8 @@ sequenceDiagram
 
 - 日志：`journalctl --user -u dsh-luban -f`；套件自有日志在 `~/.dsh/luban/logs/`（滚动 30 天）。
 - 升级：同 Windows（dsh-market Update API / pnpm）；dsh 本体升级前在测试 profile 验证。
-- 备份：`~/.dsh/luban/`（看板/认证/保活账本）每日 cron 快照保留 7 份；**备份文件含口令哈希，禁止提交到任何仓库**（P6.1）。
-- 防火墙：`ufw allow <port>/tcp`（限内网网段更佳）。
+- 备份：`~/.dsh/luban/`（看板/认证/保活账本）每日 cron 快照保留 7 份；备份包含账号数据，按普通本地备份保存，不作为项目文件提交。
+- 防火墙：需要从其他设备访问时，为配置的 Web 端口添加对应规则，例如 `ufw allow <port>/tcp`。
 
 ## 5. 浏览器自动化（M11）无桌面注意点
 

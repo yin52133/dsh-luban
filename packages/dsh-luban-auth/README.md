@@ -1,18 +1,15 @@
 # dsh-luban-auth
 
-`dsh-luban-auth` is the only LAN-facing entry point for a DSH Web deployment.
-It authenticates the request and then streams HTTP, SSE, and WebSocket traffic
-to a loopback-only DSH WebServer (by default `http://127.0.0.1:3080`).
+`dsh-luban-auth` provides simple local-account login for a DSH Web deployment.
+It authenticates HTTP, SSE, and WebSocket traffic and supplies the account
+identity used to isolate Luban data and DSH session context.
 
 ## Features
 
-- Local Argon2id accounts, role-aware sessions, global revocation, failure
-  lockout, per-IP login limiting, and a 30-day redacted JSONL audit trail.
-- One fail-closed LAN sidecar protecting DSH HTTP, SSE, WebSocket, static, and
-  SPA fallback traffic; the upstream is required to be loopback-only.
-- `HttpOnly`/`SameSite=Lax` cookies, per-session CSRF, Origin/Host/CIDR checks,
-  request-size bounds, proxy-aware secure cookies, and constant-shape login
-  failures.
+- Local accounts, expiring login sessions, logout, and global session revocation.
+- One login sidecar covering DSH HTTP, SSE, WebSocket, static, and SPA fallback traffic.
+- Stable account identity propagation for tasks, plans, attachments, sessions,
+  context history, build jobs, and browser jobs.
 - Standard Schema configuration and effect-owned startup/shutdown for Cordis.
 
 ## Installation
@@ -39,10 +36,7 @@ listening port matches the configured upstream port.
         port: 42600
         upstream: http://127.0.0.1:3080
         sessionTtlHours: 72
-        maxFailures: 5
-        lockoutMinutes: 15
         usersFile: ~/.dsh/luban/auth/users.json
-        auditDirectory: ~/.dsh/luban/logs/auth
 ```
 
 ### First start
@@ -52,29 +46,19 @@ first start. The plugin creates the initial `admin` account with an Argon2id
 hash and never writes or logs the plaintext value. Remove the environment
 variable after the account has been created.
 
-Account and audit files are created with owner-only modes. On Windows, also
-verify that the containing directory ACL grants access only to the DSH service
-account.
+Open `http://<host>:42600/luban-auth/login`. This is the only supported login
+route; `/luban/auth/login` is not an alias. Use an HTTPS reverse proxy when the
+deployment needs TLS termination.
 
-Open `http://<host>:42600/luban-auth/login`. The default LAN listener uses
-plain HTTP and must not be exposed to the public internet. Put it behind a TLS
-reverse proxy and enable `trustProxy` for public or otherwise untrusted
-networks.
-
-When using a host name or address that is not one of the machine's local
-addresses, add it to `trustedHosts`. Keep DSH's upstream listener bound to
-loopback; the plugin rejects non-loopback upstream URLs.
-
-## Security endpoints
+## Account endpoints
 
 - `GET|POST /luban-auth/login`
 - `GET /luban-auth/session`
 - `POST /luban-auth/logout`
 - `POST /luban-auth/revoke-all` (admin only)
 
-The session cookie is `HttpOnly` and `SameSite=Lax`. Mutation requests require
-a same-origin `Origin`, or the per-session CSRF token in `x-luban-csrf` for
-non-browser clients.
+Non-browser clients reuse the current authenticated session and its request
+token when calling mutation endpoints.
 
 ## Demo
 
@@ -92,12 +76,8 @@ outer sidecar by design rather than a route-local authentication plugin.
 
 ## Platform Support
 
-The same implementation and automated contracts are shared by Windows and
-Ubuntu. The current checklist still requires the same Git SHA to pass both CI
-quality jobs; workflow availability alone is not that evidence. File modes are
-enforced where supported, and Windows deployments must additionally verify the
-service-account ACL. `trustProxy` is only for an explicitly configured TLS
-reverse proxy.
+The same implementation is shared by Windows and Ubuntu. Run login, logout,
+session-expiry, and alice/bob account-isolation tests on both platforms.
 
 ## License
 
