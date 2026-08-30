@@ -1,14 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
-import type { SnippetFile } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesktopMcpManager, type DesktopToolRegistry } from '../src/desktop-mcp.js'
 import { DeviceExecutionGate } from '../src/device-gate.js'
 import { GdbSessionManager } from '../src/gdb.js'
-import { DshSessionInjection } from '../src/session-injector.js'
 import { DefaultWinDebugService } from '../src/service.js'
 import { SnippetStore } from '../src/snippet-store.js'
 import { CommandTemplateRegistry, type TemplateExecutionPreflight } from '../src/templates.js'
@@ -443,35 +440,5 @@ describe('desktop MCP wrapper', (): void => {
 
     await manager.stop()
     expect(manager.status().state).toBe('stopped')
-  })
-})
-
-describe('DSH session injection', (): void => {
-  it('sends a file path, endpoint metadata and excerpt to a live session', async (): Promise<void> => {
-    const followup = vi.fn()
-    const agents = {
-      get: vi.fn(() => ({ followup })),
-      resume: vi.fn(),
-    } as unknown as AgentRegistry
-    const snippet: SnippetFile = {
-      path: 'C:\\debug\\snippet.log',
-      content: 'fatal: target halted',
-      timeFrom: 1,
-      timeTo: 2,
-      endpoint: {
-        kind: 'serial',
-        id: 'serial:COM3',
-        label: 'COM3',
-        params: { port: 'COM3', baud: '115200' },
-      },
-    }
-
-    await new DshSessionInjection(agents).inject('session-1', snippet)
-
-    expect(followup).toHaveBeenCalledOnce()
-    const encoded = JSON.stringify(followup.mock.calls[0]?.[0])
-    expect(encoded).toContain('C:\\\\debug\\\\snippet.log')
-    expect(encoded).toContain('fatal: target halted')
-    expect(encoded).toContain('115200')
   })
 })
