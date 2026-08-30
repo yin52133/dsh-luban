@@ -9,6 +9,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId as DshSessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { asSessionId } from 'dsh-luban-core'
 import type {
+  AccountId,
   ProviderRequestIdentityAdapter,
   ProviderRequestIdentityAttestation,
   ProviderRequestIdentityQuery,
@@ -181,6 +182,8 @@ export interface LoadedVisualAcceptanceBuildIdentity {
 }
 
 export interface MountedVisualAcceptanceOptions {
+  /** Added by the authenticated HTTP boundary and deliberately omitted from the request body. */
+  readonly accountId?: AccountId
   readonly live: boolean
   readonly sessionId: string
   readonly timeoutMs?: number
@@ -1470,6 +1473,7 @@ export class MountedVisualAcceptanceService {
     let canonicalWorkspace: string | undefined
     let platform = platformEvidence()
     const requestedSessionId = options.sessionId
+    const accountId = options.accountId
 
     try {
       const waitTimeout = timeoutMs(options.timeoutMs)
@@ -1596,16 +1600,20 @@ export class MountedVisualAcceptanceService {
 
           const pngBuffer = new ArrayBuffer(renderedPng.byteLength)
           new Uint8Array(pngBuffer).set(renderedPng)
+          if (accountId === undefined) {
+            throw new VisualAcceptanceBlocked('authenticated account context is unavailable')
+          }
           const ingestedImage = await productionService.fromBlobWithSource(
             new Blob([pngBuffer], { type: 'image/png' }),
             {
+              accountId,
               source: 'paste',
               nameHint: 'visual-acceptance.png',
               declaredMime: 'image/png',
             },
           )
           image = ingestedImage
-          const stored = await productionService.content(ingestedImage.id)
+          const stored = await productionService.content(accountId, ingestedImage.id)
           const storedSha256 = sha256(stored.bytes)
           const sameRenderedBytes = storedSha256 === sha256(renderedPng)
           if (sameRenderedBytes) validateVisualNoncePng(stored.bytes)
@@ -1657,6 +1665,7 @@ export class MountedVisualAcceptanceService {
           const queueReceipt = { queued: false }
           try {
             await productionService.injectById(
+              accountId,
               asSessionId(requestedSessionId),
               ingestedImage.id,
               injectStyle,
@@ -1822,11 +1831,12 @@ export class MountedVisualAcceptanceService {
         repository !== undefined &&
         mountedService !== undefined &&
         image !== undefined &&
+        accountId !== undefined &&
         (!execution.injected || execution.turnSettled)
       ) {
         try {
-          await repository.removeReference(image.id, asSessionId(requestedSessionId))
-          await mountedService.delete(image.id)
+          await repository.removeReference(accountId, image.id, asSessionId(requestedSessionId))
+          await mountedService.delete(accountId, image.id)
           cleanup = 'pass'
           recordCheck(checks, 'cleanup', 'pass', 'mounted attachment removed')
         } catch {

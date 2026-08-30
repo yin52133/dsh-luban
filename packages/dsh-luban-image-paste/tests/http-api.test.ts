@@ -4,7 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import type { AuthService } from 'dsh-luban-core'
+import type { AccountId, AuthMiddlewareRequest, AuthService, SessionId } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ImagePasteHttpApi } from '../src/http-api.js'
 import type {
@@ -24,16 +25,44 @@ import {
 } from './helpers.js'
 
 const VISUAL_CHALLENGE = 'A'.repeat(43)
+const ALICE_ACCOUNT = asAccountId('account-alice')
+const BOB_ACCOUNT = asAccountId('account-bob')
+
+const SESSION_OWNERS = new Map<string, AccountId>([
+  ['session-1', ALICE_ACCOUNT],
+  ['session-live', ALICE_ACCOUNT],
+  ['session-bob', BOB_ACCOUNT],
+])
 
 function authentication(): AuthService {
   return {
-    middleware: () => (request) =>
+    middleware: () => (request: AuthMiddlewareRequest) =>
       Promise.resolve(
         request.cookie === 'session=ok'
-          ? { allowed: true, status: 200, user: 'tester' }
-          : { allowed: false, status: 401 },
+          ? {
+              allowed: true,
+              status: 200,
+              user: 'alice',
+              account: { accountId: ALICE_ACCOUNT, username: 'alice', role: 'operator' },
+            }
+          : request.cookie === 'session=bob'
+            ? {
+                allowed: true,
+                status: 200,
+                user: 'bob',
+                account: { accountId: BOB_ACCOUNT, username: 'bob', role: 'operator' },
+              }
+            : { allowed: false, status: 401 },
       ),
-  } as AuthService
+    accountSessions: {
+      bind: (accountId: AccountId, sessionId: SessionId): Promise<void> => {
+        SESSION_OWNERS.set(sessionId, accountId)
+        return Promise.resolve()
+      },
+      ownerOf: (sessionId: SessionId): Promise<AccountId | null> =>
+        Promise.resolve(SESSION_OWNERS.get(sessionId) ?? null),
+    },
+  } as unknown as AuthService
 }
 
 async function json(response: Response): Promise<Readonly<Record<string, unknown>>> {
@@ -119,16 +148,26 @@ describe('authenticated image HTTP API', () => {
     cookie: 'session=ok',
     'x-luban-csrf': 'csrf-token',
   })
+  const bobHeaders = Object.freeze({
+    cookie: 'session=bob',
+    'x-luban-csrf': 'csrf-token',
+  })
 
   async function upload(
     name: string,
     source = 'paste',
+    headers: Readonly<Record<string, string>> = authHeaders,
+    requestedAccountId?: AccountId,
   ): Promise<Readonly<Record<string, unknown>>> {
     const response = await fetch(
-      `${baseUrl}/images?source=${encodeURIComponent(source)}&name=${encodeURIComponent(name)}`,
+      `${baseUrl}/images?source=${encodeURIComponent(source)}&name=${encodeURIComponent(name)}${
+        requestedAccountId === undefined
+          ? ''
+          : `&accountId=${encodeURIComponent(requestedAccountId)}`
+      }`,
       {
         method: 'POST',
-        headers: { ...authHeaders, 'content-type': 'image/png' },
+        headers: { ...headers, 'content-type': 'image/png' },
         body: new Blob([PNG_BYTES], { type: 'image/png' }),
       },
     )
@@ -175,6 +214,7 @@ describe('authenticated image HTTP API', () => {
     })
     expect(live.status).toBe(200)
     expect(visualRun).toHaveBeenCalledExactlyOnceWith({
+      accountId: ALICE_ACCOUNT,
       live: true,
       sessionId: 'session-live',
       timeoutMs: 10_000,
@@ -334,6 +374,103 @@ describe('authenticated image HTTP API', () => {
       headers: authHeaders,
     })
     expect(deletion.status).toBe(409)
+  })
+
+  it('isolates alice and bob records and ignores request account overrides', async () => {
+    const aliceImage = await upload('alice-only.png')
+    const aliceId = aliceImage.id as string
+    const bobImage = await upload('bob-only.png', 'paste', bobHeaders, ALICE_ACCOUNT)
+    const bobId = bobImage.id as string
+
+    expect(aliceImage.accountId).toBe(ALICE_ACCOUNT)
+    expect(bobImage.accountId).toBe(BOB_ACCOUNT)
+
+    const aliceList = await json(
+      await fetch(`${baseUrl}/images?accountId=${encodeURIComponent(BOB_ACCOUNT)}`, {
+        headers: authHeaders,
+      }),
+    )
+    expect(aliceList.images).toMatchObject([{ id: aliceId }])
+    const bobList = await json(
+      await fetch(`${baseUrl}/images?accountId=${encodeURIComponent(ALICE_ACCOUNT)}`, {
+        headers: bobHeaders,
+      }),
+    )
+    expect(bobList.images).toMatchObject([{ id: bobId }])
+
+    await expect(
+      fetch(`${baseUrl}/images/${encodeURIComponent(aliceId)}/content`, {
+        headers: bobHeaders,
+      }),
+    ).resolves.toMatchObject({ status: 404 })
+    await expect(
+      fetch(`${baseUrl}/images/${encodeURIComponent(aliceId)}`, {
+        method: 'DELETE',
+        headers: bobHeaders,
+      }),
+    ).resolves.toMatchObject({ status: 404 })
+
+    const crossAccountSession = await fetch(
+      `${baseUrl}/images/${encodeURIComponent(aliceId)}/inject`,
+      {
+        method: 'POST',
+        headers: { ...authHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accountId: BOB_ACCOUNT,
+          sessionId: 'session-bob',
+          style: 'markdown',
+        }),
+      },
+    )
+    expect(crossAccountSession.status).toBe(404)
+    expect(injector.calls).toHaveLength(0)
+
+    const bobCrossRecord = await fetch(`${baseUrl}/images/${encodeURIComponent(aliceId)}/inject`, {
+      method: 'POST',
+      headers: { ...bobHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        accountId: ALICE_ACCOUNT,
+        sessionId: 'session-bob',
+        style: 'markdown',
+      }),
+    })
+    expect(bobCrossRecord.status).toBe(404)
+    expect(injector.calls).toHaveLength(0)
+  })
+
+  it('limits authenticated cleanup to the current account', async () => {
+    const aliceImage = await upload('alice-expired.png')
+    const bobImage = await upload('bob-expired.png', 'paste', bobHeaders)
+    clock.value += 15 * 24 * 60 * 60 * 1_000
+
+    const bobCleanup = await fetch(`${baseUrl}/cleanup`, {
+      method: 'POST',
+      headers: { ...bobHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ dryRun: false, accountId: ALICE_ACCOUNT }),
+    })
+    expect(bobCleanup.status).toBe(200)
+    await expect(
+      fetch(`${baseUrl}/images/${encodeURIComponent(aliceImage.id as string)}/content`, {
+        headers: authHeaders,
+      }),
+    ).resolves.toMatchObject({ status: 200 })
+    await expect(
+      fetch(`${baseUrl}/images/${encodeURIComponent(bobImage.id as string)}/content`, {
+        headers: bobHeaders,
+      }),
+    ).resolves.toMatchObject({ status: 404 })
+
+    const aliceCleanup = await fetch(`${baseUrl}/cleanup`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ dryRun: false, accountId: BOB_ACCOUNT }),
+    })
+    expect(aliceCleanup.status).toBe(200)
+    await expect(
+      fetch(`${baseUrl}/images/${encodeURIComponent(aliceImage.id as string)}/content`, {
+        headers: authHeaders,
+      }),
+    ).resolves.toMatchObject({ status: 404 })
   })
 
   it('serves Unicode attachment names with an ASCII and RFC 5987 disposition', async () => {

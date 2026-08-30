@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { asSessionId } from 'dsh-luban-core'
+import { asAccountId, asSessionId } from 'dsh-luban-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AttachmentRepository } from '../src/repository.js'
 import { FileImageIngestService } from '../src/service.js'
@@ -15,6 +15,9 @@ import {
   passThroughProcessor,
   testConfig,
 } from './helpers.js'
+
+const ACCOUNT = asAccountId('account-alice')
+const OTHER_ACCOUNT = asAccountId('account-bob')
 
 describe('attachment repository and ingest service', () => {
   let workspace = ''
@@ -73,10 +76,12 @@ describe('attachment repository and ingest service', () => {
   it('publishes safe, sequential workspace-relative files and durable metadata', async () => {
     const ingest = service()
     const first = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
       source: 'paste',
       nameHint: '../../CON.png',
     })
     const second = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
       source: 'drop',
       nameHint: '../../CON.png',
     })
@@ -85,10 +90,43 @@ describe('attachment repository and ingest service', () => {
     expect(first.absPath.startsWith(workspace)).toBe(true)
     expect(new Uint8Array(await readFile(first.absPath))).toEqual(PNG_BYTES)
     expect(first.sha256).toMatch(/^[a-f0-9]{64}$/u)
-    await expect(ingest.listRecords()).resolves.toHaveLength(2)
+    await expect(ingest.listRecords(ACCOUNT)).resolves.toHaveLength(2)
     expect((await readdir(repository.attachRoot)).some((name) => name.startsWith('.upload-'))).toBe(
       false,
     )
+  })
+
+  it('keeps legacy unowned rows invisible instead of claiming them on access', async () => {
+    const ingest = service()
+    const legacy = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
+      source: 'paste',
+      nameHint: 'legacy',
+    })
+    const ledgerPath = join(repository.attachRoot, '.luban-image-index.json')
+    const ledger = JSON.parse(await readFile(ledgerPath, 'utf8')) as {
+      images: Record<string, unknown>[]
+    }
+    const first = ledger.images[0]
+    if (first === undefined) throw new Error('missing legacy fixture')
+    delete first.accountId
+    await writeFile(ledgerPath, `${JSON.stringify(ledger)}\n`, 'utf8')
+    repository = await AttachmentRepository.create({
+      workspaceRoot: workspace,
+      attachDir: '.luban/attachments',
+      clock,
+    })
+
+    await expect(repository.list(ACCOUNT)).resolves.toEqual([])
+    await expect(repository.list(OTHER_ACCOUNT)).resolves.toEqual([])
+    await expect(repository.get(ACCOUNT, legacy.id)).resolves.toBeNull()
+    await expect(repository.cleanup(ACCOUNT, 0, false)).resolves.toEqual({
+      candidates: [],
+      removed: [],
+      retainedReferenced: [],
+      errors: [],
+    })
+    await expect(readFile(legacy.absPath)).resolves.toEqual(Buffer.from(PNG_BYTES))
   })
 
   it('allocates unique names under concurrent ingestion', async () => {
@@ -96,6 +134,7 @@ describe('attachment repository and ingest service', () => {
     const images = await Promise.all(
       Array.from({ length: 8 }, () =>
         ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+          accountId: ACCOUNT,
           source: 'drop',
           nameHint: 'scope.png',
         }),
@@ -108,6 +147,7 @@ describe('attachment repository and ingest service', () => {
     const ingest = service()
     await expect(
       ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/jpeg' }), {
+        accountId: ACCOUNT,
         source: 'paste',
       }),
     ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
@@ -126,7 +166,7 @@ describe('attachment repository and ingest service', () => {
     await expect(
       service(new RecordingInjector(), emptyClipboard, invalidProcessor).fromBlobWithSource(
         new Blob([PNG_BYTES], { type: 'image/png' }),
-        { source: 'paste' },
+        { accountId: ACCOUNT, source: 'paste' },
       ),
     ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
   })
@@ -172,26 +212,27 @@ describe('attachment repository and ingest service', () => {
     await expect(
       service(new RecordingInjector(), emptyClipboard, unavailable, {
         compression: true,
-      }).fromBlobWithSource(input, { source: 'paste' }),
+      }).fromBlobWithSource(input, { accountId: ACCOUNT, source: 'paste' }),
     ).rejects.toMatchObject({ code: 'E_UNAVAILABLE', retriable: true })
     await expect(
       service(new RecordingInjector(), emptyClipboard, failed, {
         compression: true,
-      }).fromBlobWithSource(input, { source: 'paste' }),
+      }).fromBlobWithSource(input, { accountId: ACCOUNT, source: 'paste' }),
     ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
     await expect(
       service(new RecordingInjector(), emptyClipboard, unsafe, {
         compression: true,
         maxSidePx: 2_000,
-      }).fromBlobWithSource(input, { source: 'paste' }),
+      }).fromBlobWithSource(input, { accountId: ACCOUNT, source: 'paste' }),
     ).rejects.toMatchObject({ code: 'E_IO' })
-    await expect(repository.list()).resolves.toHaveLength(0)
+    await expect(repository.list(ACCOUNT)).resolves.toHaveLength(0)
   })
 
   it('cleans temporary and unpublished target files when ledger publication fails', async () => {
     await writeFile(join(repository.attachRoot, '.luban-image-index.json'), '{invalid json')
     await expect(
       service().fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+        accountId: ACCOUNT,
         source: 'paste',
         nameHint: 'must-not-leak',
       }),
@@ -206,7 +247,7 @@ describe('attachment repository and ingest service', () => {
       capture: () =>
         Promise.resolve({ bytes: PNG_BYTES, mime: 'image/png', nameHint: 'clipboard' }),
     }
-    const image = await service(new RecordingInjector(), clipboard).fromClipboard()
+    const image = await service(new RecordingInjector(), clipboard).fromClipboard(ACCOUNT)
     expect(image.source).toBe('clipboard-cli')
     expect(image.relPath).toContain('clipboard-1.png')
   })
@@ -215,24 +256,28 @@ describe('attachment repository and ingest service', () => {
     const injector = new RecordingInjector()
     const ingest = service(injector)
     const image = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
       source: 'paste',
       nameHint: 'schematic',
     })
     const sessionId = asSessionId('session-1')
-    const injected = await ingest.injectById(sessionId, image.id, 'path')
+    const injected = await ingest.injectById(ACCOUNT, sessionId, image.id, 'path')
     expect(injected.referencedBy).toEqual([sessionId])
     expect(injector.calls).toHaveLength(1)
     expect(injector.calls[0]?.style).toBe('path')
-    await expect(ingest.delete(image.id)).rejects.toMatchObject({
+    await expect(ingest.delete(ACCOUNT, image.id)).rejects.toMatchObject({
       code: 'E_INVALID_TRANSITION',
     })
 
     const other = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
       source: 'drop',
       nameHint: 'modified',
     })
     await writeFile(other.absPath, Uint8Array.of(...PNG_BYTES, 1))
-    await expect(ingest.injectById(sessionId, other.id)).rejects.toMatchObject({ code: 'E_IO' })
+    await expect(ingest.injectById(ACCOUNT, sessionId, other.id)).rejects.toMatchObject({
+      code: 'E_IO',
+    })
   })
 
   it('rolls back a newly-added reference when DSH injection fails', async () => {
@@ -241,12 +286,13 @@ describe('attachment repository and ingest service', () => {
     }
     const ingest = service(injector)
     const image = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
       source: 'paste',
     })
-    await expect(ingest.injectById(asSessionId('missing'), image.id)).rejects.toThrow(
+    await expect(ingest.injectById(ACCOUNT, asSessionId('missing'), image.id)).rejects.toThrow(
       'fake session failure',
     )
-    const refreshed = await repository.get(image.id)
+    const refreshed = await repository.get(ACCOUNT, image.id)
     expect(refreshed?.referencedBy).toEqual([])
   })
 
@@ -262,24 +308,25 @@ describe('attachment repository and ingest service', () => {
     }
     const ingest = service(injector)
     const image = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
       source: 'paste',
     })
     const sessionId = asSessionId('post-queue-refresh-failure')
     const originalGet = repository.get.bind(repository)
     let getCalls = 0
-    const get = vi.spyOn(repository, 'get').mockImplementation(async (id) => {
+    const get = vi.spyOn(repository, 'get').mockImplementation(async (accountId, id) => {
       getCalls += 1
       if (getCalls === 2) throw new Error('metadata refresh failed after queue commit')
-      return originalGet(id)
+      return originalGet(accountId, id)
     })
     const queueReceipt = { queued: false }
 
-    await expect(ingest.injectById(sessionId, image.id, 'path', { queueReceipt })).rejects.toThrow(
-      'metadata refresh failed after queue commit',
-    )
+    await expect(
+      ingest.injectById(ACCOUNT, sessionId, image.id, 'path', { queueReceipt }),
+    ).rejects.toThrow('metadata refresh failed after queue commit')
     expect(queueReceipt).toEqual({ queued: true, messageId: 'queued-message' })
     get.mockRestore()
-    expect((await repository.get(image.id))?.referencedBy).toEqual([sessionId])
+    expect((await repository.get(ACCOUNT, image.id))?.referencedBy).toEqual([sessionId])
   })
 
   it('serializes same-session injection so a failed rollback cannot erase a success', async () => {
@@ -303,17 +350,18 @@ describe('attachment repository and ingest service', () => {
     }
     const ingest = service(injector)
     const image = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
       source: 'paste',
     })
     const sessionId = asSessionId('concurrent-session')
-    const first = ingest.injectById(sessionId, image.id)
+    const first = ingest.injectById(ACCOUNT, sessionId, image.id)
     await started
-    const second = ingest.injectById(sessionId, image.id)
+    const second = ingest.injectById(ACCOUNT, sessionId, image.id)
     releaseFailure?.()
 
     await expect(first).rejects.toThrow('first injection failed')
     await expect(second).resolves.toMatchObject({ referencedBy: [sessionId] })
-    expect((await repository.get(image.id))?.referencedBy).toEqual([sessionId])
+    expect((await repository.get(ACCOUNT, image.id))?.referencedBy).toEqual([sessionId])
   })
 
   it('bounds recent results without hiding older records from identity injection', async () => {
@@ -323,6 +371,7 @@ describe('attachment repository and ingest service', () => {
     for (const name of ['first', 'second', 'third']) {
       images.push(
         await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+          accountId: ACCOUNT,
           source: 'paste',
           nameHint: name,
         }),
@@ -330,7 +379,7 @@ describe('attachment repository and ingest service', () => {
       clock.value += 1
     }
 
-    await expect(ingest.listRecords()).resolves.toMatchObject([
+    await expect(ingest.listRecords(ACCOUNT)).resolves.toMatchObject([
       { originalName: 'third' },
       { originalName: 'second' },
     ])
@@ -345,9 +394,10 @@ describe('attachment repository and ingest service', () => {
     await rename(repository.attachRoot, displaced)
     await mkdir(repository.attachRoot, { recursive: true })
 
-    await expect(repository.list()).rejects.toMatchObject({ code: 'E_IO' })
+    await expect(repository.list(ACCOUNT)).rejects.toMatchObject({ code: 'E_IO' })
     await expect(
       repository.store({
+        accountId: ACCOUNT,
         bytes: PNG_BYTES,
         extension: 'png',
         mime: 'image/png',
@@ -364,7 +414,7 @@ describe('attachment repository and ingest service', () => {
   it('recovers only stale, unindexed plugin-owned crash artifacts', async () => {
     const indexed = await service().fromBlobWithSource(
       new Blob([PNG_BYTES], { type: 'image/png' }),
-      { source: 'paste', nameHint: 'indexed' },
+      { accountId: ACCOUNT, source: 'paste', nameHint: 'indexed' },
     )
     const staleTemp = join(
       repository.attachRoot,
@@ -404,25 +454,26 @@ describe('attachment repository and ingest service', () => {
     const ingest = service(injector)
     const referenced = await ingest.fromBlobWithSource(
       new Blob([PNG_BYTES], { type: 'image/png' }),
-      { source: 'paste', nameHint: 'referenced' },
+      { accountId: ACCOUNT, source: 'paste', nameHint: 'referenced' },
     )
     const orphan = await ingest.fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
       source: 'drop',
       nameHint: 'orphan',
     })
-    await ingest.injectById(asSessionId('session-1'), referenced.id)
+    await ingest.injectById(ACCOUNT, asSessionId('session-1'), referenced.id)
     clock.value += 15 * 24 * 60 * 60 * 1_000
 
-    await expect(ingest.cleanup(true)).resolves.toEqual({
+    await expect(ingest.cleanupForAccount(ACCOUNT, true)).resolves.toEqual({
       candidates: [orphan.relPath],
       removed: [],
       retainedReferenced: [referenced.relPath],
       errors: [],
     })
-    const report = await ingest.cleanup(false)
+    const report = await ingest.cleanupForAccount(ACCOUNT, false)
     expect(report.removed).toEqual([orphan.relPath])
-    expect(await repository.get(orphan.id)).toBeNull()
-    expect(await repository.get(referenced.id)).not.toBeNull()
+    expect(await repository.get(ACCOUNT, orphan.id)).toBeNull()
+    expect(await repository.get(ACCOUNT, referenced.id)).not.toBeNull()
     await expect(readFile(orphan.absPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

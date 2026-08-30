@@ -5,8 +5,10 @@ import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { AuthService } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import plugin from '../src/index.js'
+import type { FileImageIngestService } from '../src/service.js'
 import { PNG_BYTES } from './helpers.js'
 
 function authentication(): AuthService {
@@ -101,10 +103,13 @@ describe('Cordis lifecycle', () => {
         cleanupIntervalMinutes: 1,
       })
       await imageFiber
-      await context.lubanImageIngest.fromBlob(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      const mounted = context.get('lubanImageIngest') as FileImageIngestService
+      const accountId = asAccountId('account-timer')
+      await mounted.fromBlob(new Blob([PNG_BYTES], { type: 'image/png' }), {
+        accountId,
         nameHint: 'scheduled-cleanup.png',
       })
-      const cleanup = vi.spyOn(context.lubanImageIngest, 'cleanup')
+      const cleanup = vi.spyOn(mounted, 'cleanup')
 
       vi.setSystemTime(Date.UTC(2026, 8, 1, 1, 2, 3))
       await vi.advanceTimersByTimeAsync(60_000)
@@ -113,7 +118,7 @@ describe('Cordis lifecycle', () => {
       const result = cleanup.mock.results[0]
       if (result?.type !== 'return') throw new Error('scheduled cleanup did not return a promise')
       await result.value
-      await expect(context.lubanImageIngest.recent()).resolves.toEqual([])
+      await expect(mounted.listRecords(accountId)).resolves.toEqual([])
 
       await imageFiber.dispose()
       await vi.advanceTimersByTimeAsync(60_000)

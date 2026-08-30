@@ -1,4 +1,10 @@
-import type { CleanupReport, ImageIngestService, IngestedImage, SessionId } from 'dsh-luban-core'
+import type {
+  AccountId,
+  CleanupReport,
+  ImageIngestService,
+  IngestedImage,
+  SessionId,
+} from 'dsh-luban-core'
 import { LubanError } from 'dsh-luban-core'
 import type { Config } from './config.js'
 import { assertMimeMatches, detectImage } from './image-format.js'
@@ -22,6 +28,8 @@ export interface FileImageIngestServiceOptions {
 }
 
 export interface IngestOptions {
+  /** Set by the authenticated service boundary, never by request input. */
+  readonly accountId: AccountId
   readonly nameHint?: string
   readonly source: ImageSource
   readonly declaredMime?: string
@@ -45,6 +53,13 @@ class InjectionMutex {
       if (this.#tails.get(key) === current) this.#tails.delete(key)
     }
   }
+}
+
+function requireAccountId(accountId: AccountId | undefined): AccountId {
+  if (accountId === undefined) {
+    throw new LubanError('E_AUTH_REQUIRED', 'Authenticated account context is required')
+  }
+  return accountId
 }
 
 /** M06 service: validate, optionally resize, persist, reference, and expire attachments. */
@@ -77,8 +92,12 @@ export class FileImageIngestService implements ImageIngestService {
     return this.#repository === repository && this.#config === config
   }
 
-  public async fromBlob(blob: Blob, meta?: { readonly nameHint?: string }): Promise<IngestedImage> {
+  public async fromBlob(
+    blob: Blob,
+    meta?: { readonly accountId?: AccountId; readonly nameHint?: string },
+  ): Promise<IngestedImage> {
     return this.fromBlobWithSource(blob, {
+      accountId: requireAccountId(meta?.accountId),
       source: 'paste',
       ...(meta?.nameHint === undefined ? {} : { nameHint: meta.nameHint }),
       ...(blob.type === '' ? {} : { declaredMime: blob.type }),
@@ -98,9 +117,11 @@ export class FileImageIngestService implements ImageIngestService {
     })
   }
 
-  public async fromClipboard(): Promise<IngestedImage> {
+  public async fromClipboard(accountId?: AccountId): Promise<IngestedImage> {
+    const owner = requireAccountId(accountId)
     const capture = await this.#clipboard.capture()
     return this.#ingest(capture.bytes, {
+      accountId: owner,
       source: 'clipboard-cli',
       nameHint: capture.nameHint,
       declaredMime: capture.mime,
@@ -112,65 +133,85 @@ export class FileImageIngestService implements ImageIngestService {
     image: IngestedImage,
     style: InjectStyle,
   ): Promise<void> {
-    const match = await this.#repository.findByIdentity(image.relPath, image.sha256)
+    const accountId = requireAccountId(image.accountId)
+    const match = await this.#repository.findByIdentity(accountId, image.relPath, image.sha256)
     if (match === null) throw new LubanError('E_NOT_FOUND', 'Stored image was not found')
-    await this.injectById(sessionId, match.id, style)
+    await this.injectById(accountId, sessionId, match.id, style)
   }
 
   public async injectById(
+    accountId: AccountId,
     sessionId: SessionId,
     id: string,
     style: InjectStyle = this.#config.injectStyle,
     options?: ImageInjectionOptions,
   ): Promise<StoredImage> {
-    return this.#injections.run(`${id}\0${sessionId}`, async (): Promise<StoredImage> => {
-      const { image } = await this.#repository.content(id)
-      const added = await this.#repository.addReference(id, sessionId)
-      try {
-        await this.#injector.inject(sessionId, image, style, options)
-      } catch (error: unknown) {
-        if (added) {
-          try {
-            await this.#repository.removeReference(id, sessionId)
-          } catch (rollbackError: unknown) {
-            throw new LubanError(
-              'E_IO',
-              'Image injection failed and its reference rollback failed',
-              {
-                cause: error,
-                details: {
-                  rollback: rollbackError instanceof Error ? rollbackError.message : 'unknown',
+    return this.#injections.run(
+      `${accountId}\0${id}\0${sessionId}`,
+      async (): Promise<StoredImage> => {
+        const { image } = await this.#repository.content(accountId, id)
+        const added = await this.#repository.addReference(accountId, id, sessionId)
+        try {
+          await this.#injector.inject(sessionId, image, style, options)
+        } catch (error: unknown) {
+          if (added) {
+            try {
+              await this.#repository.removeReference(accountId, id, sessionId)
+            } catch (rollbackError: unknown) {
+              throw new LubanError(
+                'E_IO',
+                'Image injection failed and its reference rollback failed',
+                {
+                  cause: error,
+                  details: {
+                    rollback: rollbackError instanceof Error ? rollbackError.message : 'unknown',
+                  },
                 },
-              },
-            )
+              )
+            }
           }
+          throw error
         }
-        throw error
-      }
-      const updated = await this.#repository.get(id)
-      if (updated === null) throw new LubanError('E_IO', 'Injected image metadata disappeared')
-      return updated
-    })
+        const updated = await this.#repository.get(accountId, id)
+        if (updated === null) throw new LubanError('E_IO', 'Injected image metadata disappeared')
+        return updated
+      },
+    )
   }
 
-  public recent(filter?: { readonly sessionId?: SessionId }): Promise<readonly IngestedImage[]> {
-    return this.#repository.list(filter?.sessionId, this.#config.recentLimit)
+  public recent(filter?: {
+    readonly accountId?: AccountId
+    readonly sessionId?: SessionId
+  }): Promise<readonly IngestedImage[]> {
+    return this.#repository.list(
+      requireAccountId(filter?.accountId),
+      filter?.sessionId,
+      this.#config.recentLimit,
+    )
   }
 
-  public listRecords(sessionId?: SessionId): Promise<readonly StoredImage[]> {
-    return this.#repository.list(sessionId, this.#config.recentLimit)
+  public listRecords(accountId: AccountId, sessionId?: SessionId): Promise<readonly StoredImage[]> {
+    return this.#repository.list(accountId, sessionId, this.#config.recentLimit)
   }
 
-  public content(id: string): Promise<{ readonly image: StoredImage; readonly bytes: Uint8Array }> {
-    return this.#repository.content(id)
+  public content(
+    accountId: AccountId,
+    id: string,
+  ): Promise<{ readonly image: StoredImage; readonly bytes: Uint8Array }> {
+    return this.#repository.content(accountId, id)
   }
 
-  public delete(id: string): Promise<void> {
-    return this.#repository.delete(id)
+  public delete(accountId: AccountId, id: string): Promise<void> {
+    return this.#repository.delete(accountId, id)
   }
 
+  /** Process-level maintenance entry used only by the mounted retention timer. */
   public cleanup(dryRun = false): Promise<CleanupReport> {
-    return this.#repository.cleanup(this.#config.retainDays, dryRun)
+    return this.#repository.cleanupAllAccounts(this.#config.retainDays, dryRun)
+  }
+
+  public cleanupForAccount(accountId: AccountId, dryRun = false): Promise<CleanupReport> {
+    return this.#repository.cleanup(accountId, this.#config.retainDays, dryRun)
   }
 
   async #ingest(bytes: Uint8Array, options: IngestOptions): Promise<StoredImage> {
@@ -215,6 +256,7 @@ export class FileImageIngestService implements ImageIngestService {
       throw new LubanError('E_IO', 'Image processor changed the declared output format')
     }
     return this.#repository.store({
+      accountId: options.accountId,
       bytes: processed.bytes,
       extension: processedType.extension,
       mime: processedType.mime,

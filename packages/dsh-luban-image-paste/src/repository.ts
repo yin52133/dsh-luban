@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
-import type { CleanupReport, Clock, JsonCodec, SessionId } from 'dsh-luban-core'
-import { AtomicJsonStore, LubanError, asSessionId } from 'dsh-luban-core'
+import type { AccountId, CleanupReport, Clock, JsonCodec, SessionId } from 'dsh-luban-core'
+import { AtomicJsonStore, LubanError, asAccountId, asSessionId } from 'dsh-luban-core'
 import type { CompressionReport, ImageMime, ImageSource, StoredImage } from './types.js'
 
 interface ImageLedger {
@@ -22,6 +22,8 @@ const UPLOAD_TEMP_NAME =
 const GENERATED_IMAGE_NAME = /^\d{8}-.+-[1-9]\d*\.(?:png|jpg|webp)$/u
 
 export interface StoreImageInput {
+  /** Ownership is assigned by the authenticated service boundary. */
+  readonly accountId: AccountId
   readonly bytes: Uint8Array
   readonly extension: 'png' | 'jpg' | 'webp'
   readonly mime: ImageMime
@@ -138,6 +140,9 @@ function storedImage(value: unknown, workspaceRoot: string, attachRoot: string):
     throw new TypeError('image.referencedBy is invalid')
   }
   return {
+    ...(row.accountId === undefined
+      ? {}
+      : { accountId: asAccountId(stringValue(row.accountId, 'image.accountId')) }),
     id,
     relPath,
     absPath,
@@ -313,6 +318,7 @@ export class AttachmentRepository {
 
       const relPath = relative(this.#workspaceRoot, target).replaceAll('\\', '/')
       const image: StoredImage = {
+        accountId: input.accountId,
         id: randomUUID(),
         relPath,
         absPath: target,
@@ -339,7 +345,11 @@ export class AttachmentRepository {
     }
   }
 
-  public async list(sessionId?: SessionId, limit = 50): Promise<readonly StoredImage[]> {
+  public async list(
+    accountId: AccountId,
+    sessionId?: SessionId,
+    limit = 50,
+  ): Promise<readonly StoredImage[]> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
       throw new LubanError('E_INVALID_INPUT', 'recent image limit must be between 1 and 500')
     }
@@ -347,33 +357,46 @@ export class AttachmentRepository {
     const ledger = await this.#store.read()
     await this.#assertRoot()
     return ledger.images
-      .filter((image): boolean => sessionId === undefined || image.referencedBy.includes(sessionId))
+      .filter(
+        (image): boolean =>
+          image.accountId === accountId &&
+          (sessionId === undefined || image.referencedBy.includes(sessionId)),
+      )
       .toSorted((left, right): number => right.createdAt - left.createdAt)
       .slice(0, limit)
   }
 
-  public async findByIdentity(relPath: string, sha256: string): Promise<StoredImage | null> {
+  public async findByIdentity(
+    accountId: AccountId,
+    relPath: string,
+    sha256: string,
+  ): Promise<StoredImage | null> {
     await this.#assertRoot()
     const ledger = await this.#store.read()
     await this.#assertRoot()
     return (
       ledger.images.find(
-        (image): boolean => image.relPath === relPath && image.sha256 === sha256,
+        (image): boolean =>
+          image.accountId === accountId && image.relPath === relPath && image.sha256 === sha256,
       ) ?? null
     )
   }
 
-  public async get(id: string): Promise<StoredImage | null> {
+  public async get(accountId: AccountId, id: string): Promise<StoredImage | null> {
     await this.#assertRoot()
     const ledger = await this.#store.read()
     await this.#assertRoot()
-    return ledger.images.find((image): boolean => image.id === id) ?? null
+    return (
+      ledger.images.find((image): boolean => image.accountId === accountId && image.id === id) ??
+      null
+    )
   }
 
   public async content(
+    accountId: AccountId,
     id: string,
   ): Promise<{ readonly image: StoredImage; readonly bytes: Uint8Array }> {
-    const image = await this.get(id)
+    const image = await this.get(accountId, id)
     if (image === null) throw new LubanError('E_NOT_FOUND', `Image ${id} was not found`)
     if (!(await regularFile(image.absPath))) {
       throw new LubanError('E_NOT_FOUND', `Attachment ${image.relPath} is unavailable`)
@@ -391,15 +414,21 @@ export class AttachmentRepository {
     return { image, bytes }
   }
 
-  public async addReference(id: string, sessionId: SessionId): Promise<boolean> {
+  public async addReference(
+    accountId: AccountId,
+    id: string,
+    sessionId: SessionId,
+  ): Promise<boolean> {
     let added = false
     await this.#assertRoot()
     await this.#store.update((ledger): ImageLedger => {
-      if (!ledger.images.some((image): boolean => image.id === id)) {
+      if (
+        !ledger.images.some((image): boolean => image.accountId === accountId && image.id === id)
+      ) {
         throw new LubanError('E_NOT_FOUND', `Image ${id} was not found`)
       }
       const images = ledger.images.map((image): StoredImage => {
-        if (image.id !== id) return image
+        if (image.accountId !== accountId || image.id !== id) return image
         if (image.referencedBy.includes(sessionId)) return image
         added = true
         return { ...image, referencedBy: [...image.referencedBy, sessionId] }
@@ -410,12 +439,16 @@ export class AttachmentRepository {
     return added
   }
 
-  public async removeReference(id: string, sessionId: SessionId): Promise<void> {
+  public async removeReference(
+    accountId: AccountId,
+    id: string,
+    sessionId: SessionId,
+  ): Promise<void> {
     await this.#assertRoot()
     await this.#store.update((ledger): ImageLedger => ({
       version: 1,
       images: ledger.images.map((image): StoredImage =>
-        image.id === id
+        image.accountId === accountId && image.id === id
           ? {
               ...image,
               referencedBy: image.referencedBy.filter((value): boolean => value !== sessionId),
@@ -426,10 +459,12 @@ export class AttachmentRepository {
     await this.#assertRoot()
   }
 
-  public async delete(id: string): Promise<void> {
+  public async delete(accountId: AccountId, id: string): Promise<void> {
     await this.#assertRoot()
     await this.#store.update(async (ledger): Promise<ImageLedger> => {
-      const image = ledger.images.find((candidate): boolean => candidate.id === id)
+      const image = ledger.images.find(
+        (candidate): boolean => candidate.accountId === accountId && candidate.id === id,
+      )
       if (image === undefined) throw new LubanError('E_NOT_FOUND', `Image ${id} was not found`)
       if (image.referencedBy.length > 0) {
         throw new LubanError('E_INVALID_TRANSITION', 'Referenced attachments cannot be deleted')
@@ -440,22 +475,53 @@ export class AttachmentRepository {
       }
       return {
         version: 1,
-        images: ledger.images.filter((candidate): boolean => candidate.id !== id),
+        images: ledger.images.filter(
+          (candidate): boolean => candidate.accountId !== accountId || candidate.id !== id,
+        ),
       }
     })
     await this.#assertRoot()
   }
 
-  public async cleanup(retainDays: number, dryRun = false): Promise<CleanupReport> {
+  public async cleanup(
+    accountId: AccountId,
+    retainDays: number,
+    dryRun = false,
+  ): Promise<CleanupReport> {
+    return this.#cleanup(retainDays, dryRun, accountId)
+  }
+
+  /** Sweep every owned account for the process-level retention timer; legacy unowned rows remain. */
+  public async cleanupAllAccounts(retainDays: number, dryRun = false): Promise<CleanupReport> {
+    return this.#cleanup(retainDays, dryRun)
+  }
+
+  async #cleanup(
+    retainDays: number,
+    dryRun: boolean,
+    accountId?: AccountId,
+  ): Promise<CleanupReport> {
     const cutoff = this.#clock.now() - retainDays * 24 * 60 * 60 * 1_000
     await this.#assertRoot()
     const initial = await this.#store.read()
     await this.#assertRoot()
     const candidates = initial.images
-      .filter((image): boolean => image.createdAt < cutoff && image.referencedBy.length === 0)
+      .filter(
+        (image): boolean =>
+          image.accountId !== undefined &&
+          (accountId === undefined || image.accountId === accountId) &&
+          image.createdAt < cutoff &&
+          image.referencedBy.length === 0,
+      )
       .map((image): string => image.relPath)
     const retainedReferenced = initial.images
-      .filter((image): boolean => image.createdAt < cutoff && image.referencedBy.length > 0)
+      .filter(
+        (image): boolean =>
+          image.accountId !== undefined &&
+          (accountId === undefined || image.accountId === accountId) &&
+          image.createdAt < cutoff &&
+          image.referencedBy.length > 0,
+      )
       .map((image): string => image.relPath)
     if (dryRun || candidates.length === 0) {
       return { candidates, removed: [], retainedReferenced, errors: [] }
@@ -466,7 +532,12 @@ export class AttachmentRepository {
     await this.#store.update(async (ledger): Promise<ImageLedger> => {
       const kept: StoredImage[] = []
       for (const image of ledger.images) {
-        if (image.createdAt >= cutoff || image.referencedBy.length > 0) {
+        if (
+          image.accountId === undefined ||
+          (accountId !== undefined && image.accountId !== accountId) ||
+          image.createdAt >= cutoff ||
+          image.referencedBy.length > 0
+        ) {
           kept.push(image)
           continue
         }

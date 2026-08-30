@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService, SessionId } from 'dsh-luban-core'
+import type { AccountContext, AccountId, AuthService, SessionId } from 'dsh-luban-core'
 import { LubanError, asSessionId, isLubanError, modulePrefix } from 'dsh-luban-core'
 import { normalizeDeclaredMime } from './image-format.js'
 import {
@@ -85,6 +85,7 @@ function errorStatus(error: LubanError): number {
     case 'E_AUTH_REQUIRED':
       return 401
     case 'E_NOT_FOUND':
+    case 'E_ACCOUNT_SCOPE_MISMATCH':
       return 404
     case 'E_INVALID_TRANSITION':
       return 409
@@ -103,7 +104,7 @@ async function requireAuthentication(
   request: IncomingMessage,
   path: string,
   auth: AuthService,
-): Promise<void> {
+): Promise<AccountContext> {
   const decision = await auth.middleware()({
     path,
     method: request.method ?? 'GET',
@@ -111,10 +112,25 @@ async function requireAuthentication(
     cookie: request.headers.cookie,
     sourceIp: request.socket.remoteAddress ?? 'unknown',
   })
-  if (!decision.allowed || decision.user === undefined) {
+  if (!decision.allowed || decision.user === undefined || decision.account === undefined) {
     throw new LubanError('E_AUTH_REQUIRED', 'Authentication is required', {
       details: { status: decision.status },
     })
+  }
+  return decision.account
+}
+
+async function requireOwnedSession(
+  auth: AuthService,
+  accountId: AccountId,
+  sessionId: SessionId,
+): Promise<void> {
+  const owner = await auth.accountSessions.ownerOf(sessionId)
+  if (owner === null) {
+    throw new LubanError('E_NOT_FOUND', `Session ${sessionId} was not found`)
+  }
+  if (owner !== accountId) {
+    throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', `Session ${sessionId} was not found`)
   }
 }
 
@@ -206,13 +222,14 @@ export class ImagePasteHttpApi {
       if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) {
         throw new LubanError('E_NOT_FOUND', 'Route not found')
       }
-      await requireAuthentication(request, url.pathname, this.#auth)
+      const account = await requireAuthentication(request, url.pathname, this.#auth)
       const path = url.pathname.slice(PREFIX.length) || '/'
       const method = request.method ?? 'GET'
 
       if (method === 'GET' && path === '/images') {
         const rawSession = url.searchParams.get('sessionId')
         const images = await this.#service.listRecords(
+          account.accountId,
           rawSession === null ? undefined : sessionId(rawSession),
         )
         sendJson(response, 200, { images: images.map(imageJson) })
@@ -226,6 +243,7 @@ export class ImagePasteHttpApi {
         const image = await this.#service.fromBlobWithSource(
           new Blob([Uint8Array.from(bytes)], { type: declaredMime }),
           {
+            accountId: account.accountId,
             source: source(url.searchParams.get('source')),
             declaredMime,
             ...(nameHint === null ? {} : { nameHint }),
@@ -240,7 +258,7 @@ export class ImagePasteHttpApi {
           throw new LubanError('E_INVALID_INPUT', 'dryRun must be a boolean')
         }
         sendJson(response, 200, {
-          report: await this.#service.cleanup(body.dryRun === true),
+          report: await this.#service.cleanupForAccount(account.accountId, body.dryRun === true),
         })
         return
       }
@@ -273,7 +291,9 @@ export class ImagePasteHttpApi {
           throw new LubanError('E_INVALID_INPUT', 'challenge is invalid')
         }
         const requestedSession = sessionId(body.sessionId)
+        await requireOwnedSession(this.#auth, account.accountId, requestedSession)
         const options = {
+          accountId: account.accountId,
           live: true,
           sessionId: requestedSession,
           challenge: body.challenge,
@@ -304,14 +324,17 @@ export class ImagePasteHttpApi {
       }
       const action = match[2]
       if (method === 'GET' && action === 'content') {
-        const content = await this.#service.content(id)
+        const content = await this.#service.content(account.accountId, id)
         sendImage(response, content.image, content.bytes)
         return
       }
       if (method === 'POST' && action === 'inject') {
         const body = record(await jsonBody(request))
+        const requestedSession = sessionId(body.sessionId)
+        await requireOwnedSession(this.#auth, account.accountId, requestedSession)
         const image = await this.#service.injectById(
-          sessionId(body.sessionId),
+          account.accountId,
+          requestedSession,
           id,
           style(body.style, this.#service.defaultInjectStyle),
         )
@@ -319,7 +342,7 @@ export class ImagePasteHttpApi {
         return
       }
       if (method === 'DELETE' && action === undefined) {
-        await this.#service.delete(id)
+        await this.#service.delete(account.accountId, id)
         sendNoContent(response)
         return
       }
