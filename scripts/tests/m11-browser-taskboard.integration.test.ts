@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Actor, Clock, Task, TaskClaim, TaskOutput } from '../../packages/core/src/index.js'
-import { asActorId, asHostId, asSessionId } from '../../packages/core/src/index.js'
+import { asAccountId, asActorId, asHostId, asSessionId } from '../../packages/core/src/index.js'
 import { BrowserTaskboardAutomation } from '../../packages/dsh-luban-browser/src/taskboard-automation.js'
 import type {
   BrowserJobEvent,
@@ -21,7 +21,8 @@ import { JsonTaskStore } from '../../packages/dsh-luban-taskboard/src/task-store
 
 const NOW = 1_777_777_777_777
 const CLOCK: Clock = { now: (): number => NOW }
-const AGENT: Actor = { kind: 'agent', id: asActorId('browser-agent') }
+const ACCOUNT = asAccountId('alice')
+const AGENT: Actor = { kind: 'agent', id: asActorId('browser-agent'), accountId: ACCOUNT }
 const SESSION = {
   actor: AGENT,
   sessionId: asSessionId('browser-session'),
@@ -79,7 +80,7 @@ describe('M11 taskboard browser automation integration', (): void => {
     try {
       const task = await harness.create(['browser', 'auto-ok', 'browser-template:night-safe'])
 
-      await expect(scheduler.triggerOnce()).resolves.toBeUndefined()
+      await expect(scheduler.triggerOnce(ACCOUNT)).resolves.toBeUndefined()
 
       const completed = await harness.store.get(task.id)
       expect(fallbackExecute).not.toHaveBeenCalled()
@@ -124,9 +125,11 @@ describe('M11 taskboard browser automation integration', (): void => {
 
       expect(harness.queue.requests).toEqual([
         {
+          accountId: ACCOUNT,
           automatic: true,
           params: { part: 'STM32' },
           task: {
+            accountId: ACCOUNT,
             templateId: 'datasheet',
             goal: 'Collect the requested browser artifact.',
           },
@@ -365,6 +368,7 @@ interface Harness {
   readonly claims: DefaultAgentClaimService
   readonly automation: BrowserTaskboardAutomation
   readonly queue: ControlledQueue
+  readonly errors: readonly unknown[]
   readonly ledgerPath: string
   readonly create: (tags: readonly string[]) => Promise<Task>
   readonly createAndClaim: (tags: readonly string[]) => Promise<Task>
@@ -380,15 +384,18 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
   const claims = new DefaultAgentClaimService(store, 'ubuntu', true)
   const queue = new ControlledQueue(outcomes)
   const automation = new BrowserTaskboardAutomation(queue, claims)
+  const errors: unknown[] = []
   const latestTasks = new Map<Task['id'], Task>()
   const taskListeners = new Set<(task: Task) => void>()
   const stopCapture = store.subscribe((event): void => {
     latestTasks.set(event.task.id, event.task)
     for (const listener of taskListeners) listener(event.task)
   })
-  const unbind = automation.bind(store)
+  const unbind = await automation.bind(store, (error: unknown): void => {
+    errors.push(error)
+  })
   const claim = async (): Promise<Task> => {
-    const result = await claims.claim({}, SESSION)
+    const result = await claims.claim({ accountId: ACCOUNT }, SESSION)
     if (!result.ok) throw new Error(`Task claim failed: ${result.reason}`)
     return result.task
   }
@@ -397,9 +404,11 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
     claims,
     automation,
     queue,
+    errors,
     ledgerPath,
     create: async (tags): Promise<Task> =>
       store.create({
+        accountId: ACCOUNT,
         title: 'Automate a browser task',
         description: 'Collect the requested browser artifact.',
         status: 'todo',
@@ -410,6 +419,7 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
       }),
     createAndClaim: async (tags): Promise<Task> => {
       await store.create({
+        accountId: ACCOUNT,
         title: 'Automate a browser task',
         description: 'Collect the requested browser artifact.',
         status: 'todo',
