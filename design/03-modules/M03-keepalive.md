@@ -14,6 +14,7 @@
 | v0.6 | 2026-08-30 | Codex | 固化 systemd 精确哨兵强制恢复语义并补 Cordis 生命周期验证 |
 | v0.7 | 2026-08-30 | Codex | 增加 Windows 注销/重启分阶段实机验收 |
 | v0.8 | 2026-08-30 | Codex | 收敛为保活、恢复与实机功能验收 |
+| v0.9 | 2026-08-30 | Codex | 按 heartbeat、boot marker、checkpoint 与 owned cleanup 收口验收口径 |
 
 ## 1. 概述与目标
 
@@ -131,7 +132,7 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
 - 内置里程碑执行器会校验恢复点的 task/有序 step plan，从 `currentStep` 指向的首个未完成步骤继续；
   每步成功后才原子保存下一位置和去重产物。步骤仍须幂等，以覆盖副作用完成但检查点尚未落盘时断电的窗口。
 - 终端内容不进入保活账本；需在目标 Ubuntu 主机完成 SSH 断开、重启和真实 tmux attach 验收。
-- Windows 采用内置 `schtasks.exe`，不引入 NSSM；需在目标账户策略下完成注销、开机恢复与权限验收。
+- Windows 采用内置 `schtasks.exe`，不引入 NSSM；需在目标账户完成计划任务注册、注销与开机恢复验收。
 
 ## 11. 实现与验证记录
 
@@ -141,14 +142,14 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   `--patch` 参数；命令行按 `CommandLineToArgvW` 规则编码，不经过 Node shell。
 - 原子账本记录 session spec、归属和里程碑检查点；启动时只恢复账本拥有的缺失会话，
   账本损坏时仅报告孤儿而不删除或重建。
-- `runCheckpointedTask()` 在恢复时跳过持久化完成步骤，任务或 step plan 不匹配时 fail closed；
+- `runCheckpointedTask()` 在恢复时跳过持久化完成步骤，任务或 step plan 不匹配时中止并提示；
   测试覆盖中段恢复、完成后重入、步骤失败不推进和启动前取消。
 - 巡检发布 `luban.keepalive.health`，可选 `lubanTaskStore` 告警去重；M07 通过 Cordis
   事件松耦合消费，健康变化立即进入认证 snapshot/SSE，并在 Web 状态栏与 CLI 首行显示。
   有限任务可通过 `release()` 销毁会话并清除账本，供 M09 worker 完成后收口；插件卸载会
   排空在途巡检与告警 sink，返回后不再写入 TaskStore 或发布健康事件。
-- 真实 Cordis mount 测试覆盖 HUD 先加载、异常/恢复事件、认证 REST 投影、客户端提示与卸载；
-  detail 中的凭据型文本不会进入响应。
+- 真实 Cordis mount 测试覆盖 HUD 先加载、异常/恢复事件、REST 投影、客户端提示与卸载；
+  detail 采用有界摘要，避免异常风暴拖慢响应。
 - 真实 Cordis 生命周期测试以 `bootRestore: false` 挂载插件，证明精确环境值
   `LUBAN_BOOT_RESTORE=1` 仍会调用一次 `restore()`；其他类 truthy 文本不会取得强制恢复语义。
 - 本机 `schtasks.exe` 只读列表探针已通过且未创建计划任务；命令构造和写操作由测试 runner 验证。
@@ -156,5 +157,5 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   heartbeat 与系统 boot 时间。注销验证要求 heartbeat 在注销后继续推进；重启验证要求任务在新 boot
   启动，并从已保存 checkpoint 继续未完成步骤。
 - Windows checkpoint 丢失或损坏时不从验收参数重建；恢复保持幂等，并保留孤儿任务供人工处理。
-- 本地 M03 Windows 相关 67 项测试、Prettier、ESLint、严格类型检查与构建通过；真实 tmux、
+- 本地 keepalive 包测试、Windows staged runner、Prettier、ESLint、严格类型检查与构建通过；真实 tmux、
   Windows 注销及双端重启恢复仍需在目标主机上完成最终功能验收。

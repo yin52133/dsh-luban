@@ -1,16 +1,20 @@
 import { LubanError } from 'dsh-luban-core'
 import {
+  childTaskDefinition,
   hostTaskDefinition,
   matchesWindowsTaskXml,
   WINDOWS_HOST_TASK_NAME,
   WindowsTaskRepository,
+  type WindowsHostLaunch,
   type WindowsTaskDefinition,
   type WindowsTaskRepositoryOptions,
   type WindowsTaskState,
 } from './windows-task.js'
+import { windowsArguments } from './session-id.js'
 
 export interface WindowsHostTaskOptions extends WindowsTaskRepositoryOptions {
   readonly platform?: NodeJS.Platform
+  readonly launch: WindowsHostLaunch
 }
 
 export interface WindowsHostStatus {
@@ -22,8 +26,7 @@ export interface WindowsHostStatus {
   readonly trigger: 'boot'
   readonly logon: 's4u'
   readonly runLevel: 'limited'
-  readonly command: 'dsh'
-  readonly args: readonly ['--profile', 'win-debug', '--no-open']
+  readonly launch: WindowsHostLaunch
   readonly environment: { readonly LUBAN_BOOT_RESTORE: '1' }
   readonly elevated: boolean
   readonly operationallyVerified: false
@@ -31,6 +34,12 @@ export interface WindowsHostStatus {
     readonly networkResources: false
     readonly encryptedFiles: false
   }
+}
+
+export interface WindowsManagedChildStatus {
+  readonly taskName: string
+  readonly state: WindowsTaskState
+  readonly running: boolean | null
 }
 
 export interface WindowsHostPlan extends WindowsHostStatus {
@@ -43,10 +52,12 @@ export interface WindowsHostPlan extends WindowsHostStatus {
 export class WindowsHostTaskOperator {
   readonly #tasks: WindowsTaskRepository
   readonly #platform: NodeJS.Platform
+  readonly #launch: WindowsHostLaunch
 
   public constructor(options: WindowsHostTaskOptions) {
     this.#tasks = new WindowsTaskRepository(options)
     this.#platform = options.platform ?? process.platform
+    this.#launch = options.launch
   }
 
   public get currentUser(): string {
@@ -100,6 +111,40 @@ export class WindowsHostTaskOperator {
     }
   }
 
+  /** Start the exact deployment-owned host task without crossing a sign-out/reboot boundary. */
+  public async start(): Promise<void> {
+    this.#assertWindows()
+    const definition = await this.#definition()
+    if ((await this.#tasks.inspect(definition)) !== 'exact') {
+      throw new LubanError('E_INVALID_INPUT', 'Windows host task is not the exact managed task')
+    }
+    if (!(await this.#tasks.isRunning(definition.name))) {
+      await this.#tasks.runTask(definition.name)
+      await this.#tasks.waitUntilRunning(definition.name)
+    }
+  }
+
+  /** Inspect one exact acceptance child task without adopting or mutating it. */
+  public async childStatus(input: {
+    readonly id: string
+    readonly command: string
+    readonly args: readonly string[]
+  }): Promise<WindowsManagedChildStatus> {
+    this.#assertWindows()
+    const definition = childTaskDefinition({
+      id: input.id,
+      principalSid: await this.#tasks.principalSid(),
+      command: input.command,
+      arguments: windowsArguments(input.args),
+    })
+    const state = await this.#tasks.inspect(definition)
+    return {
+      taskName: definition.name,
+      state,
+      running: state === 'exact' ? await this.#tasks.isRunning(definition.name) : null,
+    }
+  }
+
   public async uninstall(): Promise<void> {
     this.#assertWindows()
     const definition = await this.#definition()
@@ -123,7 +168,7 @@ export class WindowsHostTaskOperator {
   }
 
   async #definition(): Promise<WindowsTaskDefinition> {
-    return hostTaskDefinition(await this.#tasks.principalSid())
+    return hostTaskDefinition(await this.#tasks.principalSid(), this.#launch)
   }
 
   #status(state: WindowsTaskState, running: boolean | null, elevated: boolean): WindowsHostStatus {
@@ -136,8 +181,7 @@ export class WindowsHostTaskOperator {
       trigger: 'boot',
       logon: 's4u',
       runLevel: 'limited',
-      command: 'dsh',
-      args: ['--profile', 'win-debug', '--no-open'],
+      launch: this.#launch,
       environment: { LUBAN_BOOT_RESTORE: '1' },
       elevated,
       operationallyVerified: false,

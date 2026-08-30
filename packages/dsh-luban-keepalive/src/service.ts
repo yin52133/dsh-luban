@@ -226,7 +226,13 @@ export class ManagedKeepaliveService implements KeepaliveService {
   public async release(id: string, options: { readonly destroy?: boolean } = {}): Promise<void> {
     await this.#serialize(async (): Promise<void> => {
       const sessionId = managedSessionId(id)
-      if (options.destroy === true) await this.#adapter.destroy(sessionId)
+      if (options.destroy === true) {
+        const record = (await this.#ledger.read()).sessions[sessionId]
+        if (record === undefined) {
+          throw new LubanError('E_NOT_FOUND', `Managed session ${sessionId} was not found`)
+        }
+        await this.#adapter.destroy(record.spec)
+      }
       await this.#ledger.remove(sessionId)
     })
   }

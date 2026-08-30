@@ -97,8 +97,8 @@ export class TmuxKeepaliveAdapter implements KeepaliveAdapter {
     return false
   }
 
-  public async destroy(id: string): Promise<void> {
-    const sessionId = managedSessionId(id)
+  public async destroy(spec: SessionSpec): Promise<void> {
+    const sessionId = managedSessionId(spec.id)
     const result = await this.#runner.run('tmux', ['kill-session', '-t', `=${sessionId}`], {
       timeoutMs: this.#timeoutMs,
       signal: this.#signal,

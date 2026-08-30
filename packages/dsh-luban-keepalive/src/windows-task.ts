@@ -1,12 +1,12 @@
 import { mkdir, open, rm } from 'node:fs/promises'
 import { tmpdir, userInfo } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { LubanError } from 'dsh-luban-core'
 import type { CommandResult, CommandRunner } from './command-runner.js'
 import { assertSuccess } from './command-runner.js'
-import { managedSessionId } from './session-id.js'
+import { managedSessionId, windowsArguments } from './session-id.js'
 
 export const WINDOWS_HOST_TASK_NAME = '\\dsh-luban-host'
 export const WINDOWS_SESSION_TASK_PREFIX = '\\dsh-luban-session-'
@@ -38,6 +38,21 @@ export interface WindowsTaskDefinition {
   readonly arguments: string
 }
 
+export interface WindowsHostAcceptanceLaunch {
+  readonly runDir: string
+  readonly runId: string
+  readonly specSha256: string
+}
+
+export interface WindowsHostLaunch {
+  readonly nodeExecutable: string
+  readonly bootstrapPath: string
+  readonly dshEntry: string
+  readonly dshHome: string
+  readonly profile: 'win-debug'
+  readonly acceptance?: WindowsHostAcceptanceLaunch
+}
+
 export interface WindowsTaskRepositoryOptions {
   readonly runner: CommandRunner
   readonly timeoutMs: number
@@ -65,6 +80,30 @@ function validSid(value: string): string {
     throw new LubanError('E_INVALID_INPUT', 'current Windows user SID is invalid')
   }
   return value.toUpperCase()
+}
+
+function validAbsolutePath(value: string, label: string): string {
+  if (!isAbsolute(value) || value.includes('\0') || /[\r\n]/u.test(value)) {
+    throw new LubanError('E_INVALID_INPUT', `${label} must be an absolute path`)
+  }
+  return value
+}
+
+function validAcceptanceLaunch(
+  value: WindowsHostAcceptanceLaunch | undefined,
+): WindowsHostAcceptanceLaunch | undefined {
+  if (value === undefined) return undefined
+  if (
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu.test(value.runId) ||
+    !/^[a-f0-9]{64}$/u.test(value.specSha256)
+  ) {
+    throw new LubanError('E_INVALID_INPUT', 'Windows acceptance launch identity is invalid')
+  }
+  return {
+    runDir: validAbsolutePath(value.runDir, 'Windows acceptance run directory'),
+    runId: value.runId,
+    specSha256: value.specSha256,
+  }
 }
 
 function xmlText(value: string): string {
@@ -220,15 +259,40 @@ function assertManagedTaskName(name: string): void {
   }
 }
 
-export function hostTaskDefinition(principalSid: string): WindowsTaskDefinition {
+export function hostTaskDefinition(
+  principalSid: string,
+  launch: WindowsHostLaunch,
+): WindowsTaskDefinition {
+  const nodeExecutable = validAbsolutePath(launch.nodeExecutable, 'Windows host Node executable')
+  const bootstrapPath = validAbsolutePath(launch.bootstrapPath, 'Windows host bootstrap')
+  const dshEntry = validAbsolutePath(launch.dshEntry, 'Windows host DSH entry')
+  const dshHome = validAbsolutePath(launch.dshHome, 'Windows host DSH home')
+  const acceptance = validAcceptanceLaunch(launch.acceptance)
   return {
     name: WINDOWS_HOST_TASK_NAME,
     description: HOST_DESCRIPTION,
     principalSid: validSid(principalSid),
     trigger: 'boot',
-    command: 'powershell.exe',
-    arguments:
-      "-NoLogo -NoProfile -NonInteractive -Command \"$env:LUBAN_BOOT_RESTORE='1'; & 'dsh' '--profile' 'win-debug' '--no-open'\"",
+    command: nodeExecutable,
+    arguments: windowsArguments([
+      bootstrapPath,
+      '--dsh-entry',
+      dshEntry,
+      '--dsh-home',
+      dshHome,
+      '--profile',
+      launch.profile,
+      ...(acceptance === undefined
+        ? []
+        : [
+            '--acceptance-run-dir',
+            acceptance.runDir,
+            '--acceptance-run-id',
+            acceptance.runId,
+            '--acceptance-spec-sha256',
+            acceptance.specSha256,
+          ]),
+    ]),
   }
 }
 

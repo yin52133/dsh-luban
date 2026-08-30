@@ -1,10 +1,15 @@
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { CommandOptions, CommandResult, CommandRunner } from '../src/command-runner.js'
 import { afterEach, describe, expect, it } from 'vitest'
-import { managedSessionId, posixCommand, windowsCommand } from '../src/session-id.js'
+import {
+  managedSessionId,
+  posixCommand,
+  windowsArguments,
+  windowsCommand,
+} from '../src/session-id.js'
 import { TmuxKeepaliveAdapter } from '../src/tmux-adapter.js'
 import { WindowsTaskKeepaliveAdapter } from '../src/windows-adapter.js'
 import {
@@ -123,7 +128,7 @@ describe('TmuxKeepaliveAdapter', (): void => {
     const adapter = new TmuxKeepaliveAdapter({ runner, timeoutMs: 1_000 })
 
     await adapter.attach('luban-build')
-    await adapter.destroy('luban-build')
+    await adapter.destroy({ id: 'luban-build', purpose: 'build', command: 'dsh' })
 
     expect(runner.calls[0]).toMatchObject({
       command: 'tmux',
@@ -236,7 +241,7 @@ describe('WindowsTaskKeepaliveAdapter', (): void => {
     await expect(adapter.isAlive('luban-main')).resolves.toBe(false)
   })
 
-  it('lists and destroys only structurally owned child tasks, never lookalikes or the host', async (): Promise<void> => {
+  it('lists structurally owned tasks but destroys only the exact persisted child specification', async (): Promise<void> => {
     const runner = new FakeScheduledTaskRunner()
     const child = childTaskDefinition({
       id: 'luban-main',
@@ -247,7 +252,15 @@ describe('WindowsTaskKeepaliveAdapter', (): void => {
     runner.tasks.set(child.name, renderWindowsTaskXml(child))
     runner.tasks.set(
       WINDOWS_HOST_TASK_NAME,
-      renderWindowsTaskXml(hostTaskDefinition('S-1-5-21-1000')),
+      renderWindowsTaskXml(
+        hostTaskDefinition('S-1-5-21-1000', {
+          nodeExecutable: process.execPath,
+          bootstrapPath: resolve('dist/windows-host-bootstrap.js'),
+          dshEntry: resolve('node_modules/@deepseek-ai/dsh/lib/bin.js'),
+          dshHome: resolve('.dsh'),
+          profile: 'win-debug',
+        }),
+      ),
     )
     runner.tasks.set('\\foreign', '<Task />')
     runner.tasks.set(windowsSessionTaskName('luban-spoof'), '<Task />')
@@ -265,8 +278,9 @@ describe('WindowsTaskKeepaliveAdapter', (): void => {
     await expect(adapter.list()).resolves.toEqual([
       expect.objectContaining({ id: 'luban-main', kind: 'service' }),
     ])
-    await adapter.destroy('luban-main')
-    await adapter.destroy('luban-main')
+    const spec = { id: 'luban-main', purpose: 'task', command: 'dsh', args: ['resume'] } as const
+    await adapter.destroy(spec)
+    await adapter.destroy(spec)
 
     expect(runner.tasks.has(child.name)).toBe(false)
     expect(runner.tasks.has(WINDOWS_HOST_TASK_NAME)).toBe(true)
@@ -287,9 +301,9 @@ describe('WindowsTaskKeepaliveAdapter', (): void => {
     await expect(
       conflict.create({ id: 'conflict', purpose: 'task', command: 'dsh', args: [] }),
     ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
-    await expect(conflict.destroy('luban-conflict')).rejects.toMatchObject({
-      code: 'E_INVALID_INPUT',
-    })
+    await expect(
+      conflict.destroy({ id: 'luban-conflict', purpose: 'task', command: 'dsh', args: [] }),
+    ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
     expect(conflictRunner.tasks.has(conflictName)).toBe(true)
 
     const concurrentRunner = new FakeScheduledTaskRunner()
@@ -322,6 +336,56 @@ describe('WindowsTaskKeepaliveAdapter', (): void => {
       ).rejects.toMatchObject({ code: 'E_UNAVAILABLE' })
       expect(runner.tasks.has(windowsSessionTaskName(`luban-${failure}`))).toBe(false)
     }
+  })
+
+  it('refuses a replaced child task both before cleanup and between the exact ownership checks', async (): Promise<void> => {
+    const spec = {
+      id: 'luban-cleanup',
+      purpose: 'task',
+      command: 'C:\\workspace\\node.exe',
+      args: ['C:\\workspace\\worker.js', '--run-id', 'owned'],
+    } as const
+    const expected = childTaskDefinition({
+      id: spec.id,
+      principalSid: 'S-1-5-21-1000',
+      command: spec.command,
+      arguments: windowsArguments(spec.args),
+    })
+    const foreign = childTaskDefinition({
+      id: spec.id,
+      principalSid: 'S-1-5-21-1000',
+      command: 'C:\\foreign\\payload.exe',
+      arguments: '--foreign',
+    })
+    const foreignXml = renderWindowsTaskXml(foreign)
+
+    const replacedBefore = new FakeScheduledTaskRunner()
+    replacedBefore.tasks.set(expected.name, foreignXml)
+    const beforeAdapter = new WindowsTaskKeepaliveAdapter({
+      runner: replacedBefore,
+      timeoutMs: 1_000,
+      currentUser: 'builder',
+      currentUserSid: 'S-1-5-21-1000',
+    })
+    await expect(beforeAdapter.destroy(spec)).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    expect(replacedBefore.tasks.get(expected.name)).toBe(foreignXml)
+    expect(replacedBefore.calls.some((call) => call.args[0] === '/End')).toBe(false)
+    expect(replacedBefore.calls.some((call) => call.args[0] === '/Delete')).toBe(false)
+
+    const replacedDuring = new FakeScheduledTaskRunner()
+    replacedDuring.tasks.set(expected.name, renderWindowsTaskXml(expected))
+    replacedDuring.running.add(expected.name)
+    replacedDuring.replaceTaskAfterEnd = { name: expected.name, xml: foreignXml }
+    const duringAdapter = new WindowsTaskKeepaliveAdapter({
+      runner: replacedDuring,
+      timeoutMs: 1_000,
+      currentUser: 'builder',
+      currentUserSid: 'S-1-5-21-1000',
+    })
+    await expect(duringAdapter.destroy(spec)).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    expect(replacedDuring.tasks.get(expected.name)).toBe(foreignXml)
+    expect(replacedDuring.calls.filter((call) => call.args[0] === '/End')).toHaveLength(1)
+    expect(replacedDuring.calls.some((call) => call.args[0] === '/Delete')).toBe(false)
   })
 
   it('fails closed on a query error instead of treating it as a missing task', async (): Promise<void> => {

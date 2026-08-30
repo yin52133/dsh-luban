@@ -29,6 +29,7 @@ class FakeAdapter implements KeepaliveAdapter {
   public readonly sessions = new Map<string, ManagedSession>()
   public creates = 0
   public destroys = 0
+  public readonly destroyedSpecs: SessionSpec[] = []
   public isAliveHook: ((id: string) => Promise<boolean>) | undefined
 
   public create(spec: SessionSpec): Promise<ManagedSession> {
@@ -59,9 +60,10 @@ class FakeAdapter implements KeepaliveAdapter {
     return Promise.resolve(this.sessions.has(id))
   }
 
-  public destroy(id: string): Promise<void> {
+  public destroy(spec: SessionSpec): Promise<void> {
     this.destroys += 1
-    this.sessions.delete(id)
+    this.destroyedSpecs.push({ ...spec, args: [...(spec.args ?? [])] })
+    this.sessions.delete(spec.id)
     return Promise.resolve()
   }
 }
@@ -147,7 +149,16 @@ describe('ManagedKeepaliveService', (): void => {
         checkpoint,
       }),
     )
-    await service.release('task-42')
+    await service.release('task-42', { destroy: true })
+    expect(adapter.destroyedSpecs).toEqual([
+      {
+        id: 'luban-task-42',
+        purpose: 'task',
+        command: 'dsh',
+        args: ['headless'],
+        ownerTaskId: asTaskId('TASK-42'),
+      },
+    ])
     expect((await service.patrol()).sessions).toEqual([])
     await service.dispose()
   })

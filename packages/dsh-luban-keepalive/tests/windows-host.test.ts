@@ -1,6 +1,6 @@
 import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -15,6 +15,14 @@ import {
 import { WindowsHostTaskOperator } from '../src/windows-host.js'
 import { runWindowsOperatorCli } from '../src/windows-operator-cli.js'
 import { FakeScheduledTaskRunner } from './windows-task-fixture.js'
+
+const HOST_LAUNCH = Object.freeze({
+  nodeExecutable: process.execPath,
+  bootstrapPath: resolve('packages/dsh-luban-keepalive/dist/windows-host-bootstrap.js'),
+  dshEntry: resolve('node_modules/@deepseek-ai/dsh/lib/bin.js'),
+  dshHome: resolve('.dsh'),
+  profile: 'win-debug' as const,
+})
 
 const directories = new Set<string>()
 
@@ -35,6 +43,7 @@ function operator(
     currentUser: 'builder',
     currentUserSid: 'S-1-5-21-1000',
     temporaryDirectory: temporaryDirectory(),
+    launch: HOST_LAUNCH,
   })
 }
 
@@ -53,7 +62,7 @@ afterEach(async (): Promise<void> => {
 
 describe('Windows deployment host task', (): void => {
   it('uses a boot-only host namespace and a triggerless child namespace', (): void => {
-    const host = hostTaskDefinition('S-1-5-21-1000')
+    const host = hostTaskDefinition('S-1-5-21-1000', HOST_LAUNCH)
     const child = childTaskDefinition({
       id: 'luban-job',
       principalSid: 'S-1-5-21-1000',
@@ -69,10 +78,10 @@ describe('Windows deployment host task', (): void => {
     expect(hostXml).toContain('<BootTrigger>')
     expect(hostXml).toContain('<LogonType>S4U</LogonType>')
     expect(hostXml).toContain('<RunLevel>LeastPrivilege</RunLevel>')
-    expect(hostXml).toContain('$env:LUBAN_BOOT_RESTORE=&apos;1&apos;')
-    expect(hostXml).toContain(
-      '&amp; &apos;dsh&apos; &apos;--profile&apos; &apos;win-debug&apos; &apos;--no-open&apos;',
-    )
+    expect(host.command).toBe(process.execPath)
+    expect(host.arguments).toContain(HOST_LAUNCH.bootstrapPath)
+    expect(host.arguments).toContain(HOST_LAUNCH.dshEntry)
+    expect(hostXml).not.toContain('powershell')
     expect(childXml).not.toContain('<BootTrigger>')
     expect(childXml).not.toContain('<Triggers>')
     expect(matchesWindowsTaskXml(hostXml, host)).toBe(true)
@@ -112,8 +121,7 @@ describe('Windows deployment host task', (): void => {
       state: 'missing',
       mutationRequired: true,
       ready: true,
-      command: 'dsh',
-      args: ['--profile', 'win-debug', '--no-open'],
+      launch: HOST_LAUNCH,
       environment: { LUBAN_BOOT_RESTORE: '1' },
       elevated: true,
       operationallyVerified: false,
@@ -166,6 +174,72 @@ describe('Windows deployment host task', (): void => {
     expect(runner.calls.filter((call) => call.args[0] === '/Delete')).toHaveLength(1)
   })
 
+  it('starts only an exact installed host task and reuses the running instance', async (): Promise<void> => {
+    const runner = new FakeScheduledTaskRunner()
+    const host = operator(runner)
+
+    await expect(host.start()).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    await host.install()
+    await host.start()
+    await host.start()
+
+    expect(runner.running.has(WINDOWS_HOST_TASK_NAME)).toBe(true)
+    expect(runner.calls.filter((call) => call.args[0] === '/Run')).toHaveLength(1)
+  })
+
+  it('reports only the exact acceptance child command as running', async (): Promise<void> => {
+    const runner = new FakeScheduledTaskRunner()
+    const host = operator(runner)
+    const input = {
+      id: 'luban-m03-11111111-1111-4111-8111-111111111111',
+      command: process.execPath,
+      args: [resolve('worker.js'), '--run-id', '11111111-1111-4111-8111-111111111111'],
+    }
+    const definition = childTaskDefinition({
+      id: input.id,
+      principalSid: 'S-1-5-21-1000',
+      command: input.command,
+      arguments: input.args.join(' '),
+    })
+    runner.tasks.set(definition.name, renderWindowsTaskXml(definition))
+    runner.running.add(definition.name)
+
+    await expect(host.childStatus(input)).resolves.toEqual({
+      taskName: definition.name,
+      state: 'exact',
+      running: true,
+    })
+
+    runner.tasks.set(definition.name, renderWindowsTaskXml({ ...definition, command: 'calc.exe' }))
+    await expect(host.childStatus(input)).resolves.toEqual({
+      taskName: definition.name,
+      state: 'conflict',
+      running: null,
+    })
+  })
+
+  it('binds acceptance identity into the absolute Node bootstrap arguments', (): void => {
+    const runId = '11111111-1111-4111-8111-111111111111'
+    const definition = hostTaskDefinition('S-1-5-21-1000', {
+      ...HOST_LAUNCH,
+      acceptance: {
+        runDir: resolve('private-m03-run'),
+        runId,
+        specSha256: 'a'.repeat(64),
+      },
+    })
+
+    expect(definition.command).toBe(process.execPath)
+    expect(definition.arguments).toContain('--acceptance-run-dir')
+    expect(definition.arguments).toContain('--acceptance-run-id')
+    expect(definition.arguments).toContain(runId)
+    expect(definition.arguments).toContain('--acceptance-spec-sha256')
+    expect(definition.arguments.toLocaleLowerCase('en-US')).not.toContain('powershell')
+    expect(() =>
+      hostTaskDefinition('S-1-5-21-1000', { ...HOST_LAUNCH, nodeExecutable: 'node.exe' }),
+    ).toThrow()
+  })
+
   it('rejects foreign tasks and reuses an exact task after a concurrent create result', async (): Promise<void> => {
     const conflictRunner = new FakeScheduledTaskRunner()
     conflictRunner.tasks.set(WINDOWS_HOST_TASK_NAME, '<Task><BootTrigger /></Task>')
@@ -190,6 +264,7 @@ describe('Windows deployment host task', (): void => {
       platform: 'win32',
       currentUser: 'other',
       temporaryDirectory: temporaryDirectory(),
+      launch: HOST_LAUNCH,
     })
 
     await expect(host.plan()).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
@@ -279,6 +354,54 @@ describe('Windows host operator CLI', (): void => {
     const invalid = await runWindowsOperatorCli(['--password', rejectedSecret], { operator: host })
     expect(invalid.exitCode).toBe(1)
     expect(invalid.output).not.toContain(rejectedSecret)
+  })
+
+  it('requires explicit bound arguments for the combined host and child acceptance status', async (): Promise<void> => {
+    const runner = new FakeScheduledTaskRunner()
+    const host = operator(runner)
+    const runDir = resolve('private-m03-run')
+    const runId = '11111111-1111-4111-8111-111111111111'
+    const sessionId = `luban-m03-${runId}`
+    const worker = resolve('worker.js')
+    const child = childTaskDefinition({
+      id: sessionId,
+      principalSid: 'S-1-5-21-1000',
+      command: process.execPath,
+      arguments: [
+        worker,
+        '--run-dir',
+        runDir,
+        '--run-id',
+        runId,
+        '--spec-sha256',
+        'a'.repeat(64),
+      ].join(' '),
+    })
+    runner.tasks.set(child.name, renderWindowsTaskXml(child))
+    runner.running.add(child.name)
+
+    const result = await runWindowsOperatorCli(
+      [
+        'acceptance-status',
+        '--acceptance-run-dir',
+        runDir,
+        '--acceptance-run-id',
+        runId,
+        '--acceptance-spec-sha256',
+        'a'.repeat(64),
+        '--session-id',
+        sessionId,
+        '--worker',
+        worker,
+      ],
+      { operator: host },
+    )
+    expect(result.exitCode).toBe(0)
+    expect(envelope(result.output)).toMatchObject({
+      status: { child: { taskName: child.name, state: 'exact', running: true } },
+    })
+    const incomplete = await runWindowsOperatorCli(['acceptance-status'], { operator: host })
+    expect(incomplete.exitCode).toBe(1)
   })
 
   it('publishes the executable operator bin', async (): Promise<void> => {

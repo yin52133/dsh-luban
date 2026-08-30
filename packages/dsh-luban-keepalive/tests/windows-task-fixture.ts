@@ -25,6 +25,7 @@ export class FakeScheduledTaskRunner implements CommandRunner {
   public failNextCreateAfterStore = false
   public failNextRun = false
   public failNextDelete = false
+  public replaceTaskAfterEnd: { readonly name: string; readonly xml: string } | undefined
   public statusStderr = ''
   public missingStderr = 'ERROR: The system cannot find the file specified.'
   public elevated = true
@@ -105,7 +106,12 @@ export class FakeScheduledTaskRunner implements CommandRunner {
       return result()
     }
     if (args[0] === '/End') {
-      if (!this.running.delete(name)) return result('', 1, 'task is not currently running')
+      const stopped = this.running.delete(name)
+      if (this.replaceTaskAfterEnd?.name === name) {
+        this.tasks.set(name, this.replaceTaskAfterEnd.xml)
+        this.replaceTaskAfterEnd = undefined
+      }
+      if (!stopped) return result('', 1, 'task is not currently running')
       return result()
     }
     if (args[0] === '/Delete') {

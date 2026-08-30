@@ -1,7 +1,12 @@
 import { defineConfig } from 'tsdown'
 
 export default defineConfig({
-  entry: { index: 'src/index.ts', 'windows-operator-cli': 'src/windows-operator-cli.ts' },
+  entry: {
+    index: 'src/index.ts',
+    'windows-acceptance-worker': 'src/windows-acceptance-worker.ts',
+    'windows-host-bootstrap': 'src/windows-host-bootstrap.ts',
+    'windows-operator-cli': 'src/windows-operator-cli.ts',
+  },
   outDir: 'dist',
   format: ['esm'],
   platform: 'node',

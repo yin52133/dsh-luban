@@ -231,7 +231,8 @@ export interface KeepaliveAdapter {
   attach(id: string): Promise<void>
   list(): Promise<readonly ManagedSession[]>
   isAlive(id: string): Promise<boolean>
-  destroy(id: string): Promise<void>
+  /** Destroy only the runtime bound to the exact persisted session specification. */
+  destroy(spec: SessionSpec): Promise<void>
 }
 
 export interface KeepaliveService {

@@ -136,15 +136,17 @@ export class WindowsTaskKeepaliveAdapter implements KeepaliveAdapter {
     return await this.#tasks.isRunning(name)
   }
 
-  public async destroy(id: string): Promise<void> {
-    const name = windowsSessionTaskName(managedSessionId(id))
-    const query = await this.#tasks.query(name)
-    if (query.state === 'missing') return
-    if (!isManagedChildTaskXml(query.xml ?? '', await this.#tasks.principalSid())) {
-      throw new LubanError('E_INVALID_INPUT', 'Refusing to delete an unmanaged Windows task')
-    }
+  public async destroy(spec: SessionSpec): Promise<void> {
     const principalSid = await this.#tasks.principalSid()
-    await this.#tasks.endAndDelete(name, (xml): boolean => isManagedChildTaskXml(xml, principalSid))
+    const definition = childTaskDefinition({
+      id: managedSessionId(spec.id),
+      principalSid,
+      command: spec.command,
+      arguments: windowsArguments(spec.args ?? []),
+    })
+    await this.#tasks.endAndDelete(definition.name, (xml): boolean =>
+      matchesWindowsTaskXml(xml, definition),
+    )
   }
 
   async #rollbackCreated(definition: WindowsTaskDefinition, original: unknown): Promise<never> {
