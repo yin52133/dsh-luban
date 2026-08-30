@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { KeepaliveEvent, KeepaliveService, TaskStore } from 'dsh-luban-core'
+import type { AccountId, KeepaliveEvent, KeepaliveService, TaskStore } from 'dsh-luban-core'
 import { LubanError } from 'dsh-luban-core'
 import { TaskboardKeepaliveAlertSink } from './alerts.js'
 import { NodeCommandRunner, type CommandRunner } from './command-runner.js'
@@ -23,6 +23,7 @@ declare module '@deepseek-ai/cordis' {
 
   interface Events {
     'luban.keepalive.health'(payload: {
+      readonly accountId?: AccountId
       readonly sessionId: string
       readonly alive: boolean
       readonly detail?: string
@@ -119,6 +120,7 @@ function publishCordisEvent(ctx: Context, event: KeepaliveEvent): void {
   if (event.type !== 'health') return
   for (const session of event.report.sessions) {
     ctx.emit('luban.keepalive.health', {
+      ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
       sessionId: session.id,
       alive: session.alive,
       ...(session.detail === undefined ? {} : { detail: session.detail }),

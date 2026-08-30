@@ -8,7 +8,7 @@ import type {
   SessionSpec,
   TaskStore,
 } from '../../packages/core/src/index.js'
-import { asHostId } from '../../packages/core/src/index.js'
+import { asAccountId, asHostId } from '../../packages/core/src/index.js'
 import { HudKeepaliveHealthStore } from '../../packages/dsh-luban-hud/src/keepalive-health.js'
 import { apply as applyKeepalive } from '../../packages/dsh-luban-keepalive/src/index.js'
 import { TmuxKeepaliveAdapter } from '../../packages/dsh-luban-keepalive/src/tmux-adapter.js'
@@ -19,11 +19,13 @@ import { describe, expect, it, vi } from 'vitest'
 
 const STARTED_AT = 1_800_000_000_000
 const MAX_PATROL_INTERVAL_MS = 300_000
+const ACCOUNT = asAccountId('patrol-user')
 
 const clock: Clock = Object.freeze({ now: (): number => Date.now() })
 
 function managedSession(spec: SessionSpec, kind: ManagedSession['kind']): ManagedSession {
   return {
+    ...(spec.accountId === undefined ? {} : { accountId: spec.accountId }),
     id: spec.id,
     host: asHostId('integration-host'),
     kind,
@@ -56,7 +58,8 @@ describe('M03 patrol alert deadline integration', (): void => {
     vi.spyOn(WindowsTaskKeepaliveAdapter.prototype, 'isAlive').mockResolvedValue(false)
 
     const unregisterHealth = context.on('luban.keepalive.health', (payload): void => {
-      hud.record(payload)
+      if (payload.accountId === undefined) hud.record(payload)
+      else hud.recordForAccount(payload.accountId, payload)
       if (!payload.alive) observedAt = Date.now()
     })
     const taskStoreFiber = context.plugin({
@@ -84,21 +87,24 @@ describe('M03 patrol alert deadline integration', (): void => {
       await keepaliveFiber
 
       await context.lubanKeepalive.ensureAlive({
+        accountId: ACCOUNT,
         id: 'deadline',
         purpose: 'build',
         command: 'node',
       })
 
       await vi.advanceTimersByTimeAsync(MAX_PATROL_INTERVAL_MS - 1)
-      expect(hud.snapshot()).toEqual({ healthy: true, alerts: [] })
-      await expect(taskStore.query({ tags: ['keepalive:luban-deadline'] })).resolves.toHaveLength(0)
+      expect(hud.snapshot(ACCOUNT)).toEqual({ healthy: true, alerts: [] })
+      await expect(
+        taskStore.query({ accountId: ACCOUNT, tags: ['keepalive:luban-deadline'] }),
+      ).resolves.toHaveLength(0)
 
       await vi.advanceTimersByTimeAsync(1)
       await keepaliveFiber.dispose()
       keepaliveFiber = undefined
 
       expect(observedAt).toBe(STARTED_AT + MAX_PATROL_INTERVAL_MS)
-      expect(hud.snapshot()).toEqual({
+      expect(hud.snapshot(ACCOUNT)).toEqual({
         healthy: false,
         alerts: [
           {
@@ -107,8 +113,11 @@ describe('M03 patrol alert deadline integration', (): void => {
           },
         ],
       })
-      await expect(taskStore.query({ tags: ['keepalive:luban-deadline'] })).resolves.toEqual([
+      await expect(
+        taskStore.query({ accountId: ACCOUNT, tags: ['keepalive:luban-deadline'] }),
+      ).resolves.toEqual([
         expect.objectContaining({
+          accountId: ACCOUNT,
           title: 'Keepalive alert: luban-deadline',
           status: 'todo',
           priority: 'P1',

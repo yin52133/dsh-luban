@@ -26,6 +26,7 @@ export interface ManagedKeepaliveOptions {
 
 function normalizeSessionSpec(spec: SessionSpec): SessionSpec {
   return {
+    ...(spec.accountId === undefined ? {} : { accountId: spec.accountId }),
     id: managedSessionId(spec.id),
     purpose: spec.purpose,
     command: spec.command,
@@ -39,6 +40,7 @@ function sameSessionSpec(left: SessionSpec, right: SessionSpec): boolean {
   const rightArgs = right.args ?? []
   return (
     left.id === right.id &&
+    left.accountId === right.accountId &&
     left.purpose === right.purpose &&
     left.command === right.command &&
     left.ownerTaskId === right.ownerTaskId &&
@@ -115,7 +117,7 @@ export class ManagedKeepaliveService implements KeepaliveService {
         this.#onError(error)
         return this.#orphanReport('ledger unreadable; orphan retained')
       }
-      const health: { id: string; alive: boolean; detail?: string }[] = []
+      const health: HealthReport['sessions'][number][] = []
       for (const record of Object.values(ledger.sessions)) {
         try {
           let session = record.session
@@ -128,10 +130,17 @@ export class ManagedKeepaliveService implements KeepaliveService {
               ...(record.checkpoint === undefined ? {} : { checkpoint: record.checkpoint }),
             })
           }
-          health.push({ id: session.id, alive: true })
+          health.push({
+            ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
+            id: session.id,
+            alive: true,
+          })
         } catch (error: unknown) {
           this.#onError(error)
           health.push({
+            ...(record.session.accountId === undefined
+              ? {}
+              : { accountId: record.session.accountId }),
             id: record.session.id,
             alive: false,
             detail: error instanceof Error ? error.message : 'restore failed',
@@ -174,6 +183,9 @@ export class ManagedKeepaliveService implements KeepaliveService {
         try {
           const alive = await this.#adapter.isAlive(record.session.id)
           return {
+            ...(record.session.accountId === undefined
+              ? {}
+              : { accountId: record.session.accountId }),
             id: record.session.id,
             alive,
             ...(alive ? {} : { detail: 'managed process is not alive' }),
@@ -181,6 +193,9 @@ export class ManagedKeepaliveService implements KeepaliveService {
         } catch (error: unknown) {
           this.#onError(error)
           return {
+            ...(record.session.accountId === undefined
+              ? {}
+              : { accountId: record.session.accountId }),
             id: record.session.id,
             alive: false,
             detail: error instanceof Error ? error.message : 'health probe failed',
@@ -274,13 +289,16 @@ export class ManagedKeepaliveService implements KeepaliveService {
       this.#onError(error)
       sessions = []
     }
-    const orphans = sessions.map((session) => ({ id: session.id, alive: false, detail }))
+    const orphans = sessions.map((session) => ({
+      ...(session.accountId === undefined ? {} : { accountId: session.accountId }),
+      id: session.id,
+      alive: false,
+      detail,
+    }))
     return this.#report(orphans.length === 0 ? [{ id: 'ledger', alive: false, detail }] : orphans)
   }
 
-  #report(
-    sessions: readonly { readonly id: string; readonly alive: boolean; readonly detail?: string }[],
-  ): HealthReport {
+  #report(sessions: HealthReport['sessions']): HealthReport {
     const report: HealthReport = {
       healthy: sessions.every((session): boolean => session.alive),
       checkedAt: this.#clock.now(),

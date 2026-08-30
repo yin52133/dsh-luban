@@ -41,6 +41,7 @@ export class TmuxKeepaliveAdapter implements KeepaliveAdapter {
       assertSuccess(result, `create tmux session ${id}`)
     }
     return {
+      ...(spec.accountId === undefined ? {} : { accountId: spec.accountId }),
       id,
       host: asHostId(this.#host),
       kind: 'tmux',

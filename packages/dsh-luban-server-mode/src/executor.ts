@@ -114,6 +114,7 @@ export class ManagedBuildExecutor implements BuildExecutor {
     })
     await atomicJson(specFile, spec)
     await this.#keepalive.ensureAlive({
+      ...(request.job.accountId === undefined ? {} : { accountId: request.job.accountId }),
       id: `server-build-${request.job.id}`,
       purpose: 'build',
       command: process.execPath,

@@ -11,13 +11,15 @@ import type {
   ManagedSession,
   SessionSpec,
 } from 'dsh-luban-core'
-import { asHostId, asTaskId } from 'dsh-luban-core'
+import { asAccountId, asHostId, asTaskId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KeepaliveAlertSink } from '../src/alerts.js'
 import { KeepaliveLedgerStore } from '../src/ledger.js'
 import { ManagedKeepaliveService } from '../src/service.js'
 
 const directories = new Set<string>()
+const ALICE = asAccountId('alice')
+const BOB = asAccountId('bob')
 
 class StaticClock implements Clock {
   public now(): number {
@@ -35,6 +37,7 @@ class FakeAdapter implements KeepaliveAdapter {
   public create(spec: SessionSpec): Promise<ManagedSession> {
     this.creates += 1
     const session: ManagedSession = {
+      ...(spec.accountId === undefined ? {} : { accountId: spec.accountId }),
       id: spec.id,
       host: asHostId('fake'),
       kind: 'tmux',
@@ -118,6 +121,7 @@ describe('ManagedKeepaliveService', (): void => {
   it('creates once, persists a checkpoint, and restores from that milestone', async (): Promise<void> => {
     const { adapter, events, service } = await fixture()
     const spec: SessionSpec = {
+      accountId: ALICE,
       id: 'task-42',
       purpose: 'task',
       command: 'dsh',
@@ -136,8 +140,9 @@ describe('ManagedKeepaliveService', (): void => {
       artifacts: ['/workspace/build.log'],
       savedAt: 1_788_048_000_000,
     }
+    const storedCheckpoint: Checkpoint = { ...checkpoint, accountId: ALICE }
     await service.saveCheckpoint('task-42', checkpoint)
-    await expect(service.loadCheckpoint('luban-task-42')).resolves.toEqual(checkpoint)
+    await expect(service.loadCheckpoint('luban-task-42')).resolves.toEqual(storedCheckpoint)
 
     adapter.sessions.delete('luban-task-42')
     const restored = await service.restore()
@@ -146,12 +151,13 @@ describe('ManagedKeepaliveService', (): void => {
     expect(events).toContainEqual(
       expect.objectContaining({
         type: 'restored',
-        checkpoint,
+        checkpoint: storedCheckpoint,
       }),
     )
     await service.release('task-42', { destroy: true })
     expect(adapter.destroyedSpecs).toEqual([
       {
+        accountId: ALICE,
         id: 'luban-task-42',
         purpose: 'task',
         command: 'dsh',
@@ -168,6 +174,15 @@ describe('ManagedKeepaliveService', (): void => {
     await service.ensureAlive({ id: 'bound', purpose: 'task', command: 'dsh', args: ['one'] })
     await expect(
       service.ensureAlive({ id: 'bound', purpose: 'task', command: 'dsh', args: ['two'] }),
+    ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
+    await expect(
+      service.ensureAlive({
+        accountId: BOB,
+        id: 'bound',
+        purpose: 'task',
+        command: 'dsh',
+        args: ['one'],
+      }),
     ).rejects.toMatchObject({ code: 'E_INVALID_INPUT' })
     expect(adapter.creates).toBe(1)
     await service.dispose()
@@ -190,13 +205,20 @@ describe('ManagedKeepaliveService', (): void => {
 
   it('reports dead sessions to event and alert consumers within one patrol', async (): Promise<void> => {
     const { adapter, alerts, events, service } = await fixture()
-    await service.ensureAlive({ id: 'job', purpose: 'build', command: 'node' })
+    await service.ensureAlive({ accountId: ALICE, id: 'job', purpose: 'build', command: 'node' })
     adapter.sessions.clear()
     const report = await service.patrol()
 
     expect(report).toMatchObject({
       healthy: false,
-      sessions: [{ id: 'luban-job', alive: false, detail: 'managed process is not alive' }],
+      sessions: [
+        {
+          accountId: ALICE,
+          id: 'luban-job',
+          alive: false,
+          detail: 'managed process is not alive',
+        },
+      ],
     })
     expect(events.at(-1)).toEqual({ type: 'health', report })
     await new Promise<void>((resolve): void => {
@@ -271,11 +293,22 @@ describe('ManagedKeepaliveService', (): void => {
   it('validates checkpoint ownership and bounds', async (): Promise<void> => {
     const { service } = await fixture()
     await service.ensureAlive({
+      accountId: ALICE,
       id: 'owned',
       purpose: 'task',
       command: 'dsh',
       ownerTaskId: asTaskId('A'),
     })
+    await expect(
+      service.saveCheckpoint('owned', {
+        accountId: BOB,
+        taskId: asTaskId('A'),
+        stepList: ['one'],
+        currentStep: 1,
+        artifacts: [],
+        savedAt: 1,
+      }),
+    ).rejects.toMatchObject({ code: 'E_ACCOUNT_SCOPE_MISMATCH' })
     await expect(
       service.saveCheckpoint('owned', {
         taskId: asTaskId('B'),
@@ -310,6 +343,7 @@ describe('ManagedKeepaliveService', (): void => {
   it('restores a checkpoint through a fresh service and ledger instance', async (): Promise<void> => {
     const { ledgerPath, service } = await fixture()
     const checkpoint: Checkpoint = {
+      accountId: ALICE,
       taskId: asTaskId('TASK-RESTART'),
       stepList: ['configure', 'compile', 'test'],
       currentStep: 1,
@@ -317,6 +351,7 @@ describe('ManagedKeepaliveService', (): void => {
       savedAt: 1_788_048_000_000,
     }
     await service.ensureAlive({
+      accountId: ALICE,
       id: 'restart',
       purpose: 'build',
       command: 'dsh',

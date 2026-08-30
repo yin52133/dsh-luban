@@ -77,6 +77,7 @@ export class WindowsTaskKeepaliveAdapter implements KeepaliveAdapter {
       }
     }
     return {
+      ...(spec.accountId === undefined ? {} : { accountId: spec.accountId }),
       id,
       host: asHostId(this.#host),
       kind: 'service',

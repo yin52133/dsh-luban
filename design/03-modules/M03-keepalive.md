@@ -16,6 +16,7 @@
 | v0.8 | 2026-08-30 | Codex | 收敛为保活、恢复与实机功能验收 |
 | v0.9 | 2026-08-30 | Codex | 按 heartbeat、boot marker、checkpoint 与 owned cleanup 收口验收口径 |
 | v1.0 | 2026-08-30 | Codex | 移除计划任务权限级别证明，只保留保活与恢复功能证据 |
+| v1.1 | 2026-08-30 | Codex | 托管会话、断点、健康事件与看板告警保留账号归属 |
 
 ## 1. 概述与目标
 
@@ -78,6 +79,9 @@ export interface KeepaliveService {
   loadCheckpoint(id: string): Promise<Checkpoint | null>;
 }
 
+// 新建用户任务的 SessionSpec、ManagedSession、Checkpoint 与 HealthReport row 都携带
+// accountId；仅部署维护会话和 M01-F008 之前的旧账本允许缺省。
+
 /** 进程内长任务执行器：currentStep 表示下一个待执行步骤。 */
 runCheckpointedTask({
   keepalive,
@@ -121,6 +125,8 @@ runCheckpointedTask({
 
 - 巡检与恢复日志有界，不保存完整会话内容。
 - `luban.keepalive.health` 的 `detail` 限长，最多保留 256 个当前异常会话，避免异常风暴拖垮 HUD。
+- 账本在 spec、runtime session 与 checkpoint 三处保存同一 `accountId` 并在读写时核对；健康事件与
+  TaskStore 告警沿用该账号。缺少账号的旧记录仍可由启动恢复维护，但不会自动进入任一用户的 HUD 或看板。
 - 恢复策略幂等：重复调用不产生重复会话；账本损坏时降级为「只列出孤儿会话待人工处理」而非自作主张清理。
 - Windows 计划任务采用部署账号可用的启动方式，并记录失败原因以便恢复。
 
@@ -141,11 +147,11 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   shell-command 经过 POSIX 单引号编码，宿主命令均使用参数数组、超时和取消信号。
 - Windows HAL 使用当前账户的 ONSTART Scheduled Task，保留原始 DSH
   `--patch` 参数；命令行按 `CommandLineToArgvW` 规则编码，不经过 Node shell。
-- 原子账本记录 session spec、归属和里程碑检查点；启动时只恢复账本拥有的缺失会话，
+- 原子账本记录 session spec、账号归属和里程碑检查点；启动时只恢复账本拥有的缺失会话，
   账本损坏时仅报告孤儿而不删除或重建。
 - `runCheckpointedTask()` 在恢复时跳过持久化完成步骤，任务或 step plan 不匹配时中止并提示；
   测试覆盖中段恢复、完成后重入、步骤失败不推进和启动前取消。
-- 巡检发布 `luban.keepalive.health`，可选 `lubanTaskStore` 告警去重；M07 通过 Cordis
+- 巡检发布带 `accountId` 的 `luban.keepalive.health`，可选 `lubanTaskStore` 在同一账号内告警去重；M07 通过 Cordis
   事件松耦合消费，健康变化立即进入认证 snapshot/SSE，并在 Web 状态栏与 CLI 首行显示。
   有限任务可通过 `release()` 销毁会话并清除账本，供 M09 worker 完成后收口；插件卸载会
   排空在途巡检与告警 sink，返回后不再写入 TaskStore 或发布健康事件。

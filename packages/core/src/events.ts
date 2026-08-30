@@ -20,6 +20,7 @@ export interface LubanEventMap {
     readonly circuit: 'ok' | 'open'
   }
   readonly 'luban.keepalive.health': {
+    readonly accountId?: AccountId
     readonly sessionId: string
     readonly alive: boolean
     readonly detail?: string

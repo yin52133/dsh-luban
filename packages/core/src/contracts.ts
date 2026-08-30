@@ -200,6 +200,8 @@ export interface NightScheduler {
 }
 
 export interface SessionSpec {
+  /** Optional only for maintenance sessions and ledgers written before M01-F008. */
+  readonly accountId?: AccountId
   readonly id: string
   readonly purpose: 'dsh-main' | 'task' | 'build'
   readonly command: string
@@ -211,6 +213,7 @@ export interface HealthReport {
   readonly healthy: boolean
   readonly checkedAt: number
   readonly sessions: readonly {
+    readonly accountId?: AccountId
     readonly id: string
     readonly alive: boolean
     readonly detail?: string

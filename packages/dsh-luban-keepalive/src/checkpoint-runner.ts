@@ -1,4 +1,4 @@
-import type { Checkpoint, KeepaliveService, TaskId } from 'dsh-luban-core'
+import type { AccountId, Checkpoint, KeepaliveService, TaskId } from 'dsh-luban-core'
 import { LubanError } from 'dsh-luban-core'
 
 const MAX_STEPS = 256
@@ -22,6 +22,7 @@ export interface CheckpointedTaskOptions {
   readonly keepalive: Pick<KeepaliveService, 'loadCheckpoint' | 'saveCheckpoint'>
   readonly sessionId: string
   readonly taskId: TaskId
+  readonly accountId?: AccountId
   readonly steps: readonly CheckpointStep[]
   readonly signal?: AbortSignal
   readonly now?: () => number
@@ -44,8 +45,14 @@ function validatePlan(steps: readonly CheckpointStep[]): readonly string[] {
   return ids
 }
 
-function assertCompatible(checkpoint: Checkpoint, taskId: TaskId, ids: readonly string[]): void {
+function assertCompatible(
+  checkpoint: Checkpoint,
+  taskId: TaskId,
+  ids: readonly string[],
+  accountId?: AccountId,
+): void {
   if (
+    (accountId !== undefined && checkpoint.accountId !== accountId) ||
     checkpoint.taskId !== taskId ||
     checkpoint.stepList.length !== ids.length ||
     checkpoint.stepList.some((id, index): boolean => id !== ids[index])
@@ -97,10 +104,11 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 export async function runCheckpointedTask(options: CheckpointedTaskOptions): Promise<Checkpoint> {
   const ids = validatePlan(options.steps)
   const existing = await options.keepalive.loadCheckpoint(options.sessionId)
-  if (existing !== null) assertCompatible(existing, options.taskId, ids)
+  if (existing !== null) assertCompatible(existing, options.taskId, ids, options.accountId)
   let checkpoint: Checkpoint =
     existing ??
     Object.freeze({
+      ...(options.accountId === undefined ? {} : { accountId: options.accountId }),
       taskId: options.taskId,
       stepList: ids,
       currentStep: 0,
@@ -120,6 +128,7 @@ export async function runCheckpointedTask(options: CheckpointedTaskOptions): Pro
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
     checkpoint = Object.freeze({
+      ...(checkpoint.accountId === undefined ? {} : { accountId: checkpoint.accountId }),
       taskId: options.taskId,
       stepList: ids,
       currentStep: index + 1,
