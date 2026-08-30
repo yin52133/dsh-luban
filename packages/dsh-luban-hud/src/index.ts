@@ -2,7 +2,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-session'
-import type { AuthService, TaskStore, TelemetryAggregator, TelemetrySnapshot } from 'dsh-luban-core'
+import type {
+  AuthService,
+  ProviderRequestIdentityAdapter,
+  TaskStore,
+  TelemetryAggregator,
+  TelemetrySnapshot,
+} from 'dsh-luban-core'
 import { LubanError, modulePrefix, redactSecrets, systemClock } from 'dsh-luban-core'
 import { DefaultTelemetryAggregator } from './aggregator.js'
 import { TaskboardHudAlertSink } from './alerts.js'
@@ -25,6 +31,7 @@ declare module '@deepseek-ai/cordis' {
     lubanAuth: AuthService
     lubanTaskStore: TaskStore
     lubanTelemetry: TelemetryAggregator
+    lubanProviderRequestIdentity: ProviderRequestIdentityAdapter
   }
 
   interface Events {
@@ -61,6 +68,11 @@ export { HudEventStream, HudHttpApi } from './http-api.js'
 export { HudKeepaliveHealthStore } from './keepalive-health.js'
 export { HUD_RATE_CAPTURE_SCHEMA, HudRateLedger } from './rate-ledger.js'
 export type { HudRateCapture, HudRateCaptureMetadata, HudRateLedgerOptions } from './rate-ledger.js'
+export { attestHudProviderRequest } from './provider-request-identity.js'
+export type {
+  HudProviderRequestIdentityEvidence,
+  ResolvedHudProviderRequestIdentity,
+} from './provider-request-identity.js'
 export { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
 export type { MonotonicClock } from './rate-window.js'
 export {
@@ -126,6 +138,8 @@ export function apply(
     runtimeArtifact,
     clock: systemClock,
     monotonicClock: systemMonotonicClock,
+    resolveProviderRequestIdentity: (): ProviderRequestIdentityAdapter | undefined =>
+      ctx.get('lubanProviderRequestIdentity'),
   })
   const collector = new DshRateCollector({
     window,

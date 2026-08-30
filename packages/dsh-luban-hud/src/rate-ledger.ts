@@ -1,8 +1,13 @@
 import { createHash } from 'node:crypto'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type { Clock } from 'dsh-luban-core'
-import { LubanError, redactSecrets, systemClock } from 'dsh-luban-core'
+import type { Clock, ProviderRequestIdentityAdapter } from 'dsh-luban-core'
+import { LubanError, systemClock } from 'dsh-luban-core'
+import {
+  attestHudProviderRequest,
+  type HudProviderRequestIdentityEvidence,
+  type ResolvedHudProviderRequestIdentity,
+} from './provider-request-identity.js'
 import {
   HUD_RATE_EXPORT_SCHEMA,
   type HudRateExport,
@@ -16,12 +21,14 @@ import {
   type HudRuntimeArtifactIdentity,
 } from './runtime-artifact.js'
 
-export const HUD_RATE_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v2' as const
+export const HUD_RATE_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v3' as const
 
 const DEFAULT_MAX_CAPTURE_RECORDS = 10_000
 const FIVE_MINUTES_MS = 300_000
 const CAPTURE_RETENTION_MS = 15 * 60_000
 const MAX_CLOCK_DRIFT_MS = 1_000
+const PROVIDER_IDENTITY_TIMEOUT_MS = 10_000
+const PROVIDER_IDENTITY_CONCURRENCY = 8
 const CHALLENGE = /^[A-Za-z0-9][A-Za-z0-9_-]{31,127}$/u
 const RATE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 
@@ -34,6 +41,7 @@ export interface HudRateCaptureMetadata {
   readonly messageId: string
   readonly provider: string
   readonly model: string
+  readonly providerRequest: HudProviderRequestIdentityEvidence
 }
 
 export interface HudRateCapture {
@@ -56,11 +64,14 @@ export interface HudRateLedgerOptions {
   readonly clock?: Clock
   readonly monotonicClock?: MonotonicClock
   readonly maxRecords?: number
+  readonly resolveProviderRequestIdentity?: () => ProviderRequestIdentityAdapter | undefined
 }
+
+type HudRateEventMetadata = Omit<HudRateCaptureMetadata, 'providerRequest'>
 
 interface CapturedRecord {
   readonly record: RateLedgerRecord
-  readonly metadata: HudRateCaptureMetadata
+  readonly metadata: HudRateEventMetadata
 }
 
 function sha256(value: string): string {
@@ -136,26 +147,22 @@ function containsControlCharacter(value: string): boolean {
   return false
 }
 
-function boundedRoute(value: unknown): string {
+function exactRoute(value: unknown): string | undefined {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
     value.length > 128 ||
+    value.trim() !== value ||
     containsControlCharacter(value)
   ) {
-    return 'unknown'
+    return undefined
   }
-  const redacted = redactSecrets(value)
-  return redacted.length <= 128 ? redacted : 'unknown'
+  return value
 }
 
-function boundedIdentity(value: unknown, prefix: string): string {
+function exactIdentity(value: unknown): string | undefined {
   const raw = String(value)
-  return RATE_ID.test(raw) ? raw : `${prefix}-${sha256(raw).slice(0, 32)}`
-}
-
-function rateRecordId(event: SessionEvent<'assistant/message'>): string {
-  return boundedIdentity(event.data.message.id, 'message')
+  return RATE_ID.test(raw) ? raw : undefined
 }
 
 function sameUsage(left: ReconciledTokenUsage, right: ReconciledTokenUsage): boolean {
@@ -185,24 +192,116 @@ function coverageError(message: string): LubanError {
   return new LubanError('E_UNAVAILABLE', message, { retriable: true })
 }
 
+function sameAdapterIdentity(
+  left: ResolvedHudProviderRequestIdentity,
+  right: ResolvedHudProviderRequestIdentity,
+): boolean {
+  return (
+    left.attestation.adapter.id === right.attestation.adapter.id &&
+    left.attestation.adapter.version === right.attestation.adapter.version &&
+    left.attestation.adapter.runtimeSha256 === right.attestation.adapter.runtimeSha256
+  )
+}
+
+function raceProviderIdentityWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(coverageError('Provider request identity timed out'))
+  return new Promise<T>((resolve, reject): void => {
+    let settled = false
+    const finish = (callback: () => void): void => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      callback()
+    }
+    const onAbort = (): void => {
+      finish((): void => reject(coverageError('Provider request identity timed out')))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    void operation.then(
+      (value): void => finish((): void => resolve(value)),
+      (error: unknown): void =>
+        finish((): void =>
+          reject(
+            error instanceof Error
+              ? error
+              : coverageError('Provider request identity adapter rejected without an error'),
+          ),
+        ),
+    )
+  })
+}
+
+async function attestCapturedRecords(
+  selected: readonly CapturedRecord[],
+  adapter: ProviderRequestIdentityAdapter,
+  challenge: string,
+  signal: AbortSignal,
+): Promise<readonly ResolvedHudProviderRequestIdentity[]> {
+  const results: (ResolvedHudProviderRequestIdentity | undefined)[] = Array.from({
+    length: selected.length,
+  })
+  let cursor = 0
+  const worker = async (): Promise<void> => {
+    while (cursor < selected.length) {
+      const index = cursor
+      cursor += 1
+      const captured = selected[index]
+      if (captured === undefined) throw coverageError('Rate capture snapshot is incomplete')
+      results[index] = await raceProviderIdentityWithSignal(
+        attestHudProviderRequest(
+          adapter,
+          {
+            sessionId: captured.metadata.sessionId,
+            assistantEventSeq: captured.metadata.eventSeq,
+            turn: captured.metadata.turn,
+            step: captured.metadata.step,
+            assistantMessageId: captured.metadata.messageId,
+            provider: captured.metadata.provider,
+            model: captured.metadata.model,
+            challenge,
+          },
+          signal,
+        ),
+        signal,
+      )
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(PROVIDER_IDENTITY_CONCURRENCY, selected.length) },
+      async (): Promise<void> => worker(),
+    ),
+  )
+  return Object.freeze(
+    results.map((result): ResolvedHudProviderRequestIdentity => {
+      if (result === undefined) throw coverageError('Provider request identity is incomplete')
+      return result
+    }),
+  )
+}
+
 /** Bounded, metadata-only ledger produced from mounted durable assistant events. */
 export class HudRateLedger {
   readonly #runtimeArtifact: HudRuntimeArtifactIdentity
   readonly #clock: Clock
   readonly #monotonicClock: MonotonicClock
   readonly #maxRecords: number
+  readonly #resolveProviderRequestIdentity:
+    (() => ProviderRequestIdentityAdapter | undefined) | undefined
   readonly #records = new Map<string, CapturedRecord>()
   readonly #conflictTimes = new Map<string, Set<number>>()
   #coverageStart: number | null
   #lastWallClock: number | null
   #lastMonotonicClock: number | null
   #coverageInvalid = false
+  #revision = 0
 
   public constructor(options: HudRateLedgerOptions) {
     this.#runtimeArtifact = parseHudRuntimeArtifactIdentity(options.runtimeArtifact)
     this.#clock = options.clock ?? systemClock
     this.#monotonicClock = options.monotonicClock ?? systemMonotonicClock
     this.#maxRecords = options.maxRecords ?? DEFAULT_MAX_CAPTURE_RECORDS
+    this.#resolveProviderRequestIdentity = options.resolveProviderRequestIdentity
     if (
       !Number.isSafeInteger(this.#maxRecords) ||
       this.#maxRecords < 1 ||
@@ -233,11 +332,11 @@ export class HudRateLedger {
       !Number.isSafeInteger(event.data.step) ||
       event.data.step < 0
     ) {
-      this.#coverageInvalid = true
+      this.#markCoverageInvalid()
       return
     }
     if (event.time > now) {
-      this.#coverageInvalid = true
+      this.#markCoverageInvalid()
       return
     }
     if (this.#coverageStart !== null && event.time < this.#coverageStart) {
@@ -246,7 +345,20 @@ export class HudRateLedger {
     }
     const occurredAt = new Date(event.time)
     if (Number.isNaN(occurredAt.valueOf())) return
-    const id = rateRecordId(event)
+    const sessionId = exactIdentity(session.id)
+    const messageId = exactIdentity(event.data.message.id)
+    const provider = exactRoute(event.data.message.source.provider)
+    const model = exactRoute(event.data.message.source.model)
+    if (
+      sessionId === undefined ||
+      messageId === undefined ||
+      provider === undefined ||
+      model === undefined
+    ) {
+      this.#markCoverageInvalid()
+      return
+    }
+    const id = messageId
     const captured: CapturedRecord = Object.freeze({
       record: Object.freeze({
         id,
@@ -256,13 +368,13 @@ export class HudRateLedger {
       }),
       metadata: Object.freeze({
         id,
-        sessionId: boundedIdentity(session.id, 'session'),
+        sessionId,
         eventSeq: event.seq,
         turn: event.data.turn,
         step: event.data.step,
-        messageId: boundedIdentity(event.data.message.id, 'message'),
-        provider: boundedRoute(event.data.message.source.provider),
-        model: boundedRoute(event.data.message.source.model),
+        messageId,
+        provider,
+        model,
       }),
     })
     const existing = this.#records.get(id)
@@ -272,10 +384,11 @@ export class HudRateLedger {
       return
     }
     this.#records.set(id, captured)
+    this.#revision += 1
     this.#prune(now)
   }
 
-  public capture(windowValue: RateWindowUtc, challenge: string): HudRateCapture {
+  public async capture(windowValue: RateWindowUtc, challenge: string): Promise<HudRateCapture> {
     if (!CHALLENGE.test(challenge)) {
       throw new LubanError('E_INVALID_INPUT', 'Rate capture challenge is invalid')
     }
@@ -315,6 +428,50 @@ export class HudRateLedger {
     if (selected.length === 0) {
       throw new LubanError('E_NOT_FOUND', 'Rate capture window contains no assistant requests')
     }
+    const adapter = this.#resolveProviderRequestIdentity?.()
+    if (adapter === undefined) {
+      throw coverageError('Provider request identity adapter is unavailable')
+    }
+    const snapshotRevision = this.#revision
+    const identities = await attestCapturedRecords(
+      selected,
+      adapter,
+      challenge,
+      AbortSignal.timeout(PROVIDER_IDENTITY_TIMEOUT_MS),
+    )
+    if (this.#revision !== snapshotRevision || this.#sampleClock() === null) {
+      throw coverageError('Rate capture changed during provider request identity attestation')
+    }
+    const firstIdentity = identities.at(0)
+    if (
+      firstIdentity === undefined ||
+      identities.some((identity): boolean => !sameAdapterIdentity(firstIdentity, identity))
+    ) {
+      throw coverageError('Provider request identity adapter changed within the rate window')
+    }
+    const providerRequestIds = new Set<string>()
+    const records: RateLedgerRecord[] = []
+    const captures: HudRateCaptureMetadata[] = []
+    for (let index = 0; index < selected.length; index += 1) {
+      const captured = selected[index]
+      const identity = identities[index]
+      if (captured === undefined || identity === undefined) {
+        throw coverageError('Provider request identity is incomplete')
+      }
+      const providerRequestId = identity.attestation.providerRequestId
+      if (providerRequestIds.has(providerRequestId)) {
+        throw coverageError('Provider request identity is duplicated within the rate window')
+      }
+      providerRequestIds.add(providerRequestId)
+      records.push(Object.freeze({ ...captured.record, id: providerRequestId }))
+      captures.push(
+        Object.freeze({
+          ...captured.metadata,
+          id: providerRequestId,
+          providerRequest: identity.evidence,
+        }),
+      )
+    }
     const exportedAt = new Date(now).toISOString()
     const coverageStartUtc = new Date(this.#coverageStart).toISOString()
     return Object.freeze({
@@ -332,9 +489,9 @@ export class HudRateLedger {
         schemaVersion: HUD_RATE_EXPORT_SCHEMA,
         source: Object.freeze({ kind: 'hud-event-export', origin: 'live-hud-events', exportedAt }),
         window,
-        records: Object.freeze(selected.map(({ record }) => record)),
+        records: Object.freeze(records),
       }),
-      captures: Object.freeze(selected.map(({ metadata }) => metadata)),
+      captures: Object.freeze(captures),
     })
   }
 
@@ -342,7 +499,7 @@ export class HudRateLedger {
     const wallClock = this.#clock.now()
     const monotonicClock = this.#monotonicClock.now()
     if (!validEpoch(wallClock) || !validElapsed(monotonicClock)) {
-      this.#coverageInvalid = true
+      this.#markCoverageInvalid()
       return null
     }
     if (this.#lastWallClock !== null && this.#lastMonotonicClock !== null) {
@@ -353,7 +510,7 @@ export class HudRateLedger {
         monotonicDelta < 0 ||
         Math.abs(wallDelta - monotonicDelta) > MAX_CLOCK_DRIFT_MS
       ) {
-        this.#coverageInvalid = true
+        this.#markCoverageInvalid()
       }
     }
     this.#lastWallClock = wallClock
@@ -361,28 +518,51 @@ export class HudRateLedger {
     return wallClock
   }
 
+  #markCoverageInvalid(): void {
+    if (this.#coverageInvalid) return
+    this.#coverageInvalid = true
+    this.#revision += 1
+  }
+
   #recordConflict(id: string, left: CapturedRecord, right: CapturedRecord): void {
     const timestamps = this.#conflictTimes.get(id) ?? new Set<number>()
+    const previousSize = timestamps.size
     timestamps.add(Date.parse(left.record.occurredAt))
     timestamps.add(Date.parse(right.record.occurredAt))
     this.#conflictTimes.set(id, timestamps)
+    if (timestamps.size !== previousSize) this.#revision += 1
   }
 
   #prune(now: number): void {
     const cutoff = now - CAPTURE_RETENTION_MS
+    let changed = false
     if (this.#coverageStart !== null) {
-      this.#coverageStart = Math.max(this.#coverageStart, cutoff)
+      const coverageStart = Math.max(this.#coverageStart, cutoff)
+      if (coverageStart !== this.#coverageStart) changed = true
+      this.#coverageStart = coverageStart
     }
     for (const [id, captured] of this.#records) {
-      if (Date.parse(captured.record.occurredAt) < cutoff) this.#records.delete(id)
+      if (Date.parse(captured.record.occurredAt) < cutoff) {
+        this.#records.delete(id)
+        changed = true
+      }
     }
     for (const [id, timestamps] of this.#conflictTimes) {
       for (const timestamp of timestamps) {
-        if (timestamp < cutoff) timestamps.delete(timestamp)
+        if (timestamp < cutoff) {
+          timestamps.delete(timestamp)
+          changed = true
+        }
       }
-      if (timestamps.size === 0) this.#conflictTimes.delete(id)
+      if (timestamps.size === 0) {
+        this.#conflictTimes.delete(id)
+        changed = true
+      }
     }
-    if (this.#records.size <= this.#maxRecords) return
+    if (this.#records.size <= this.#maxRecords) {
+      if (changed) this.#revision += 1
+      return
+    }
     const oldest = [...this.#records.entries()].sort(
       (left, right): number =>
         Date.parse(left[1].record.occurredAt) - Date.parse(right[1].record.occurredAt),
@@ -391,8 +571,11 @@ export class HudRateLedger {
     let evictionWatermark = this.#coverageStart ?? cutoff
     for (const [id, captured] of evicted) {
       this.#records.delete(id)
+      changed = true
       evictionWatermark = Math.max(evictionWatermark, Date.parse(captured.record.occurredAt) + 1)
     }
+    if (evictionWatermark !== this.#coverageStart) changed = true
     this.#coverageStart = evictionWatermark
+    if (changed) this.#revision += 1
   }
 }

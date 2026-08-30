@@ -15,6 +15,7 @@
 | v0.7 | 2026-08-30 | Codex | 增加挂载式速率 ledger、认证窗口导出与 challenge 绑定 |
 | v0.8 | 2026-08-30 | Codex | live runner 绑定挂载 HUD，并显式保留 provider adapter 阻塞边界 |
 | v0.9 | 2026-08-30 | Codex | 延长有界采集保留期，并增加挂载进程运行制品诊断闭包 |
+| v0.10 | 2026-08-30 | Codex | 接入 provider request-ID adapter，按真实请求身份导出与对账 |
 
 ## 1. 概述与目标
 
@@ -143,7 +144,8 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
   滑动窗口，历史事件按 wall-clock age 映射；对账的 5% 容差逐 request ID、逐 token 分类校验，
   不允许多条请求的正负误差在 aggregate 中相互抵消。
 - production `DshRateCollector` 会将历史回放和实时 `assistant/message` 交给挂载的
-  `HudRateLedger`；ledger 只接受完整 post-mount coverage 内的稳定 message identity，并由 collector
+  `HudRateLedger`；ledger 只接受完整 post-mount coverage 内可原样交给 adapter 的稳定 message identity，
+  非法 session/message/route 不再哈希或脱敏成替代身份，而是使 coverage fail closed；collector
   对 HUD 滑动窗口跨 fork 去重。认证 `/luban-hud/rate-capture` 导出同一半开 UTC 窗口内的 usage 与
   session/event/turn/step/message/provider/model 元数据，完全忽略 adapter-private replay state；非法
   usage 标为 `unknownTokens=1` 使后续对账 fail closed。稳定 message ID 会跨 fork 全局去重，同 ID
@@ -155,6 +157,12 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
   `dist/index.js` 相对 JS 引用闭包，runner 独立读取当前本地闭包并逐文件核对 SHA-256/字节数。该一致性
   检查仅用于诊断：ignored `dist` 尚未与 fresh HEAD build/受信 attestation 关联，端点 PID 也尚未绑定
   loopback listener 与受信启动身份，因此不得把自报摘要解释为“实际已加载代码”的证明。
+- 导出窗口现在必须动态取得 `ctx.lubanProviderRequestIdentity`。它以同一 fresh challenge 对每条精确
+  session/event seq/turn/step/message/provider/model 调用 provider wire adapter，严格校验 schema、全字段
+  回显、adapter id/version/runtime SHA-256 与 provider request ID；最多 8 路并发且整个批次 10 秒超时。
+  异步 attestation 期间 ledger revision 有任何变化、同一窗口 adapter 身份漂移或 request ID 重复都会
+  拒绝导出。HUD export 的 record id 由真实 provider request ID 替换，capture metadata 仅附带
+  session/message/request ID 摘要；runner 会复验全部绑定后才进入对账，私有 replay state 始终不参与。
   旧 `--hud-export` 双文件模式保持 operator-attested，并以
   `E_RATE_TRUSTED_CAPTURE_REQUIRED` 阻塞；mounted HUD 对账成功也不会直接验收，而以
   `E_RATE_ENDPOINT_ATTESTATION_REQUIRED` 阻塞；除此之外 provider 文件仍由 operator 提供，也需要可信
@@ -179,11 +187,12 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu DSH profile 核对 workspace/model/reasoning 切换、Web 常驻 HUD、CLI 首行与页面隐藏重连。
-- HUD 侧已能自产挂载实例的窗口 ledger，但当前 rc2 公共事件只稳定提供 DSH message ID，尚无独立
-  provider adapter 把真实账单 request ID 与该身份可信关联；仍需补该适配器并用真实 Provider/账单
-  流水完成双端对账。live runner 目前只能形成
+- HUD 侧 adapter 消费、严格绑定和真实 request-ID 对账边界已完成；rc2 公共成功事件仍不直接暴露该
+  ID，所以实际验收必须安装并信任对应 provider 的 wire adapter，不能由通用 HUD 猜测或读取私有
+  replay state。还需用真实 Provider/账单流水完成双端对账。live runner 目前只能形成
   `mounted-hud-diagnostic-with-operator-provider-export` 诊断证据：仍需 fresh deterministic build 或受信
-  artifact attestation，并把监听 PID/启动身份与端点绑定，随后再补 provider adapter 与真实流水。
+  artifact attestation，并把监听 PID/启动身份与端点绑定；operator 提供的 provider JSON 也仍需真实
+  provider 侧来源证明。
   这些本地可信边界未完成前，M07-F004 保持 `doing`，不得将 mounted capture 单独视为通过。
 - 真实长会话可继续抽查 M08 的会话定向采样与压缩质量。
 - 仍需在真实掉线长任务中核对 M03 巡检到 HUD/Taskboard 的端到端可见时延。

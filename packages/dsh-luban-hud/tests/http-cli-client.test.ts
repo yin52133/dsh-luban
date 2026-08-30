@@ -203,29 +203,31 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
 
   it('authenticates and validates mounted rate capture requests', async (): Promise<void> => {
     const telemetry = new DefaultTelemetryAggregator({ refreshMs: 1_000, providerTimeoutMs: 100 })
-    const capture = vi.fn((window: RateWindowUtc, challenge: string): HudRateCapture => ({
-      schemaVersion: HUD_RATE_CAPTURE_SCHEMA,
-      source: {
-        kind: 'mounted-hud-capture',
-        exportedAt: window.endUtc,
-        coverageStartUtc: window.startUtc,
-        processId: 123,
-        nodeVersion: 'v24.0.0',
-        challengeSha256: challenge,
-        runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
-      },
-      export: {
-        schemaVersion: HUD_RATE_EXPORT_SCHEMA,
+    const capture = vi.fn((window: RateWindowUtc, challenge: string): Promise<HudRateCapture> =>
+      Promise.resolve({
+        schemaVersion: HUD_RATE_CAPTURE_SCHEMA,
         source: {
-          kind: 'hud-event-export',
-          origin: 'live-hud-events',
+          kind: 'mounted-hud-capture',
           exportedAt: window.endUtc,
+          coverageStartUtc: window.startUtc,
+          processId: 123,
+          nodeVersion: 'v24.0.0',
+          challengeSha256: challenge,
+          runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
         },
-        window,
-        records: [],
-      },
-      captures: [],
-    }))
+        export: {
+          schemaVersion: HUD_RATE_EXPORT_SCHEMA,
+          source: {
+            kind: 'hud-event-export',
+            origin: 'live-hud-events',
+            exportedAt: window.endUtc,
+          },
+          window,
+          records: [],
+        },
+        captures: [],
+      }),
+    )
     const rateCapture = { capture } satisfies Pick<HudRateLedger, 'capture'>
     const api = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig, rateCapture })
 

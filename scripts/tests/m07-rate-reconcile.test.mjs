@@ -42,11 +42,13 @@ const TRACKED_SOURCE_PATHS = Object.freeze([
   'packages/dsh-luban-hud/tsdown.config.ts',
   'packages/dsh-luban-hud/src/rate-reconcile.ts',
   'packages/dsh-luban-hud/src/rate-ledger.ts',
+  'packages/dsh-luban-hud/src/provider-request-identity.ts',
   'packages/dsh-luban-hud/src/rate-window.ts',
   'packages/dsh-luban-hud/src/runtime-artifact.ts',
   'packages/dsh-luban-hud/src/dsh-telemetry.ts',
   'packages/dsh-luban-hud/src/http-api.ts',
   'packages/dsh-luban-hud/src/index.ts',
+  'packages/core/src/contracts.ts',
 ])
 const WINDOWS_PLATFORM = Object.freeze({
   target: 'windows',
@@ -173,7 +175,7 @@ function usage() {
 
 function rateRecord() {
   return {
-    id: 'message-1',
+    id: 'provider-request-1',
     occurredAt: '2026-08-30T00:00:30.000Z',
     requestCount: 1,
     usage: usage(),
@@ -196,15 +198,16 @@ function providerExport() {
 
 function mountedCapture(challenge = CHALLENGE) {
   const exportedAt = '2026-08-30T00:02:00.000Z'
+  const challengeSha256 = createHash('sha256').update(challenge).digest('hex')
   return {
-    schemaVersion: 'dsh-luban/m07-hud-rate-capture/v2',
+    schemaVersion: 'dsh-luban/m07-hud-rate-capture/v3',
     source: {
       kind: 'mounted-hud-capture',
       exportedAt,
       coverageStartUtc: '2026-08-29T23:59:00.000Z',
       processId: 1234,
       nodeVersion: 'v22.19.0',
-      challengeSha256: createHash('sha256').update(challenge).digest('hex'),
+      challengeSha256,
       runtimeArtifact: RUNTIME_ARTIFACT,
     },
     export: {
@@ -215,7 +218,7 @@ function mountedCapture(challenge = CHALLENGE) {
     },
     captures: [
       {
-        id: 'message-1',
+        id: 'provider-request-1',
         sessionId: 'session-1',
         eventSeq: 1,
         turn: 1,
@@ -223,6 +226,25 @@ function mountedCapture(challenge = CHALLENGE) {
         messageId: 'message-1',
         provider: 'provider-one',
         model: 'model/one',
+        providerRequest: {
+          schemaVersion: 'dsh-luban/provider-request-identity-evidence/v1',
+          adapter: {
+            id: 'provider-wire-test',
+            version: '1.0.0',
+            runtimeSha256: 'a'.repeat(64),
+          },
+          binding: {
+            sessionIdSha256: createHash('sha256').update('session-1').digest('hex'),
+            assistantEventSeq: 1,
+            turn: 1,
+            step: 1,
+            assistantMessageIdSha256: createHash('sha256').update('message-1').digest('hex'),
+            provider: 'provider-one',
+            model: 'model/one',
+            challengeSha256,
+          },
+          providerRequestIdSha256: createHash('sha256').update('provider-request-1').digest('hex'),
+        },
       },
     ],
   }
@@ -230,6 +252,7 @@ function mountedCapture(challenge = CHALLENGE) {
 
 function mountedInput() {
   const capture = mountedCapture()
+  const providerRequest = capture.captures[0].providerRequest
   return Object.freeze({
     sha256: 'c'.repeat(64),
     bytes: 512,
@@ -241,6 +264,13 @@ function mountedInput() {
       exportedAt: capture.source.exportedAt,
       challengeSha256: capture.source.challengeSha256,
       runtimeArtifact: capture.source.runtimeArtifact,
+      providerRequestIdentity: Object.freeze({
+        adapter: Object.freeze({ ...providerRequest.adapter }),
+        count: 1,
+        bindingsSha256: createHash('sha256')
+          .update(providerRequest.providerRequestIdSha256)
+          .digest('hex'),
+      }),
     }),
   })
 }
@@ -655,9 +685,13 @@ describe('M07 rate reconciliation acceptance runner', () => {
         window: WINDOW,
       },
       capture: {
-        schemaVersion: 'dsh-luban/m07-hud-rate-capture/v2',
+        schemaVersion: 'dsh-luban/m07-hud-rate-capture/v3',
         sourceKind: 'mounted-hud-capture',
         challengeSha256: createHash('sha256').update(CHALLENGE).digest('hex'),
+        providerRequestIdentity: {
+          adapter: { id: 'provider-wire-test', version: '1.0.0' },
+          count: 1,
+        },
       },
     })
     expect(JSON.stringify(result)).not.toContain(cookie)
@@ -770,6 +804,18 @@ describe('M07 rate reconciliation acceptance runner', () => {
       },
       (capture) => {
         capture.export.window.endUtc = '2026-08-30T00:05:00.000Z'
+      },
+      (capture) => {
+        capture.captures[0].providerRequest.binding.step = 2
+      },
+      (capture) => {
+        capture.captures[0].providerRequest.providerRequestIdSha256 = '0'.repeat(64)
+      },
+      (capture) => {
+        capture.captures[0].providerRequest.binding.challengeSha256 = '0'.repeat(64)
+      },
+      (capture) => {
+        capture.captures[0].providerRequest.extra = true
       },
     ]
     for (const mutate of mutations) {

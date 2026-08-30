@@ -22,16 +22,18 @@ const TRACKED_SOURCE_PATHS = Object.freeze([
   'packages/dsh-luban-hud/tsdown.config.ts',
   'packages/dsh-luban-hud/src/rate-reconcile.ts',
   'packages/dsh-luban-hud/src/rate-ledger.ts',
+  'packages/dsh-luban-hud/src/provider-request-identity.ts',
   'packages/dsh-luban-hud/src/rate-window.ts',
   'packages/dsh-luban-hud/src/runtime-artifact.ts',
   'packages/dsh-luban-hud/src/dsh-telemetry.ts',
   'packages/dsh-luban-hud/src/http-api.ts',
   'packages/dsh-luban-hud/src/index.ts',
+  'packages/core/src/contracts.ts',
 ])
 const PLAN_SCHEMA = 'dsh-luban/m07-rate-reconciliation-plan/v2'
 const EVIDENCE_SCHEMA = 'dsh-luban/m07-rate-reconciliation-evidence/v3'
 const HUD_EXPORT_SCHEMA = 'dsh-luban/m07-hud-rate-export/v1'
-const HUD_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v2'
+const HUD_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v3'
 const HUD_RUNTIME_ARTIFACT_SCHEMA = 'dsh-luban/m07-hud-runtime-artifact/v1'
 const PROVIDER_EXPORT_SCHEMA = 'dsh-luban/m07-provider-rate-export/v1'
 const FEATURE_ID = 'M07-F004'
@@ -935,7 +937,42 @@ export async function readM07BoundedResponseBody(body, maxBytes = MAX_HTTP_RESPO
   return Buffer.concat(chunks, total)
 }
 
-function validCaptureMetadata(value, record) {
+function validProviderRequestEvidence(value, metadata, record, challengeSha256) {
+  return (
+    hasExactKeys(value, ['adapter', 'binding', 'providerRequestIdSha256', 'schemaVersion']) &&
+    value.schemaVersion === 'dsh-luban/provider-request-identity-evidence/v1' &&
+    hasExactKeys(value.adapter, ['id', 'runtimeSha256', 'version']) &&
+    typeof value.adapter.id === 'string' &&
+    /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u.test(value.adapter.id) &&
+    typeof value.adapter.version === 'string' &&
+    value.adapter.version.length > 0 &&
+    value.adapter.version.length <= 128 &&
+    value.adapter.version.trim() === value.adapter.version &&
+    !containsControlCharacter(value.adapter.version) &&
+    SHA256.test(value.adapter.runtimeSha256) &&
+    hasExactKeys(value.binding, [
+      'assistantEventSeq',
+      'assistantMessageIdSha256',
+      'challengeSha256',
+      'model',
+      'provider',
+      'sessionIdSha256',
+      'step',
+      'turn',
+    ]) &&
+    value.binding.sessionIdSha256 === sha256(metadata.sessionId) &&
+    value.binding.assistantEventSeq === metadata.eventSeq &&
+    value.binding.turn === metadata.turn &&
+    value.binding.step === metadata.step &&
+    value.binding.assistantMessageIdSha256 === sha256(metadata.messageId) &&
+    value.binding.provider === metadata.provider &&
+    value.binding.model === metadata.model &&
+    value.binding.challengeSha256 === challengeSha256 &&
+    value.providerRequestIdSha256 === sha256(record?.id ?? '')
+  )
+}
+
+function validCaptureMetadata(value, record, challengeSha256) {
   const boundedText = (field) =>
     typeof field === 'string' &&
     field.length > 0 &&
@@ -948,6 +985,7 @@ function validCaptureMetadata(value, record) {
       'messageId',
       'model',
       'provider',
+      'providerRequest',
       'sessionId',
       'step',
       'turn',
@@ -966,7 +1004,8 @@ function validCaptureMetadata(value, record) {
     Number.isSafeInteger(value.turn) &&
     value.turn >= 0 &&
     Number.isSafeInteger(value.step) &&
-    value.step >= 0
+    value.step >= 0 &&
+    validProviderRequestEvidence(value.providerRequest, value, record, challengeSha256)
   )
 }
 
@@ -1142,10 +1181,25 @@ export function validateMountedHudCapture(value, expectedWindow, challenge, expe
     value.captures.length > 10_000 ||
     value.captures.length !== value.export.records.length ||
     !value.captures.every((metadata, index) =>
-      validCaptureMetadata(metadata, value.export.records[index]),
-    )
+      validCaptureMetadata(metadata, value.export.records[index], challengeSha256),
+    ) ||
+    new Set(value.export.records.map((record) => record?.id)).size !== value.export.records.length
   ) {
     throw new AcceptanceError('E_RATE_HUD_CAPTURE_SCHEMA', 'Mounted HUD capture payload is invalid')
+  }
+  const providerAdapter = value.captures[0]?.providerRequest?.adapter
+  if (
+    providerAdapter === undefined ||
+    value.captures.some(
+      (metadata) =>
+        JSON.stringify(metadata.providerRequest.adapter) !== JSON.stringify(providerAdapter),
+    )
+  ) {
+    throw new AcceptanceError(
+      'E_RATE_PROVIDER_IDENTITY',
+      'Mounted HUD capture changed provider request adapter identity within the window',
+      true,
+    )
   }
   const exportedWindow = exactRateWindow(value.export.window, 'Mounted HUD export')
   if (
@@ -1167,6 +1221,15 @@ export function validateMountedHudCapture(value, expectedWindow, challenge, expe
       exportedAt: value.source.exportedAt,
       challengeSha256,
       runtimeArtifact,
+      providerRequestIdentity: Object.freeze({
+        adapter: Object.freeze({ ...providerAdapter }),
+        count: value.captures.length,
+        bindingsSha256: sha256(
+          value.captures
+            .map(({ providerRequest }) => providerRequest.providerRequestIdSha256)
+            .join('\n'),
+        ),
+      }),
     }),
   })
 }
@@ -1332,7 +1395,7 @@ export function createM07RateReconciliationPlan(options = {}) {
     ]),
     tolerance: Object.freeze({ requestCountRelative: 0, tokenRelative: 0.05 }),
     acceptanceBoundary: mountedHud
-      ? 'mounted HUD capture is diagnostic until a trusted endpoint/build attestation and provider request-identity adapter are both available'
+      ? 'mounted HUD capture is diagnostic until a trusted endpoint/build attestation binds the running listener; provider request identities must already be adapter-bound'
       : 'two operator-provided JSON files prove reconciliation only; the HUD side requires mounted trusted capture',
     writes: options.live === true ? 'one new evidence file only' : 'none',
   })
@@ -1394,7 +1457,7 @@ function productionBoundaryError(code) {
   return code === 'E_RATE_ENDPOINT_ATTESTATION_REQUIRED'
     ? new AcceptanceError(
         'E_RATE_ENDPOINT_ATTESTATION_REQUIRED',
-        'Mounted HUD reconciliation is blocked until a trusted build and listener-process attestation binds the running endpoint; a provider request-identity adapter is also still required',
+        'Mounted HUD reconciliation is blocked until a trusted build and listener-process attestation binds the running endpoint',
         true,
       )
     : new AcceptanceError(
@@ -1522,6 +1585,12 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
       }
       check(checks, 'mounted-hud-challenge-bound', 'pass', hudInput.capture.challengeSha256)
       check(checks, 'mounted-hud-complete-coverage', 'pass', hudInput.capture.coverageStartUtc)
+      check(
+        checks,
+        'provider-request-identities-bound',
+        'pass',
+        `${hudInput.capture.providerRequestIdentity.adapter.id}:${String(hudInput.capture.providerRequestIdentity.count)}`,
+      )
       if (execution === 'production') {
         check(
           checks,
@@ -1622,6 +1691,7 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
     sourceAfter !== null &&
     (hudMode === 'external' ||
       (hudInput?.capture?.sourceKind === 'mounted-hud-capture' &&
+        hudInput.capture.providerRequestIdentity?.count > 0 &&
         (execution !== 'production' ||
           hudInput.capture.runtimeArtifact?.bundleSha256 ===
             sourceBefore.runtimeArtifact?.bundleSha256))) &&

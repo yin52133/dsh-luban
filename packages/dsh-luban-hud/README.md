@@ -61,13 +61,17 @@ Every HTTP endpoint is authenticated through `lubanAuth` at `/luban-hud/snapshot
 The event stream uses the registered `luban.telemetry.snapshot` name and bounded `Last-Event-ID` replay; a replay gap receives the latest immutable envelope.
 The mounted host keeps at most 10,000 durable assistant-event records from the latest five minutes.
 `GET /luban-hud/rate-capture` requires canonical `startUtc`/`endUtc` query values for an exact
-one- or five-minute `[start,end)` window plus a 32–128 character `challenge`. Its response binds the
-challenge by SHA-256 and exposes only usage and bounded route/event metadata; adapter-private replay
-state is neither inspected nor returned. Missing or malformed usage becomes `unknownTokens=1` so
+one- or five-minute `[start,end)` window plus a 32–128 character `challenge`. It also requires an
+installed `lubanProviderRequestIdentity` provider-wire adapter. Every durable assistant event is bound
+to an exact session/event sequence/turn/step/message/provider/model and the fresh challenge; the HUD
+export then uses the real provider request ID as its record ID. Persisted capture metadata contains only
+session/message/request digests and adapter id/version/runtime SHA-256. Adapter-private replay state is
+neither inspected nor returned. Missing or malformed usage becomes `unknownTokens=1` so
 reconciliation fails closed. Stable message identity deduplicates forked history. Capture is unavailable
 until a complete one-minute window has elapsed after mount, and any retention/capacity eviction,
-identity conflict, or wall/monotonic clock discontinuity advances or invalidates the coverage watermark
-rather than silently exporting a partial ledger.
+identity conflict, invalid route, adapter timeout/mismatch/drift, duplicate provider request ID, ledger
+change during attestation, or wall/monotonic clock discontinuity advances or invalidates the coverage
+watermark rather than silently exporting a partial ledger.
 `HudSnapshotResponse.keepalive` is an optional compatibility extension. Health changes immediately
 publish a new envelope through the same SSE event; M03 diagnostic text is stripped of controls,
 redacted, capped, and never persisted by HUD. At most 256 current failures are retained in memory.
@@ -115,8 +119,8 @@ and the reported PID is not yet bound to the loopback listener and a trusted lau
 The legacy two-file `--hud-export` flow remains operator-attested and ends with
 `E_RATE_TRUSTED_CAPTURE_REQUIRED`. A successful mounted-HUD comparison still ends in blocked
 `E_RATE_ENDPOINT_ATTESTATION_REQUIRED`: trusted build/listener-process attestation is still missing,
-and the provider JSON remains operator-supplied until a trusted adapter correlates provider request
-IDs with durable DSH message IDs. Neither path sets
+while the provider JSON remains operator-supplied even though every record must now be correlated by
+the installed provider adapter. Neither path sets
 `acceptancePassed=true`, and injected test doubles always produce simulated evidence.
 
 ## Compatibility
@@ -135,10 +139,10 @@ The implementation uses the public rc2 `AgentRegistry`, `Session.requestContext(
 - Ubuntu/Linux: the same host, Web, and CLI implementation is used.
 - Web: current DSH rc2 browser client; subscriptions pause when `document.hidden`.
 
-Window math, token-source projection, and the actual Cordis-mounted capture endpoint are directly
-tested. The export currently identifies requests by durable DSH message ID. A trusted provider adapter
-must still correlate that identity with an independent real billing/token ledger on both target hosts;
-until then, M07-F004 remains in progress rather than accepted.
+Window math, token-source projection, the provider request-ID binding, and the actual Cordis-mounted
+capture endpoint are directly tested. The generic package defines and consumes the adapter contract but
+does not impersonate a provider-specific wire observer. An actual trusted adapter plus independent real
+billing/token exports are still required on both target hosts; until then, M07-F004 is not accepted.
 
 ## License
 

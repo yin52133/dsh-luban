@@ -249,7 +249,9 @@ export class HudHttpApi {
         if (startUtc === null || endUtc === null || challenge === null) {
           throw new LubanError('E_INVALID_INPUT', 'Rate capture query is incomplete')
         }
-        sendJson(response, 200, this.#rateCapture.capture({ startUtc, endUtc }, challenge))
+        const capture = await this.#rateCapture.capture({ startUtc, endUtc }, challenge)
+        this.#assertAvailable()
+        sendJson(response, 200, capture)
         return
       }
       if (url.pathname === `${PREFIX}/events`) {
