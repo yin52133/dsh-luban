@@ -59,6 +59,48 @@ export interface AtomicClaimInput {
   readonly requireAcceptance: boolean
 }
 
+export interface AtomicNightClaimInput extends Omit<AtomicClaimInput, 'executionOwner'> {
+  readonly dateKey: string
+  readonly dailyQuota: number
+}
+
+export type AtomicNightClaimResult =
+  | {
+      readonly ok: true
+      readonly task: Task
+      readonly scheduler: SchedulerLedger
+      readonly quotaAllocated: number
+    }
+  | {
+      readonly ok: false
+      readonly reason: 'circuit-open' | 'quota-exceeded' | 'no-match'
+      readonly scheduler: SchedulerLedger
+      readonly quotaAllocated: number
+    }
+
+export type NightRunSettlementInput =
+  | {
+      readonly kind: 'complete'
+      readonly id: TaskId
+      readonly expectedClaim: TaskClaim
+      readonly output: Task['outputs'][number]
+      readonly autoDone: boolean
+      readonly dailyQuota: number
+    }
+  | {
+      readonly kind: 'fail'
+      readonly id: TaskId
+      readonly expectedClaim: TaskClaim
+      readonly reason: string
+      readonly maxConsecutiveFailures: number
+    }
+
+export interface NightRunSettlementResult {
+  readonly task: Task
+  readonly scheduler: SchedulerLedger
+  readonly quotaAllocated: number
+}
+
 interface AppendOutputOptions extends ClaimMutationOptions {
   readonly transitionToReview: boolean
   readonly autoDone: boolean
@@ -201,6 +243,214 @@ function matches(task: Task, filter: TaskQuery): boolean {
   if (filter.tags !== undefined && !filter.tags.every((tag): boolean => task.tags.includes(tag)))
     return false
   return true
+}
+
+function positiveSafeInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new LubanError('E_INVALID_INPUT', `${label} must be a positive safe integer`)
+  }
+  return value
+}
+
+function schedulerForDate(current: SchedulerLedger, dateKey: string): SchedulerLedger {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(dateKey)) {
+    throw new LubanError('E_INVALID_INPUT', 'dateKey must use YYYY-MM-DD')
+  }
+  return current.dateKey === dateKey
+    ? current
+    : { dateKey, quotaUsed: 0, consecutiveFailures: 0, circuit: 'ok' }
+}
+
+function nightRunDateKey(task: Task): string | undefined {
+  const match = /^(\d{4}-\d{2}-\d{2}):/u.exec(task.nightRunId ?? '')
+  return match?.[1]
+}
+
+function localDateKey(epochMs: number): string {
+  const value = new Date(epochMs)
+  const year = String(value.getFullYear()).padStart(4, '0')
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function allocatedNightQuota(ledger: TaskLedger, dateKey: string): number {
+  const scheduler = schedulerForDate(ledger.scheduler, dateKey)
+  const activeRuns = ledger.tasks.filter(
+    (task): boolean =>
+      task.status === 'doing' &&
+      task.claim?.executionOwner === 'night-scheduler' &&
+      (nightRunDateKey(task) ?? localDateKey(task.claim.claimedAt)) === dateKey,
+  ).length
+  return scheduler.quotaUsed + activeRuns
+}
+
+function claimCandidate(
+  ledger: TaskLedger,
+  input: AtomicClaimInput,
+): { readonly task: Task; readonly index: number } | undefined {
+  return ledger.tasks
+    .map((task, index): { readonly task: Task; readonly index: number } => ({ task, index }))
+    .filter(
+      ({ task }): boolean =>
+        task.status === 'todo' &&
+        (task.hostScope === 'any' || task.hostScope === input.host) &&
+        (input.statuses === undefined || input.statuses.includes(task.status)) &&
+        (input.workspace === undefined || task.workspace === input.workspace) &&
+        (input.tags === undefined || input.tags.every((tag): boolean => task.tags.includes(tag))) &&
+        (!input.requireAcceptance ||
+          (task.acceptance !== undefined && task.acceptance.trim() !== '')),
+    )
+    .sort(
+      (left, right): number =>
+        PRIORITY_ORDER[left.task.priority] - PRIORITY_ORDER[right.task.priority] ||
+        left.task.createdAt - right.task.createdAt,
+    )[0]
+}
+
+function claimTask(
+  ledger: TaskLedger,
+  selected: { readonly task: Task; readonly index: number },
+  input: AtomicClaimInput,
+  at: number,
+  dateKey?: string,
+): { readonly ledger: TaskLedger; readonly task: Task } {
+  const leaseId = `lease-${String(ledger.sequence + 1)}-${randomBytes(8).toString('hex')}`
+  const task: Task = {
+    ...selected.task,
+    status: 'doing',
+    claim: {
+      actor: input.actor,
+      sessionId: input.sessionId,
+      claimedAt: at,
+      leaseId,
+      ...(input.executionOwner === undefined ? {} : { executionOwner: input.executionOwner }),
+    },
+    ...(dateKey === undefined ? {} : { nightRunId: `${dateKey}:${leaseId}` }),
+    version: selected.task.version + 1,
+    updatedAt: at,
+  }
+  return {
+    task,
+    ledger: withAudit(
+      replaceTask(ledger, selected.index, task),
+      task.id,
+      'claimed',
+      input.actor,
+      at,
+    ),
+  }
+}
+
+interface CommittedTaskMutation {
+  readonly ledger: TaskLedger
+  readonly before: Task
+  readonly task: Task
+  readonly actor: Actor
+}
+
+function appendOutputMutation(
+  ledger: TaskLedger,
+  id: TaskId,
+  output: Task['outputs'][number],
+  options: AppendOutputOptions,
+  at: number,
+): CommittedTaskMutation {
+  const index = taskIndex(ledger, id)
+  const current = ledger.tasks[index]
+  if (current === undefined) throw new LubanError('E_IO', 'Task index became inconsistent')
+  requireExpectedClaim(current, options.expectedClaim)
+  if (
+    options.transitionToReview &&
+    (current.status !== 'doing' || current.claim === undefined || current.claim === null)
+  ) {
+    throw new LubanError('E_INVALID_TRANSITION', 'Only claimed doing tasks can be completed')
+  }
+  if (
+    options.transitionToReview &&
+    current.claim !== undefined &&
+    current.claim !== null &&
+    (current.claim.actor.kind !== output.by.kind || current.claim.actor.id !== output.by.id)
+  ) {
+    throw new LubanError('E_AUTH_REQUIRED', 'Only the claiming actor can complete the task')
+  }
+  const task: Task = {
+    ...current,
+    ...(options.transitionToReview ? { status: 'review' as const, claim: null } : {}),
+    outputs: [...current.outputs, output],
+    ...(options.autoDone ? { autoDone: true } : {}),
+    version: current.version + 1,
+    updatedAt: at,
+  }
+  return {
+    before: current,
+    task,
+    actor: output.by,
+    ledger: withAudit(
+      replaceTask(ledger, index, task),
+      id,
+      'output',
+      output.by,
+      at,
+      output.summary,
+    ),
+  }
+}
+
+function failTaskMutation(
+  ledger: TaskLedger,
+  id: TaskId,
+  summary: string,
+  options: ClaimMutationOptions,
+  at: number,
+): CommittedTaskMutation {
+  const index = taskIndex(ledger, id)
+  const current = ledger.tasks[index]
+  if (current === undefined) throw new LubanError('E_IO', 'Task index became inconsistent')
+  requireExpectedClaim(current, options.expectedClaim)
+  if (current.status !== 'doing' || current.claim === undefined || current.claim === null) {
+    throw new LubanError('E_INVALID_TRANSITION', 'Only claimed doing tasks can fail')
+  }
+  const actor = current.claim.actor
+  const failureCount = (current.failureCount ?? 0) + 1
+  const task: Task = {
+    ...current,
+    status: 'todo',
+    claim: null,
+    outputs: [
+      ...current.outputs,
+      {
+        kind: 'note',
+        ref: `failure:${String(failureCount)}`,
+        summary,
+        at,
+        by: actor,
+      },
+    ],
+    failureCount,
+    version: current.version + 1,
+    updatedAt: at,
+  }
+  return {
+    before: current,
+    task,
+    actor,
+    ledger: withAudit(replaceTask(ledger, index, task), id, 'failed', actor, at, summary),
+  }
+}
+
+function requireNightRun(task: Task, expectedClaim: TaskClaim): string {
+  if (expectedClaim.executionOwner !== 'night-scheduler' || expectedClaim.leaseId === undefined) {
+    throw new LubanError('E_INVALID_INPUT', 'A leased night-scheduler claim is required')
+  }
+  requireExpectedClaim(task, expectedClaim)
+  const dateKey = nightRunDateKey(task)
+  if (dateKey === undefined || task.nightRunId !== `${dateKey}:${expectedClaim.leaseId}`) {
+    throw new LubanError('E_VERSION_CONFLICT', 'Night run identity has changed', {
+      retriable: true,
+    })
+  }
+  return dateKey
 }
 
 /** Durable task store. Every mutation is one lock-protected ledger replacement. */
@@ -376,47 +626,11 @@ export class JsonTaskStore {
   public async atomicClaim(input: AtomicClaimInput): Promise<Task | null> {
     let claimed: Task | undefined
     await this.#store.update((ledger): TaskLedger => {
-      const candidates = ledger.tasks
-        .map((task, index): { readonly task: Task; readonly index: number } => ({ task, index }))
-        .filter(
-          ({ task }): boolean =>
-            task.status === 'todo' &&
-            (task.hostScope === 'any' || task.hostScope === input.host) &&
-            (input.statuses === undefined || input.statuses.includes(task.status)) &&
-            (input.workspace === undefined || task.workspace === input.workspace) &&
-            (input.tags === undefined ||
-              input.tags.every((tag): boolean => task.tags.includes(tag))) &&
-            (!input.requireAcceptance ||
-              (task.acceptance !== undefined && task.acceptance.trim() !== '')),
-        )
-        .sort(
-          (left, right): number =>
-            PRIORITY_ORDER[left.task.priority] - PRIORITY_ORDER[right.task.priority] ||
-            left.task.createdAt - right.task.createdAt,
-        )
-      const selected = candidates[0]
+      const selected = claimCandidate(ledger, input)
       if (selected === undefined) return ledger
-      const at = this.#clock.now()
-      claimed = {
-        ...selected.task,
-        status: 'doing',
-        claim: {
-          actor: input.actor,
-          sessionId: input.sessionId,
-          claimedAt: at,
-          leaseId: `lease-${String(ledger.sequence + 1)}-${randomBytes(8).toString('hex')}`,
-          ...(input.executionOwner === undefined ? {} : { executionOwner: input.executionOwner }),
-        },
-        version: selected.task.version + 1,
-        updatedAt: at,
-      }
-      return withAudit(
-        replaceTask(ledger, selected.index, claimed),
-        claimed.id,
-        'claimed',
-        input.actor,
-        at,
-      )
+      const mutation = claimTask(ledger, selected, input, this.#clock.now())
+      claimed = mutation.task
+      return mutation.ledger
     })
     if (claimed !== undefined) {
       this.#emit({
@@ -430,114 +644,177 @@ export class JsonTaskStore {
     return claimed ?? null
   }
 
+  /** Atomically reserves daily capacity and claims one night task across scheduler instances. */
+  public async atomicNightClaim(input: AtomicNightClaimInput): Promise<AtomicNightClaimResult> {
+    const dailyQuota = positiveSafeInteger(input.dailyQuota, 'dailyQuota')
+    let result: AtomicNightClaimResult | undefined
+    await this.#store.update((ledger): TaskLedger => {
+      const scheduler = schedulerForDate(ledger.scheduler, input.dateKey)
+      const normalized = scheduler === ledger.scheduler ? ledger : { ...ledger, scheduler }
+      const quotaAllocated = allocatedNightQuota(normalized, input.dateKey)
+      if (scheduler.circuit === 'open') {
+        result = { ok: false, reason: 'circuit-open', scheduler, quotaAllocated }
+        return normalized
+      }
+      if (quotaAllocated >= dailyQuota) {
+        result = { ok: false, reason: 'quota-exceeded', scheduler, quotaAllocated }
+        return normalized
+      }
+      const selected = claimCandidate(normalized, input)
+      if (selected === undefined) {
+        result = { ok: false, reason: 'no-match', scheduler, quotaAllocated }
+        return normalized
+      }
+      const mutation = claimTask(
+        normalized,
+        selected,
+        { ...input, executionOwner: 'night-scheduler' },
+        this.#clock.now(),
+        input.dateKey,
+      )
+      result = {
+        ok: true,
+        task: mutation.task,
+        scheduler,
+        quotaAllocated: quotaAllocated + 1,
+      }
+      return mutation.ledger
+    })
+    if (result === undefined) throw new LubanError('E_IO', 'Night claim did not commit')
+    if (result.ok) {
+      this.#emit({
+        type: 'transitioned',
+        task: result.task,
+        from: 'todo',
+        to: 'doing',
+        actor: input.actor,
+      })
+    }
+    return result
+  }
+
   public async appendOutput(
     id: TaskId,
     output: Task['outputs'][number],
     options: AppendOutputOptions,
   ): Promise<Task> {
-    let before: Task | undefined
-    let updated: Task | undefined
+    let mutation: CommittedTaskMutation | undefined
     await this.#store.update((ledger): TaskLedger => {
-      const index = taskIndex(ledger, id)
-      const current = ledger.tasks[index]
-      if (current === undefined) throw new LubanError('E_IO', 'Task index became inconsistent')
-      requireExpectedClaim(current, options.expectedClaim)
-      if (
-        options.transitionToReview &&
-        (current.status !== 'doing' || current.claim === undefined || current.claim === null)
-      ) {
-        throw new LubanError('E_INVALID_TRANSITION', 'Only claimed doing tasks can be completed')
-      }
-      if (
-        options.transitionToReview &&
-        current.claim !== undefined &&
-        current.claim !== null &&
-        (current.claim.actor.kind !== output.by.kind || current.claim.actor.id !== output.by.id)
-      ) {
-        throw new LubanError('E_AUTH_REQUIRED', 'Only the claiming actor can complete the task')
-      }
-      const at = this.#clock.now()
-      before = current
-      updated = {
-        ...current,
-        ...(options.transitionToReview ? { status: 'review' as const, claim: null } : {}),
-        outputs: [...current.outputs, output],
-        ...(options.autoDone ? { autoDone: true } : {}),
-        version: current.version + 1,
-        updatedAt: at,
-      }
-      return withAudit(
-        replaceTask(ledger, index, updated),
-        id,
-        'output',
-        output.by,
-        at,
-        output.summary,
-      )
+      mutation = appendOutputMutation(ledger, id, output, options, this.#clock.now())
+      return mutation.ledger
     })
-    if (before === undefined || updated === undefined)
-      throw new LubanError('E_IO', 'Task output did not commit')
+    if (mutation === undefined) throw new LubanError('E_IO', 'Task output did not commit')
     if (options.transitionToReview) {
       this.#emit({
         type: 'transitioned',
-        task: updated,
-        from: before.status,
+        task: mutation.task,
+        from: mutation.before.status,
         to: 'review',
         actor: output.by,
       })
     } else {
-      this.#emit({ type: 'updated', task: updated })
+      this.#emit({ type: 'updated', task: mutation.task })
     }
-    return updated
+    return mutation.task
   }
 
   public async fail(id: TaskId, reason: string, options: ClaimMutationOptions = {}): Promise<Task> {
     const summary = trimmed(reason, 'reason', 4_000)
-    let actor: Actor | undefined
-    let updated: Task | undefined
+    let mutation: CommittedTaskMutation | undefined
     await this.#store.update((ledger): TaskLedger => {
-      const index = taskIndex(ledger, id)
-      const current = ledger.tasks[index]
-      if (current === undefined) throw new LubanError('E_IO', 'Task index became inconsistent')
-      requireExpectedClaim(current, options.expectedClaim)
-      if (current.status !== 'doing' || current.claim === undefined || current.claim === null) {
-        throw new LubanError('E_INVALID_TRANSITION', 'Only claimed doing tasks can fail')
-      }
-      const at = this.#clock.now()
-      actor = current.claim.actor
-      const failureCount = (current.failureCount ?? 0) + 1
-      const next: Task = {
-        ...current,
-        status: 'todo',
-        claim: null,
-        outputs: [
-          ...current.outputs,
-          {
-            kind: 'note',
-            ref: `failure:${String(failureCount)}`,
-            summary,
-            at,
-            by: actor,
-          },
-        ],
-        failureCount,
-        version: current.version + 1,
-        updatedAt: at,
-      }
-      updated = next
-      return withAudit(replaceTask(ledger, index, next), id, 'failed', actor, at, summary)
+      mutation = failTaskMutation(ledger, id, summary, options, this.#clock.now())
+      return mutation.ledger
     })
-    if (updated === undefined || actor === undefined)
-      throw new LubanError('E_IO', 'Task failure did not commit')
+    if (mutation === undefined) throw new LubanError('E_IO', 'Task failure did not commit')
     this.#emit({
       type: 'transitioned',
-      task: updated,
+      task: mutation.task,
       from: 'doing',
       to: 'todo',
-      actor,
+      actor: mutation.actor,
       note: summary,
     })
-    return updated
+    return mutation.task
+  }
+
+  /** Commits a night task terminal mutation and its scheduler accounting in one ledger publish. */
+  public async settleNightRun(input: NightRunSettlementInput): Promise<NightRunSettlementResult> {
+    const summary = input.kind === 'fail' ? trimmed(input.reason, 'reason', 4_000) : undefined
+    if (input.kind === 'complete') positiveSafeInteger(input.dailyQuota, 'dailyQuota')
+    if (input.kind === 'fail') {
+      positiveSafeInteger(input.maxConsecutiveFailures, 'maxConsecutiveFailures')
+    }
+    let mutation: CommittedTaskMutation | undefined
+    let scheduler: SchedulerLedger | undefined
+    let quotaAllocated: number | undefined
+    await this.#store.update((ledger): TaskLedger => {
+      const index = taskIndex(ledger, input.id)
+      const current = ledger.tasks[index]
+      if (current === undefined) throw new LubanError('E_IO', 'Task index became inconsistent')
+      const runDateKey = requireNightRun(current, input.expectedClaim)
+      const at = this.#clock.now()
+      mutation =
+        input.kind === 'complete'
+          ? appendOutputMutation(
+              ledger,
+              input.id,
+              input.output,
+              {
+                transitionToReview: true,
+                autoDone: input.autoDone,
+                expectedClaim: input.expectedClaim,
+              },
+              at,
+            )
+          : failTaskMutation(
+              ledger,
+              input.id,
+              summary ?? 'Autonomous execution failed',
+              { expectedClaim: input.expectedClaim },
+              at,
+            )
+      const currentScheduler = ledger.scheduler
+      if (currentScheduler.dateKey !== runDateKey) {
+        scheduler = currentScheduler
+      } else if (input.kind === 'complete') {
+        if (currentScheduler.quotaUsed >= input.dailyQuota) {
+          throw new LubanError('E_QUOTA_EXCEEDED', 'Night scheduler quota is already exhausted', {
+            retriable: true,
+          })
+        }
+        scheduler = {
+          ...currentScheduler,
+          quotaUsed: currentScheduler.quotaUsed + 1,
+          consecutiveFailures: 0,
+          circuit: 'ok',
+        }
+      } else {
+        const consecutiveFailures = currentScheduler.consecutiveFailures + 1
+        scheduler = {
+          ...currentScheduler,
+          consecutiveFailures,
+          circuit:
+            consecutiveFailures >= input.maxConsecutiveFailures
+              ? ('open' as const)
+              : ('ok' as const),
+        }
+      }
+      const settledLedger = { ...mutation.ledger, scheduler }
+      quotaAllocated = allocatedNightQuota(settledLedger, scheduler.dateKey)
+      return settledLedger
+    })
+    if (mutation === undefined || scheduler === undefined || quotaAllocated === undefined) {
+      throw new LubanError('E_IO', 'Night run settlement did not commit')
+    }
+    this.#emit({
+      type: 'transitioned',
+      task: mutation.task,
+      from: mutation.before.status,
+      to: input.kind === 'complete' ? 'review' : 'todo',
+      actor: mutation.actor,
+      ...(summary === undefined ? {} : { note: summary }),
+    })
+    return { task: mutation.task, scheduler, quotaAllocated }
   }
 
   public async import(tasks: readonly ImportTask[]): Promise<ImportReport> {
@@ -609,6 +886,14 @@ export class JsonTaskStore {
 
   public async schedulerLedger(): Promise<SchedulerLedger> {
     return (await this.#store.read()).scheduler
+  }
+
+  public async nightSchedulerSnapshot(
+    dateKey: string,
+  ): Promise<{ readonly scheduler: SchedulerLedger; readonly quotaAllocated: number }> {
+    const ledger = await this.#store.read()
+    const scheduler = schedulerForDate(ledger.scheduler, dateKey)
+    return { scheduler, quotaAllocated: allocatedNightQuota({ ...ledger, scheduler }, dateKey) }
   }
 
   public async updateScheduler(

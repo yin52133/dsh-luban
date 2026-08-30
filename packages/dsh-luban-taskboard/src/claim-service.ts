@@ -12,7 +12,27 @@ import type {
   TaskProgress,
 } from '@luban/core'
 import { LubanError } from '@luban/core'
-import type { JsonTaskStore } from './task-store.js'
+import type {
+  AtomicNightClaimResult,
+  JsonTaskStore,
+  NightRunSettlementResult,
+} from './task-store.js'
+
+export interface NightClaimPolicy {
+  readonly dateKey: string
+  readonly dailyQuota: number
+}
+
+export interface NightCompletionOptions {
+  readonly expectedClaim: TaskClaim
+  readonly autoDone: boolean
+  readonly dailyQuota: number
+}
+
+export interface NightFailureOptions {
+  readonly expectedClaim: TaskClaim
+  readonly maxConsecutiveFailures: number
+}
 
 /** Agent-facing task operations kept separate from human transition APIs. */
 export class DefaultAgentClaimService implements AgentClaimService {
@@ -58,6 +78,27 @@ export class DefaultAgentClaimService implements AgentClaimService {
     return task === null ? { ok: false, reason: 'no-match' } : { ok: true, task }
   }
 
+  public async claimNight(
+    filter: ClaimFilter,
+    session: ClaimSession,
+    policy: NightClaimPolicy,
+  ): Promise<AtomicNightClaimResult> {
+    if (session.executionOwner !== 'night-scheduler') {
+      throw new LubanError('E_INVALID_INPUT', 'Night claims require the trusted scheduler owner')
+    }
+    return this.#store.atomicNightClaim({
+      actor: session.actor,
+      sessionId: session.sessionId,
+      host: this.#hostScope,
+      ...(filter.statuses === undefined ? {} : { statuses: filter.statuses }),
+      ...(filter.workspace === undefined ? {} : { workspace: filter.workspace }),
+      ...(filter.tags === undefined ? {} : { tags: filter.tags }),
+      requireAcceptance: filter.requireAcceptance ?? this.#requireAcceptance,
+      dateKey: policy.dateKey,
+      dailyQuota: policy.dailyQuota,
+    })
+  }
+
   public async reportProgress(
     id: TaskId,
     progress: TaskProgress,
@@ -97,9 +138,44 @@ export class DefaultAgentClaimService implements AgentClaimService {
     })
   }
 
+  public async completeNight(
+    id: TaskId,
+    output: TaskOutput,
+    options: NightCompletionOptions,
+  ): Promise<NightRunSettlementResult> {
+    if (
+      options.expectedClaim.actor.id !== output.by.id ||
+      options.expectedClaim.actor.kind !== output.by.kind
+    ) {
+      throw new LubanError('E_AUTH_REQUIRED', 'Only the claiming actor can complete the task')
+    }
+    return this.#store.settleNightRun({
+      kind: 'complete',
+      id,
+      expectedClaim: options.expectedClaim,
+      output,
+      autoDone: options.autoDone,
+      dailyQuota: options.dailyQuota,
+    })
+  }
+
   public async fail(id: TaskId, reason: string, options: ClaimMutationOptions = {}): Promise<void> {
     const expectedClaim = await this.#expectedClaim(id, options.expectedClaim)
     await this.#store.fail(id, reason, { expectedClaim })
+  }
+
+  public async failNight(
+    id: TaskId,
+    reason: string,
+    options: NightFailureOptions,
+  ): Promise<NightRunSettlementResult> {
+    return this.#store.settleNightRun({
+      kind: 'fail',
+      id,
+      expectedClaim: options.expectedClaim,
+      reason,
+      maxConsecutiveFailures: options.maxConsecutiveFailures,
+    })
   }
 
   async #expectedClaim(id: TaskId, expectedClaim: TaskClaim | undefined): Promise<TaskClaim> {

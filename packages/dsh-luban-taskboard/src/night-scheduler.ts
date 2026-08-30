@@ -358,15 +358,20 @@ export class DefaultNightScheduler implements NightScheduler {
     try {
       const now = this.#clock.now()
       const dateKey = localDateKey(now)
-      let state = await this.#store.updateScheduler((current) =>
-        current.dateKey === dateKey
-          ? current
-          : { dateKey, quotaUsed: 0, consecutiveFailures: 0, circuit: 'ok' },
-      )
       const windowActive = isInWindow(now, this.#config.window)
-      this.#lastStatus = { windowActive, quotaUsed: state.quotaUsed, circuit: state.circuit }
-      if (!windowActive || state.circuit === 'open' || state.quotaUsed >= this.#config.dailyQuota)
+      let snapshot = await this.#store.nightSchedulerSnapshot(dateKey)
+      this.#lastStatus = {
+        windowActive,
+        quotaUsed: snapshot.quotaAllocated,
+        circuit: snapshot.scheduler.circuit,
+      }
+      if (
+        !windowActive ||
+        snapshot.scheduler.circuit === 'open' ||
+        snapshot.quotaAllocated >= this.#config.dailyQuota
+      ) {
         return
+      }
       if (!this.#config.hostScopeWhitelist.includes(this.#hostScope)) return
       if (this.#executor === undefined && this.#taskExecutors.size === 0) {
         throw new LubanError('E_UNAVAILABLE', 'No DSH night executor is available')
@@ -378,10 +383,17 @@ export class DefaultNightScheduler implements NightScheduler {
         id: asActorId(sessionId),
         displayName: 'Luban Night Scheduler',
       }
-      const claim = await this.#claims.claim(
+      const claim = await this.#claims.claimNight(
         { statuses: ['todo'], tags: this.#config.tagWhitelist, requireAcceptance: true },
         { actor, sessionId, host: this.#hostId, executionOwner: 'night-scheduler' },
+        { dateKey, dailyQuota: this.#config.dailyQuota },
       )
+      snapshot = { scheduler: claim.scheduler, quotaAllocated: claim.quotaAllocated }
+      this.#lastStatus = {
+        windowActive,
+        quotaUsed: snapshot.quotaAllocated,
+        circuit: snapshot.scheduler.circuit,
+      }
       if (!claim.ok) return
       const expectedClaim = claim.task.claim
       if (expectedClaim === undefined || expectedClaim === null) {
@@ -393,40 +405,29 @@ export class DefaultNightScheduler implements NightScheduler {
           throw new LubanError('E_UNAVAILABLE', 'No night executor matches the claimed task')
         }
         const output = await executor.execute(claim.task, sessionId)
-        await this.#claims.complete(claim.task.id, output, { autoDone: true, expectedClaim })
-        state = await this.#store.updateScheduler((current) => ({
-          ...current,
-          quotaUsed: current.quotaUsed + 1,
-          consecutiveFailures: 0,
-          circuit: 'ok',
-        }))
+        const settled = await this.#claims.completeNight(claim.task.id, output, {
+          autoDone: true,
+          expectedClaim,
+          dailyQuota: this.#config.dailyQuota,
+        })
+        snapshot = { scheduler: settled.scheduler, quotaAllocated: settled.quotaAllocated }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Autonomous execution failed'
-        let failureRecorded = false
         try {
-          await this.#claims.fail(claim.task.id, message, { expectedClaim })
-          failureRecorded = true
+          const settled = await this.#claims.failNight(claim.task.id, message, {
+            expectedClaim,
+            maxConsecutiveFailures: this.#config.circuitBreaker.maxConsecutiveFailures,
+          })
+          snapshot = { scheduler: settled.scheduler, quotaAllocated: settled.quotaAllocated }
         } catch (failureError: unknown) {
           if (!isClaimConflict(failureError)) throw failureError
-        }
-        if (failureRecorded) {
-          state = await this.#store.updateScheduler((current) => {
-            const consecutiveFailures = current.consecutiveFailures + 1
-            return {
-              ...current,
-              consecutiveFailures,
-              circuit:
-                consecutiveFailures >= this.#config.circuitBreaker.maxConsecutiveFailures
-                  ? 'open'
-                  : 'ok',
-            }
-          })
+          snapshot = await this.#store.nightSchedulerSnapshot(dateKey)
         }
       }
       this.#lastStatus = {
         windowActive,
-        quotaUsed: state.quotaUsed,
-        circuit: state.circuit,
+        quotaUsed: snapshot.quotaAllocated,
+        circuit: snapshot.scheduler.circuit,
       }
     } finally {
       this.#running = false
@@ -467,11 +468,11 @@ export class DefaultNightScheduler implements NightScheduler {
 
   async #refreshStatus(): Promise<void> {
     const now = this.#clock.now()
-    const state = await this.#store.schedulerLedger()
+    const snapshot = await this.#store.nightSchedulerSnapshot(localDateKey(now))
     this.#lastStatus = {
       windowActive: isInWindow(now, this.#config.window),
-      quotaUsed: state.dateKey === localDateKey(now) ? state.quotaUsed : 0,
-      circuit: state.dateKey === localDateKey(now) ? state.circuit : 'ok',
+      quotaUsed: snapshot.quotaAllocated,
+      circuit: snapshot.scheduler.circuit,
     }
   }
 }

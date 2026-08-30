@@ -32,6 +32,11 @@ export const inject = ['webServer', 'agents', 'tools', 'lubanAuth']
 export const Config = ConfigSchema
 export type Config = TaskboardConfig
 export { DefaultAgentClaimService } from './claim-service.js'
+export type {
+  NightClaimPolicy,
+  NightCompletionOptions,
+  NightFailureOptions,
+} from './claim-service.js'
 export { parseConfig, resolveStoreDirectory } from './config.js'
 export { TaskboardHttpApi, TaskEventStream } from './http-api.js'
 export { createLedgerStore, decodeLedger, emptyLedger } from './ledger.js'
@@ -39,7 +44,15 @@ export type { SchedulerLedger, TaskAuditEntry, TaskLedger } from './ledger.js'
 export { DefaultNightScheduler, DshAgentNightExecutor, isInWindow } from './night-scheduler.js'
 export type { NightTaskExecutor, NightTaskExecutorRoute } from './night-scheduler.js'
 export { JsonTaskStore } from './task-store.js'
-export type { ImportReport, ImportTask } from './task-store.js'
+export type {
+  AtomicClaimInput,
+  AtomicNightClaimInput,
+  AtomicNightClaimResult,
+  ImportReport,
+  ImportTask,
+  NightRunSettlementInput,
+  NightRunSettlementResult,
+} from './task-store.js'
 
 function currentHostScope(config: TaskboardConfig['hostScope']): 'win' | 'ubuntu' {
   if (config === 'win' || config === 'ubuntu') return config
