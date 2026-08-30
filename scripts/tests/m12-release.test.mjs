@@ -4,9 +4,11 @@ import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:f
 import { join, parse, resolve } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import { gzipSync } from 'node:zlib'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { generatePlugin } from '../create-plugin.mjs'
 import {
+  assertTargetHost,
+  createThirdPartyChildEnvironment,
   dshInvocation,
   installThirdParty,
   loadVersionLock,
@@ -176,6 +178,7 @@ function runNode(script, args, cwd) {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   await Promise.all(
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   )
@@ -362,6 +365,73 @@ describe('M12 plugin scaffolder', () => {
 })
 
 describe('M12 install and safety plans', () => {
+  it('attests Ubuntu from os-release instead of accepting generic Linux', async () => {
+    await expect(
+      assertTargetHost('ubuntu', 'linux', async () => 'NAME=Ubuntu\nID=ubuntu\n'),
+    ).resolves.toBeUndefined()
+    await expect(
+      assertTargetHost('ubuntu', 'linux', async () => 'NAME=Ubuntu\nID="ubuntu"\n'),
+    ).resolves.toBeUndefined()
+    await expect(
+      assertTargetHost('ubuntu', 'linux', async () => 'NAME=Debian\nID=debian\n'),
+    ).rejects.toThrow(/non-Ubuntu Linux host/u)
+    await expect(
+      assertTargetHost('ubuntu', 'linux', async () => 'ID=ubuntu\nID=ubuntu\n'),
+    ).rejects.toThrow(/exactly one/u)
+    await expect(
+      assertTargetHost('ubuntu', 'linux', async () => 'ID=ubuntu\n'.repeat(10_000)),
+    ).rejects.toThrow(/bounded/u)
+    await expect(assertTargetHost('windows', 'win32')).resolves.toBeUndefined()
+    await expect(assertTargetHost('windows', 'linux')).rejects.toThrow(/target host/u)
+  })
+
+  it('passes only an explicit non-secret environment allowlist to install children', async () => {
+    const child = createThirdPartyChildEnvironment({
+      targetPlatform: 'windows',
+      source: {
+        Path: 'C:\\Tools',
+        SystemRoot: 'C:\\Windows',
+        TEMP: 'C:\\Temp',
+        HOME: 'C:\\Users\\operator',
+        GITHUB_TOKEN: 'should-not-pass',
+        NPM_TOKEN: 'should-not-pass',
+        OPENAI_API_KEY: 'should-not-pass',
+        NODE_OPTIONS: '--require should-not-pass.js',
+        npm_config_userconfig: 'C:\\secrets\\npmrc',
+        HTTPS_PROXY: 'https://user:password@example.invalid',
+        LUBAN_UNREVIEWED: 'should-not-pass',
+      },
+      dshHome: 'C:\\isolated-dsh',
+      registry: 'https://registry.npmjs.org/',
+      packages: [{ name: 'example', version: '1.0.0', integrity: 'not-exported' }],
+      buildPackages: [{ name: 'node-pty', version: '1.1.0', integrity: 'not-exported' }],
+    })
+
+    expect(child).toEqual({
+      PATH: 'C:\\Tools',
+      HOME: 'C:\\Users\\operator',
+      TEMP: 'C:\\Temp',
+      SystemRoot: 'C:\\Windows',
+      DSH_HOME: 'C:\\isolated-dsh',
+      LUBAN_THIRD_PARTY_BUILD_EXPECTED: '[{"name":"node-pty","version":"1.1.0"}]',
+      LUBAN_THIRD_PARTY_EXPECTED: '[{"name":"example","version":"1.0.0"}]',
+      npm_config_registry: 'https://registry.npmjs.org/',
+    })
+    expect(JSON.stringify(child)).not.toContain('should-not-pass')
+    expect(JSON.stringify(child)).not.toContain('integrity')
+
+    expect(() =>
+      createThirdPartyChildEnvironment({
+        targetPlatform: 'windows',
+        source: { PATH: 'first', Path: 'second' },
+        dshHome: 'C:\\isolated-dsh',
+        registry: 'https://registry.npmjs.org/',
+        packages: [],
+        buildPackages: [],
+      }),
+    ).toThrow(/conflicting PATH/u)
+  })
+
   it('resolves deterministic A-class specs and keeps installation dry by default', async () => {
     const lock = await loadVersionLock()
     expect(resolvePackageSpecs(lock)).toEqual([
@@ -452,6 +522,8 @@ describe('M12 install and safety plans', () => {
     const lock = await loadVersionLock()
     const registry = registryFetcher(allLockedPackages(lock))
     const execution = successfulInstallRunner(lock.packages, lock.buildPackages)
+    vi.stubEnv('M12_SECRET_CANARY', 'must-not-reach-any-child')
+    vi.stubEnv('GITHUB_TOKEN', 'must-not-reach-any-child')
     const result = await installThirdParty({
       platform: targetPlatform,
       dshHome,
@@ -479,6 +551,13 @@ describe('M12 install and safety plans', () => {
     expect(execution.calls[1].options.env.DSH_HOME).toBe(dshHome)
     expect(execution.calls[1].options.env.npm_config_registry).toBe('https://registry.npmjs.org/')
     expect(execution.calls[1].options.env.LUBAN_THIRD_PARTY_EXPECTED).not.toContain('integrity')
+    expect(
+      execution.calls.every(
+        ({ options }) =>
+          !Object.hasOwn(options.env, 'M12_SECRET_CANARY') &&
+          !Object.hasOwn(options.env, 'GITHUB_TOKEN'),
+      ),
+    ).toBe(true)
     expect(process.env.DSH_HOME).toBe(parentDshHome)
     expect(registry.requests).toHaveLength(4)
     expect(

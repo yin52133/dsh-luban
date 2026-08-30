@@ -39,6 +39,45 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const INTEGRITY = /^sha512-([A-Za-z0-9+/]+={0,2})$/
 const MAX_REGISTRY_METADATA_BYTES = 1_000_000
 const MAX_COMMAND_OUTPUT_BYTES = 1_000_000
+const MAX_OS_RELEASE_BYTES = 64 * 1024
+const COMMON_CHILD_ENVIRONMENT = Object.freeze([
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'TEMP',
+  'TMP',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'NO_COLOR',
+  'FORCE_COLOR',
+])
+const WINDOWS_CHILD_ENVIRONMENT = Object.freeze([
+  'SystemRoot',
+  'WINDIR',
+  'ComSpec',
+  'PATHEXT',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LOCALAPPDATA',
+  'APPDATA',
+  'PROGRAMDATA',
+  'ProgramFiles',
+  'ProgramFiles(x86)',
+  'ProgramW6432',
+  'USERNAME',
+])
+const UBUNTU_CHILD_ENVIRONMENT = Object.freeze([
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_RUNTIME_DIR',
+])
 
 function parseArgs(argv) {
   const options = { apply: false, version: 'pinned' }
@@ -430,12 +469,89 @@ function approvalActor(value, required) {
   return actor
 }
 
-function assertTargetHost(targetPlatform, runtimePlatform = process.platform) {
+function osReleaseId(value) {
+  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_OS_RELEASE_BYTES) {
+    throw new Error('Ubuntu installation requires bounded /etc/os-release data')
+  }
+  const identifiers = value
+    .split(/\r?\n/u)
+    .map((line) => /^ID=(.*)$/u.exec(line.trim()))
+    .filter((match) => match !== null)
+  if (identifiers.length !== 1) {
+    throw new Error('Ubuntu installation requires exactly one /etc/os-release ID')
+  }
+  const raw = identifiers[0][1].trim()
+  return raw.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2').toLowerCase()
+}
+
+export async function assertTargetHost(
+  targetPlatform,
+  runtimePlatform = process.platform,
+  readOsRelease = () => readFile('/etc/os-release', 'utf8'),
+) {
+  if (!['windows', 'ubuntu'].includes(targetPlatform)) {
+    throw new Error('Platform must be windows or ubuntu')
+  }
   const expected = targetPlatform === 'windows' ? 'win32' : 'linux'
   if (runtimePlatform !== expected) {
     throw new Error(
       `Refusing ${targetPlatform} installation from ${runtimePlatform}; run it on the target host`,
     )
+  }
+  if (targetPlatform === 'ubuntu') {
+    let release
+    try {
+      release = await readOsRelease()
+    } catch {
+      throw new Error('Ubuntu installation requires readable /etc/os-release')
+    }
+    if (osReleaseId(release) !== 'ubuntu') {
+      throw new Error('Refusing Ubuntu installation on a non-Ubuntu Linux host')
+    }
+  }
+}
+
+function inheritedEnvironmentValue(source, name, targetPlatform) {
+  if (targetPlatform !== 'windows') return source[name]
+  const wanted = name.toLowerCase()
+  const matches = Object.keys(source).filter((key) => key.toLowerCase() === wanted)
+  if (matches.length > 1) {
+    throw new Error(`Parent environment contains conflicting ${name} keys`)
+  }
+  return matches.length === 0 ? undefined : source[matches[0]]
+}
+
+/** Build the minimal child environment without forwarding parent credentials or runtime hooks. */
+export function createThirdPartyChildEnvironment({
+  targetPlatform,
+  source = process.env,
+  dshHome,
+  registry,
+  packages,
+  buildPackages,
+}) {
+  if (!['windows', 'ubuntu'].includes(targetPlatform)) {
+    throw new Error('Platform must be windows or ubuntu')
+  }
+  const inherited = [
+    ...COMMON_CHILD_ENVIRONMENT,
+    ...(targetPlatform === 'windows' ? WINDOWS_CHILD_ENVIRONMENT : UBUNTU_CHILD_ENVIRONMENT),
+  ]
+  const child = {}
+  for (const name of inherited) {
+    const value = inheritedEnvironmentValue(source, name, targetPlatform)
+    if (typeof value === 'string' && value !== '') child[name] = value
+  }
+  return {
+    ...child,
+    DSH_HOME: dshHome,
+    LUBAN_THIRD_PARTY_BUILD_EXPECTED: JSON.stringify(
+      buildPackages.map(({ name, version }) => ({ name, version })),
+    ),
+    LUBAN_THIRD_PARTY_EXPECTED: JSON.stringify(
+      packages.map(({ name, version }) => ({ name, version })),
+    ),
+    npm_config_registry: registry,
   }
 }
 
@@ -476,7 +592,7 @@ export async function installThirdParty(options = {}) {
   if (options.apply !== true) return dryRunPlan
 
   if (dshHome === undefined) throw new Error('--dsh-home is required with --apply')
-  assertTargetHost(options.platform)
+  await assertTargetHost(options.platform)
   if (versionMode !== 'pinned' && options.approveUnpinned !== true) {
     throw new Error('--approve-unpinned is required to apply latest or an explicit version')
   }
@@ -501,17 +617,13 @@ export async function installThirdParty(options = {}) {
     },
   }
   const runner = options.runner ?? spawnSync
-  const childEnvironment = {
-    ...process.env,
-    DSH_HOME: dshHome,
-    LUBAN_THIRD_PARTY_BUILD_EXPECTED: JSON.stringify(
-      buildPackages.map(({ name, version }) => ({ name, version })),
-    ),
-    LUBAN_THIRD_PARTY_EXPECTED: JSON.stringify(
-      packages.map(({ name, version }) => ({ name, version })),
-    ),
-    npm_config_registry: lock.registry,
-  }
+  const childEnvironment = createThirdPartyChildEnvironment({
+    targetPlatform: options.platform,
+    dshHome,
+    registry: lock.registry,
+    packages,
+    buildPackages,
+  })
 
   const installedPnpmVersion = runChecked(
     runner,
