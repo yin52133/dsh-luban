@@ -1,9 +1,12 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { join, resolve } from 'node:path'
+import { AgentRegistry, Inbox, type Agent } from '@deepseek-ai/dsh-agent'
+import { Context } from '@deepseek-ai/cordis'
+import { CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
+import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest'
 import type { Clock, SessionRef, TelemetryAggregator, TelemetrySnapshot } from '@luban/core'
 import { asSessionId } from '@luban/core'
@@ -116,6 +119,168 @@ describe('DSH compaction boundary', () => {
     expect(replay).toContain('Requirement')
     expect(replay).toContain('[REDACTED]')
     expect(await (await factory.open(ref.id)).entries()).toHaveLength(result.archiveFiles.length)
+  })
+
+  it('exposes deterministic agent-facing retrieval of an injected archive path', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'luban-agent-context-retrieval-'))
+    directories.push(directory)
+    const context = new Context()
+    const systemPromptFiber = context.plugin({
+      name: 'luban-context-test-system-prompt',
+      apply(ctx: Context): void {
+        ctx.provide('systemPrompt', {
+          tools: (): (() => void) => (): void => undefined,
+          section: (): (() => void) => (): void => undefined,
+        })
+      },
+    })
+    await systemPromptFiber
+    const agentsFiber = context.plugin(AgentRegistry)
+    const toolsFiber = context.plugin(ToolRuntime, { mode: 'native' })
+    await Promise.all([agentsFiber, toolsFiber])
+
+    const id = SessionId('agent-context-retrieval')
+    const session = Session.create(id, [], {
+      version: SESSION_FORMAT_VERSION,
+      id,
+      createdAt: 1,
+      cwd: directory,
+    })
+    const exactSourceDetail = 'ALPHA-42 uses the copper migration sequence at checkpoint seventeen.'
+    for (const text of [
+      'Requirement: preserve the high-level deployment constraints.',
+      exactSourceDetail,
+      'Decision: keep stable replay metadata for archived context.',
+      'Recent user request must remain verbatim.',
+    ]) {
+      session.append(
+        'user/message',
+        createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'plugin', plugin: 'test' },
+        }),
+        { surfaceOp: 'append' },
+      )
+    }
+    const inbox = new Inbox(session, {
+      inserted: (): void => undefined,
+      discarded: (): void => undefined,
+      claimed: (): void => undefined,
+    })
+    const agent: Agent = {
+      id,
+      options: {},
+      session,
+      inbox,
+      status: 'idle',
+      ctx: context,
+      cancel(): void {
+        inbox.clear()
+      },
+      whenIdle: (): Promise<void> => Promise.resolve(),
+      runMaintenance<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+        return task(new AbortController().signal)
+      },
+      send(message, target): void {
+        inbox.append(target, message)
+      },
+      followup(message): void {
+        inbox.append('next-turn', message)
+      },
+      steer(message): void {
+        inbox.append('next-step', message)
+      },
+      inject(message): void {
+        inbox.append('next-step', message)
+      },
+    }
+    const unregisterAgent = context.agents.register(agent)
+    let toolCaller: Agent | undefined
+    const unregisterReadFile = context.tools.register(
+      defineTool({
+        name: 'read_file',
+        description: 'Read one UTF-8 file from the calling agent workspace.',
+        parameters: {
+          path: { type: 'string', required: true },
+        },
+        output: {
+          schema: { type: 'string' },
+          render: (_args, value) => [{ type: 'text', text: value }],
+        },
+        async execute(args, execution): Promise<string> {
+          toolCaller = execution.agent
+          if (execution.agent === undefined) throw new Error('read_file requires an agent')
+          const workspace = resolve(execution.agent.session.header.cwd ?? process.cwd())
+          return readFile(resolve(workspace, args.path), {
+            encoding: 'utf8',
+            signal: execution.signal,
+          })
+        },
+      }),
+    )
+
+    try {
+      const activeConfig = {
+        trigger: { ratio: 0.8, minGapRounds: 1 },
+        strategy: 'summarize+virtualfile',
+        keepRecentTokens: 10,
+        archiveDir: '.luban/context-archive',
+        nightProfile: { trigger: { ratio: 0.7 }, keepRecentTokens: 8 },
+      } as const
+      const factory = new DshCompactionContextFactory(context.agents, activeConfig, {
+        now: (): number => 100,
+      })
+      const ref = sessionRefFromAgent(agent)
+      const workspace = await factory.create(ref)
+      const strategy = new SummarizeVirtualFileStrategy()
+      await strategy.execute(
+        strategy.plan({ segments: ref.segments, budgetTokens: 10 }),
+        workspace.context,
+      )
+
+      const modelFacingContext = session
+        .deriveMessages()
+        .flatMap((message) => message.content)
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n')
+      const injectedPaths = modelFacingContext.match(/\.luban\/context-archive\/[^\s]+\.md/gu) ?? []
+      const injectedPath = injectedPaths.find((path): boolean =>
+        path.includes('/seg-00000001-00000001-'),
+      )
+      expect(injectedPath).toBeDefined()
+      expect(modelFacingContext).not.toContain(exactSourceDetail)
+      expect(context.tools.schemas(agent)).toEqual([expect.objectContaining({ name: 'read_file' })])
+      if (injectedPath === undefined) throw new Error('archive path was not injected')
+
+      // This invokes the same deterministic ToolRuntime boundary used by the agent loop;
+      // it does not claim that a model autonomously selected the file.
+      const readResult = await context.tools.execute({
+        callId: CallId('context-archive-read'),
+        name: 'read_file',
+        arguments: { path: injectedPath },
+        agent,
+        signal: new AbortController().signal,
+      })
+
+      expect(readResult.isError).toBe(false)
+      if (readResult.isError || typeof readResult.value !== 'string') {
+        throw new Error('agent-facing archive read failed')
+      }
+      expect(toolCaller).toBe(agent)
+      expect(readResult.value).toContain(exactSourceDetail)
+      const indexedEntry = (await workspace.repository.entries()).find(
+        (entry): boolean => entry.path === injectedPath,
+      )
+      expect(indexedEntry).toBeDefined()
+      expect(createHash('sha256').update(readResult.value).digest('hex')).toBe(indexedEntry?.sha256)
+    } finally {
+      unregisterReadFile()
+      unregisterAgent()
+      await toolsFiber.dispose()
+      await agentsFiber.dispose()
+      await systemPromptFiber.dispose()
+    }
   })
 
   it('audits the real live surface event and segment indexes before and after execution', async () => {
