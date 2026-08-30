@@ -165,7 +165,18 @@ describe('M07 rate export reconciliation', (): void => {
       hudRecords: [request('request-1', usage({ outputTokens: 43 }))],
       providerRecords: [request('request-1', usage({ outputTokens: 40 }))],
     })
-    expectCode(() => reconcileRateExports(...pair), 'E_RATE_TOLERANCE')
+    expectCode(() => reconcileRateExports(...pair), 'E_RATE_RECORD_TOLERANCE')
+  })
+
+  it('rejects per-request token errors that cancel out in aggregate totals', (): void => {
+    const pair = exportsFor({
+      hudRecords: [
+        request('request-1', usage({ inputTokens: 110 })),
+        request('request-2', usage({ inputTokens: 90 })),
+      ],
+      providerRecords: [request('request-1'), request('request-2')],
+    })
+    expectCode(() => reconcileRateExports(...pair), 'E_RATE_RECORD_TOLERANCE')
   })
 
   it('requires exact request IDs and request counts', (): void => {

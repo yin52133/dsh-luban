@@ -150,6 +150,12 @@ export function reconcileRateExports(
         'Request counts must match exactly for every reconciled request ID',
       )
     }
+    if (!recordUsageWithinTolerance(hudRecord.usage, providerRecord.usage)) {
+      throw new RateReconciliationError(
+        'E_RATE_RECORD_TOLERANCE',
+        'Every request ID must reconcile each token category within five percent',
+      )
+    }
     providerById.delete(hudRecord.id)
   }
   if (providerById.size !== 0) {
@@ -437,6 +443,34 @@ function metricDelta(hud: number, provider: number, tolerance: number): RateMetr
     relative,
     withinTolerance: relative <= tolerance,
   })
+}
+
+function recordUsageWithinTolerance(
+  hud: ReconciledTokenUsage,
+  provider: ReconciledTokenUsage,
+): boolean {
+  const fields = [
+    'inputTokens',
+    'outputTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+    'unknownTokens',
+  ] as const
+  if (
+    !fields.every(
+      (field): boolean =>
+        metricDelta(
+          hud[field],
+          provider[field],
+          field === 'unknownTokens' ? 0 : RATE_TOKEN_TOLERANCE,
+        ).withinTolerance,
+    )
+  ) {
+    return false
+  }
+  const hudTotal = fields.reduce((sum, field): number => safeSum(sum, hud[field]), 0)
+  const providerTotal = fields.reduce((sum, field): number => safeSum(sum, provider[field]), 0)
+  return metricDelta(hudTotal, providerTotal, RATE_TOKEN_TOLERANCE).withinTolerance
 }
 
 function safeSum(left: number, right: number): number {

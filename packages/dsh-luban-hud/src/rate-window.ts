@@ -59,12 +59,12 @@ export class SlidingRateWindow {
     let unknownTokens5m = false
     for (const sample of this.#samples) {
       const age = Math.max(0, safeAt - sample.at)
-      if (age <= FIVE_MINUTES_MS) {
+      if (age < FIVE_MINUTES_MS) {
         if (sample.tokens === 'unknown') unknownTokens5m = true
         else tokens5m += sample.tokens
         requests5m += sample.requests
       }
-      if (age <= ONE_MINUTE_MS) {
+      if (age < ONE_MINUTE_MS) {
         if (sample.tokens === 'unknown') unknownTokens1m = true
         else tokens1m += sample.tokens
         requests1m += sample.requests
@@ -81,7 +81,7 @@ export class SlidingRateWindow {
   #prune(at: number): void {
     for (let index = this.#samples.length - 1; index >= 0; index -= 1) {
       const sample = this.#samples.at(index)
-      if (sample !== undefined && at - sample.at > FIVE_MINUTES_MS) {
+      if (sample !== undefined && at - sample.at >= FIVE_MINUTES_MS) {
         this.#samples.splice(index, 1)
       }
     }

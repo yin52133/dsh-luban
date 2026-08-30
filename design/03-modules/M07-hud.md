@@ -126,7 +126,9 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
   字段不完整时保持 `unknown`，不以估算值伪装官方口径。projection key/service 缺失或卸载时才回退
   `assistant/message.usage`、`request/context.contextWindow` 与内容估算；model/reasoning 仍取 request header。
 - context pressure 口径为 input + cache read + cache write；TPM 使用 input + output + cache read + cache write，
-  reasoning token 已包含在 output 中不重复计数。1m/5m 均使用 monotonic 滑动窗口，历史事件按 wall-clock age 映射。
+  reasoning token 已包含在 output 中不重复计数。1m/5m 均使用 monotonic 的半开区间 `[start,end)`
+  滑动窗口，历史事件按 wall-clock age 映射；对账的 5% 容差逐 request ID、逐 token 分类校验，
+  不允许多条请求的正负误差在 aggregate 中相互抵消。
 - `DefaultTelemetryAggregator` 并发采样、按 Provider 注册顺序做字段级 first-wins 合并；generation 防止注册/卸载竞态提交陈旧结果。
 - `snapshotFor(sessionId)` 对指定 live agent 重新采样，不读取或替换全局 HUD 缓存，也不向订阅者发布；
   M08 因而不会把 initiator/running/newest 的全局选择结果误用于另一个刚进入 idle 的会话。

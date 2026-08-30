@@ -51,7 +51,10 @@ All options and defaults are shown below:
         history: { enabled: true, retainMinutes: 60 }
 ```
 
-Thresholds must be ordered `warn < danger < critical`. Five-minute TPM/RPM values are normalized per minute over a fixed five-minute denominator, so a single 100-token request contributes `20 TPM` and `0.2 RPM` to that window.
+Thresholds must be ordered `warn < danger < critical`. Rate windows use half-open
+`[start,end)` boundaries. Five-minute TPM/RPM values are normalized per minute over a fixed
+five-minute denominator, so a single 100-token request contributes `20 TPM` and `0.2 RPM` to that
+window.
 `refreshSec` is bounded to 1–60 seconds and history retention to 1–1440 minutes so configuration cannot exceed the registered one-second event cadence or create an unbounded retention window.
 
 Every HTTP endpoint is authenticated through `lubanAuth` at `/luban-hud/snapshot`, `/luban-hud/history`, and `/luban-hud/events`.

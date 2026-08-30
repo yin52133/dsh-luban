@@ -498,6 +498,19 @@ describe('rc2 DSH telemetry providers', (): void => {
     expect(window.snapshot()).toEqual({ tpm1m: 0, tpm5m: 0, rpm1m: 0, rpm5m: 0 })
   })
 
+  it('uses half-open one- and five-minute rate windows at exact boundaries', (): void => {
+    const monotonic = new ManualClock()
+    monotonic.value = 0
+    const window = new SlidingRateWindow(monotonic)
+    window.record(100, 1)
+
+    monotonic.value = 60_000
+    expect(window.snapshot()).toEqual({ tpm1m: 0, tpm5m: 20, rpm1m: 0, rpm5m: 0.2 })
+
+    monotonic.value = 300_000
+    expect(window.snapshot()).toEqual({ tpm1m: 0, tpm5m: 0, rpm1m: 0, rpm5m: 0 })
+  })
+
   it('preserves interleaved historical timestamps across sessions and propagates unknown TPM', (): void => {
     const monotonic = new ManualClock()
     monotonic.value = 1_000
