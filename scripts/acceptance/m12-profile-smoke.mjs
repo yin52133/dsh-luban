@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -14,17 +15,24 @@ import { safeChildPath } from '../path-boundary.mjs'
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, '..', '..')
-const SCHEMA_VERSION = 1
-const DSH_VERSION = '0.1.1-rc.2'
+export const M12_PROFILE_PLAN_SCHEMA = 'dsh-luban/m12-profile-smoke-plan/v1'
+export const M12_PROFILE_EVIDENCE_SCHEMA = 'dsh-luban/m12-profile-smoke/v2'
+export const M12_PROFILE_DUAL_SCHEMA = 'dsh-luban/m12-profile-smoke-dual/v1'
+export const M12_PROFILE_DSH_VERSION = '0.1.1-rc.2'
 const PACKAGE_NAME = 'dsh-luban-acceptance'
 const PLUGIN_ID = 'luban-acceptance'
 const CLIENT_MARKER = '__LUBAN_M12_CLIENT_LIFECYCLE__'
+const CANONICAL_RUN_ID = 'canonical-run-id'
 const COMMAND_TIMEOUT_MS = 120_000
 const START_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 10_000
 const OUTPUT_LIMIT = 64 * 1024
+const EVIDENCE_INPUT_LIMIT = 1024 * 1024
+const OS_RELEASE_LIMIT = 64 * 1024
 const TEMPORARY_OWNER_SEGMENTS = ['node_modules', '.cache', 'dsh-luban-acceptance']
 const TEMPORARY_PREFIX = 'm12-profile-'
+const SHA_PATTERN = /^[a-f0-9]{64}$/u
+const GIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
 
 class SmokeBlockedError extends Error {
   constructor(message) {
@@ -70,6 +78,50 @@ function platformProfile(platform) {
   throw new SmokeBlockedError(`M12 profile smoke is unsupported on ${platform}`)
 }
 
+function osReleaseId(value) {
+  for (const line of value.split(/\r?\n/u)) {
+    const match = /^ID=(.*)$/u.exec(line.trim())
+    if (match === null) continue
+    const raw = match[1]?.trim()
+    if (raw === undefined) return undefined
+    return raw.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2').toLowerCase()
+  }
+  return undefined
+}
+
+export async function inspectM12RuntimePlatform(
+  runtimePlatform = process.platform,
+  arch = process.arch,
+  node = process.version,
+  readOsRelease = () => readFile('/etc/os-release', 'utf8'),
+) {
+  if (runtimePlatform === 'win32') {
+    return Object.freeze({ target: 'windows', runtimePlatform, arch, node })
+  }
+  if (runtimePlatform !== 'linux') {
+    throw new SmokeBlockedError(`M12 profile smoke is unsupported on ${runtimePlatform}`)
+  }
+  let release
+  try {
+    release = await readOsRelease()
+  } catch {
+    throw new SmokeBlockedError('M12 profile smoke requires readable /etc/os-release')
+  }
+  if (typeof release !== 'string' || Buffer.byteLength(release, 'utf8') > OS_RELEASE_LIMIT) {
+    throw new SmokeBlockedError('M12 profile smoke received invalid /etc/os-release data')
+  }
+  if (osReleaseId(release) !== 'ubuntu') {
+    throw new SmokeBlockedError('M12 Linux profile smoke requires /etc/os-release ID=ubuntu')
+  }
+  return Object.freeze({
+    target: 'ubuntu',
+    runtimePlatform,
+    arch,
+    node,
+    osReleaseId: 'ubuntu',
+  })
+}
+
 function isoNow(now = Date.now()) {
   return new Date(now).toISOString()
 }
@@ -81,6 +133,22 @@ function sanitizeError(error) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map((item) => canonicalValue(item))
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalValue(value[key])]),
+    )
+  }
+  return value
+}
+
+export function m12CanonicalJson(value) {
+  return JSON.stringify(canonicalValue(value))
 }
 
 function tail(current, chunk) {
@@ -125,6 +193,27 @@ function runCapture(command, args, options) {
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
   }
+}
+
+export function inspectM12GitState(root) {
+  let shaResult
+  let statusResult
+  try {
+    shaResult = runCapture('git', ['rev-parse', 'HEAD'], { cwd: root })
+    statusResult = runCapture('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+      cwd: root,
+    })
+  } catch {
+    throw new SmokeBlockedError('Unable to inspect the Git source state')
+  }
+  if (shaResult.exitCode !== 0 || statusResult.exitCode !== 0) {
+    throw new SmokeBlockedError('Unable to inspect the Git source state')
+  }
+  const sha = shaResult.stdout.trim().toLowerCase()
+  if (!GIT_SHA_PATTERN.test(sha)) {
+    throw new SmokeBlockedError('Git returned an invalid commit identity')
+  }
+  return Object.freeze({ sha, clean: statusResult.stdout.trim() === '' })
 }
 
 function requireCommand(checks, id, command, args, options) {
@@ -179,6 +268,38 @@ export function apply(ctx: ClientContext): void {
 `
 }
 
+export const M12_PROFILE_CANONICAL_TASK = Object.freeze({
+  id: 'M12-F001-profile-smoke-v1',
+  packageName: PACKAGE_NAME,
+  pluginId: PLUGIN_ID,
+  dshVersion: M12_PROFILE_DSH_VERSION,
+  profiles: Object.freeze({ windows: 'win-debug', ubuntu: 'ubuntu-server' }),
+  operations: Object.freeze([
+    'generate-client-plugin',
+    'build-and-typecheck',
+    'install-offline-into-isolated-profile',
+    'verify-single-bundle-and-config-row',
+    'mount-host-and-load-lazy-cjs-client',
+    'hot-disable-and-re-enable',
+    'restart-and-verify-disposal',
+  ]),
+})
+
+export const M12_PROFILE_CANONICAL_FIXTURE = Object.freeze({
+  generator: Object.freeze({
+    name: 'acceptance',
+    client: true,
+    description: 'DSH Luban acceptance plugin',
+    version: '0.1.0',
+    dshEngine: '>=0.1.1-rc.1',
+  }),
+  hostSource: markerSource(CANONICAL_RUN_ID),
+  clientSource: clientSource(CANONICAL_RUN_ID),
+})
+
+export const M12_PROFILE_TASK_SHA256 = sha256(m12CanonicalJson(M12_PROFILE_CANONICAL_TASK))
+export const M12_PROFILE_FIXTURE_SHA256 = sha256(m12CanonicalJson(M12_PROFILE_CANONICAL_FIXTURE))
+
 async function preparePlugin(plan, temporaryRoot, checks) {
   await copyFile(join(plan.root, 'tsconfig.base.json'), join(temporaryRoot, 'tsconfig.base.json'))
   const generated = await generatePlugin({
@@ -192,6 +313,23 @@ async function preparePlugin(plan, temporaryRoot, checks) {
     join(generated.target, 'src', 'client', 'index.ts'),
     clientSource(plan.runId),
     'utf8',
+  )
+  const [writtenHostSource, writtenClientSource] = await Promise.all([
+    readFile(join(generated.target, 'src', 'index.ts'), 'utf8'),
+    readFile(join(generated.target, 'src', 'client', 'index.ts'), 'utf8'),
+  ])
+  const actualFixtureSha256 = sha256(
+    m12CanonicalJson({
+      generator: M12_PROFILE_CANONICAL_FIXTURE.generator,
+      hostSource: writtenHostSource.replaceAll(plan.runId, CANONICAL_RUN_ID),
+      clientSource: writtenClientSource.replaceAll(plan.runId, CANONICAL_RUN_ID),
+    }),
+  )
+  requireCheck(
+    checks,
+    'canonical-fixture-hash',
+    actualFixtureSha256 === M12_PROFILE_FIXTURE_SHA256,
+    actualFixtureSha256,
   )
 
   const tsdown = executablePath(plan.root, 'tsdown', 'dist', 'run.mjs')
@@ -431,10 +569,11 @@ async function executeLiveProfileSmoke(plan) {
   let temporaryRoot
   let activeProcess
   let cleanup = 'not-needed'
+  let actualDshVersion = null
   let failure
 
   try {
-    await requireFile(dshEntry, `project-local @deepseek-ai/dsh@${DSH_VERSION}`)
+    await requireFile(dshEntry, `project-local @deepseek-ai/dsh@${M12_PROFILE_DSH_VERSION}`)
     const version = requireCommand(
       checks,
       'local-dsh-version-command',
@@ -445,7 +584,13 @@ async function executeLiveProfileSmoke(plan) {
         env: process.env,
       },
     ).stdout.trim()
-    requireCheck(checks, 'local-dsh-version', version === DSH_VERSION, version)
+    actualDshVersion = version.slice(0, 128)
+    requireCheck(
+      checks,
+      'local-dsh-version',
+      actualDshVersion === M12_PROFILE_DSH_VERSION,
+      actualDshVersion,
+    )
 
     const temporaryParent = temporaryOwner(plan.root)
     await safeChildPath(plan.root, temporaryParent, 'M12 smoke temporary owner')
@@ -653,6 +798,7 @@ async function executeLiveProfileSmoke(plan) {
       failure === undefined ? 'pass' : failure instanceof SmokeBlockedError ? 'blocked' : 'fail',
     checks,
     cleanup,
+    actualDshVersion,
     ...(failure === undefined ? {} : { error: sanitizeError(failure) }),
   }
 }
@@ -666,14 +812,16 @@ export function createProfileSmokePlan(options = {}) {
     throw new TypeError('runId must be a bounded identifier')
   }
   return Object.freeze({
-    schemaVersion: SCHEMA_VERSION,
+    schemaVersion: M12_PROFILE_PLAN_SCHEMA,
     featureId: 'M12-F001',
     runId,
     root,
     platform,
     profile,
     requestedMode: options.live === true ? 'live' : 'plan',
-    dshVersion: DSH_VERSION,
+    dshVersion: M12_PROFILE_DSH_VERSION,
+    taskSha256: M12_PROFILE_TASK_SHA256,
+    fixtureSha256: M12_PROFILE_FIXTURE_SHA256,
     isolation:
       'temporary DSH_HOME under ignored node_modules/.cache/dsh-luban-acceptance; owned path removed in finally',
     commands: [
@@ -685,28 +833,171 @@ export function createProfileSmokePlan(options = {}) {
   })
 }
 
-function normalizeExecution(plan, execution, evidenceKind) {
-  const livePass = evidenceKind === 'live' && execution.status === 'pass'
+function assertPlatformMatchesPlan(plan, platform) {
+  const expectedTarget = plan.platform === 'win32' ? 'windows' : 'ubuntu'
+  if (
+    platform?.target !== expectedTarget ||
+    platform.runtimePlatform !== plan.platform ||
+    (expectedTarget === 'windows' && platform.osReleaseId !== undefined) ||
+    (expectedTarget === 'ubuntu' && platform.osReleaseId !== 'ubuntu')
+  ) {
+    throw new SmokeBlockedError('Runtime platform attestation does not match the smoke profile')
+  }
+}
+
+function executionFailure(error) {
   return {
-    schemaVersion: SCHEMA_VERSION,
+    status: error instanceof SmokeBlockedError ? 'blocked' : 'fail',
+    checks: [],
+    cleanup: 'not-applicable',
+    actualDshVersion: null,
+    error: sanitizeError(error),
+  }
+}
+
+function normalizedCheck(id, status, actual) {
+  return { id, status, actual: String(actual).slice(0, 2_000) }
+}
+
+async function runAttestedExecution(plan, dependencies, executionMode) {
+  const attestationChecks = []
+  let platform = null
+  let before = null
+  let after = null
+  let execution
+  let integrityFailure
+
+  try {
+    platform = await dependencies.inspectPlatform()
+    assertPlatformMatchesPlan(plan, platform)
+    attestationChecks.push(normalizedCheck('runtime-platform-attested', 'pass', platform.target))
+    before = await dependencies.inspectGit(plan.root)
+    attestationChecks.push(
+      normalizedCheck('git-before-clean', before.clean ? 'pass' : 'blocked', before.clean),
+    )
+    if (!before.clean) {
+      throw new SmokeBlockedError(
+        'Live profile smoke requires a clean source tree before execution',
+      )
+    }
+    execution = await dependencies.executeLive(plan)
+    if (execution === null || typeof execution !== 'object' || Array.isArray(execution)) {
+      throw new Error('Live profile smoke returned an invalid execution result')
+    }
+  } catch (error) {
+    execution = executionFailure(error)
+  }
+
+  if (before !== null) {
+    try {
+      after = await dependencies.inspectGit(plan.root)
+      const afterClean = after.clean === true
+      const sameHead = after.sha === before.sha
+      attestationChecks.push(
+        normalizedCheck('git-after-clean', afterClean ? 'pass' : 'fail', afterClean),
+        normalizedCheck('git-head-unchanged', sameHead ? 'pass' : 'fail', sameHead),
+      )
+      if (before.clean === true && !afterClean) {
+        integrityFailure = new SmokeCheckError(
+          'git-after-clean',
+          'Source tree became dirty during live profile smoke',
+        )
+      } else if (before.clean === true && !sameHead) {
+        integrityFailure = new SmokeCheckError(
+          'git-head-unchanged',
+          'Git HEAD changed during live profile smoke',
+        )
+      }
+    } catch (error) {
+      integrityFailure = error
+      attestationChecks.push(
+        normalizedCheck('git-after-inspected', 'fail', 'Git after-state unavailable'),
+      )
+    }
+  }
+
+  if (integrityFailure !== undefined) {
+    execution = {
+      ...execution,
+      status: 'fail',
+      error: sanitizeError(integrityFailure),
+    }
+  }
+  const actualDshVersion =
+    typeof execution.actualDshVersion === 'string' ? execution.actualDshVersion : null
+  if (
+    executionMode === 'production' &&
+    execution.status === 'pass' &&
+    actualDshVersion !== M12_PROFILE_DSH_VERSION
+  ) {
+    execution = {
+      ...execution,
+      status: 'fail',
+      error: 'Successful live execution did not attest the required local DSH version',
+    }
+    attestationChecks.push(
+      normalizedCheck('actual-dsh-version-attested', 'fail', actualDshVersion ?? 'missing'),
+    )
+  } else if (actualDshVersion !== null) {
+    attestationChecks.push(
+      normalizedCheck(
+        'actual-dsh-version-attested',
+        actualDshVersion === M12_PROFILE_DSH_VERSION ? 'pass' : 'fail',
+        actualDshVersion,
+      ),
+    )
+  }
+
+  return normalizeExecution(
+    plan,
+    { ...execution, actualDshVersion },
+    executionMode,
+    platform,
+    { before, after },
+    attestationChecks,
+  )
+}
+
+function normalizeExecution(plan, execution, executionMode, platform, git, attestationChecks) {
+  const evidenceKind = executionMode === 'production' ? 'live' : 'simulated'
+  const livePass =
+    executionMode === 'production' &&
+    execution.status === 'pass' &&
+    git.before?.clean === true &&
+    git.after?.clean === true &&
+    git.before.sha === git.after.sha &&
+    execution.cleanup === 'pass' &&
+    execution.actualDshVersion === M12_PROFILE_DSH_VERSION
+  return {
+    schemaVersion: M12_PROFILE_EVIDENCE_SCHEMA,
     featureId: plan.featureId,
     runId: plan.runId,
-    platform: plan.platform,
-    profile: plan.profile,
-    dshVersion: plan.dshVersion,
+    execution: executionMode,
     evidenceKind,
+    platform,
+    profile: plan.profile,
+    git,
+    taskSha256: M12_PROFILE_TASK_SHA256,
+    fixtureSha256: M12_PROFILE_FIXTURE_SHA256,
+    dsh: {
+      expectedVersion: M12_PROFILE_DSH_VERSION,
+      actualVersion: execution.actualDshVersion,
+    },
     status:
-      evidenceKind === 'simulated' && execution.status === 'pass' ? 'simulated' : execution.status,
+      executionMode === 'test-double' && execution.status === 'pass'
+        ? 'simulated'
+        : execution.status,
     acceptancePassed: livePass,
-    checks: execution.checks ?? [],
+    checks: [...attestationChecks, ...(Array.isArray(execution.checks) ? execution.checks : [])],
     cleanup: execution.cleanup ?? 'not-applicable',
+    startedAt: plan.startedAt,
     ...(execution.error === undefined ? {} : { error: execution.error }),
     finishedAt: isoNow(),
   }
 }
 
 export async function runM12ProfileSmoke(options = {}, dependencies = {}) {
-  const plan = createProfileSmokePlan(options)
+  const plan = Object.freeze({ ...createProfileSmokePlan(options), startedAt: isoNow() })
   if (options.live !== true) {
     return {
       ...plan,
@@ -718,14 +1009,17 @@ export async function runM12ProfileSmoke(options = {}, dependencies = {}) {
       finishedAt: isoNow(),
     }
   }
-  if (dependencies.executeLive !== undefined) {
-    const execution = await dependencies.executeLive(plan)
-    return normalizeExecution(plan, execution, 'simulated')
+  const injected = Object.keys(dependencies).length > 0
+  const runtime = {
+    inspectPlatform: inspectM12RuntimePlatform,
+    inspectGit: inspectM12GitState,
+    executeLive: executeLiveProfileSmoke,
+    ...dependencies,
   }
-  return normalizeExecution(plan, await executeLiveProfileSmoke(plan), 'live')
+  return runAttestedExecution(plan, runtime, injected ? 'test-double' : 'production')
 }
 
-async function writeResult(path, result) {
+export async function writeM12ProfileResult(path, result) {
   const target = resolve(path)
   await mkdir(dirname(target), { recursive: true })
   const serialized = `${JSON.stringify(result, null, 2)}\n`
@@ -733,42 +1027,274 @@ async function writeResult(path, result) {
   return { target, sha256: sha256(serialized) }
 }
 
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(value, expected) {
+  if (!isRecord(value)) return false
+  const actual = Object.keys(value).sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+}
+
+function validTimestamp(value) {
+  if (typeof value !== 'string') return false
+  const date = new Date(value)
+  return !Number.isNaN(date.valueOf()) && date.toISOString() === value
+}
+
+function assertAggregatableGitState(value, label) {
+  if (
+    !hasExactKeys(value, ['clean', 'sha']) ||
+    value.clean !== true ||
+    typeof value.sha !== 'string' ||
+    !GIT_SHA_PATTERN.test(value.sha)
+  ) {
+    throw new Error(`${label} Git attestation is invalid or dirty`)
+  }
+}
+
+function assertAggregatablePlatform(value) {
+  if (!isRecord(value)) throw new Error('Profile evidence platform attestation is invalid')
+  const commonValid =
+    typeof value.arch === 'string' &&
+    value.arch.length > 0 &&
+    value.arch.length <= 64 &&
+    typeof value.node === 'string' &&
+    value.node.length > 0 &&
+    value.node.length <= 64
+  if (!commonValid) throw new Error('Profile evidence platform attestation is invalid')
+  if (
+    value.target === 'windows' &&
+    value.runtimePlatform === 'win32' &&
+    hasExactKeys(value, ['arch', 'node', 'runtimePlatform', 'target'])
+  ) {
+    return
+  }
+  if (
+    value.target === 'ubuntu' &&
+    value.runtimePlatform === 'linux' &&
+    value.osReleaseId === 'ubuntu' &&
+    hasExactKeys(value, ['arch', 'node', 'osReleaseId', 'runtimePlatform', 'target'])
+  ) {
+    return
+  }
+  throw new Error('Profile evidence platform must attest Windows or Ubuntu')
+}
+
+function assertAggregatableEvidence(value) {
+  const expectedKeys = [
+    'acceptancePassed',
+    'checks',
+    'cleanup',
+    'dsh',
+    'evidenceKind',
+    'execution',
+    'featureId',
+    'finishedAt',
+    'fixtureSha256',
+    'git',
+    'platform',
+    'profile',
+    'runId',
+    'schemaVersion',
+    'startedAt',
+    'status',
+    'taskSha256',
+  ]
+  if (
+    !hasExactKeys(value, expectedKeys) ||
+    value.schemaVersion !== M12_PROFILE_EVIDENCE_SCHEMA ||
+    value.featureId !== 'M12-F001' ||
+    typeof value.runId !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/u.test(value.runId) ||
+    value.execution !== 'production' ||
+    value.evidenceKind !== 'live' ||
+    value.status !== 'pass' ||
+    value.acceptancePassed !== true ||
+    value.cleanup !== 'pass' ||
+    !validTimestamp(value.startedAt) ||
+    !validTimestamp(value.finishedAt) ||
+    value.finishedAt < value.startedAt ||
+    value.taskSha256 !== M12_PROFILE_TASK_SHA256 ||
+    value.fixtureSha256 !== M12_PROFILE_FIXTURE_SHA256 ||
+    !SHA_PATTERN.test(value.taskSha256) ||
+    !SHA_PATTERN.test(value.fixtureSha256)
+  ) {
+    throw new Error('Profile evidence is not an aggregatable production live pass')
+  }
+  assertAggregatablePlatform(value.platform)
+  if (
+    (value.platform.target === 'windows' && value.profile !== 'win-debug') ||
+    (value.platform.target === 'ubuntu' && value.profile !== 'ubuntu-server')
+  ) {
+    throw new Error('Profile evidence target and profile do not match')
+  }
+  if (!hasExactKeys(value.git, ['after', 'before'])) {
+    throw new Error('Profile evidence Git attestation is invalid')
+  }
+  assertAggregatableGitState(value.git.before, 'Before-run')
+  assertAggregatableGitState(value.git.after, 'After-run')
+  if (value.git.before.sha !== value.git.after.sha) {
+    throw new Error('Profile evidence Git HEAD changed during execution')
+  }
+  if (
+    !hasExactKeys(value.dsh, ['actualVersion', 'expectedVersion']) ||
+    value.dsh.expectedVersion !== M12_PROFILE_DSH_VERSION ||
+    value.dsh.actualVersion !== M12_PROFILE_DSH_VERSION
+  ) {
+    throw new Error('Profile evidence does not attest the required local DSH version')
+  }
+  if (
+    !Array.isArray(value.checks) ||
+    value.checks.length === 0 ||
+    value.checks.some(
+      (check) =>
+        !hasExactKeys(check, ['actual', 'id', 'status']) ||
+        typeof check.id !== 'string' ||
+        check.id.length === 0 ||
+        check.id.length > 128 ||
+        check.status !== 'pass' ||
+        typeof check.actual !== 'string' ||
+        check.actual.length > 2_000,
+    )
+  ) {
+    throw new Error('Profile evidence contains invalid or failing checks')
+  }
+}
+
+export function aggregateM12ProfileSmokeEvidence(evidence, now = () => new Date()) {
+  if (!Array.isArray(evidence) || evidence.length !== 2) {
+    throw new Error('Exactly one Windows and one Ubuntu profile evidence file are required')
+  }
+  for (const item of evidence) assertAggregatableEvidence(item)
+  const windows = evidence.find((item) => item.platform.target === 'windows')
+  const ubuntu = evidence.find((item) => item.platform.target === 'ubuntu')
+  if (windows === undefined || ubuntu === undefined) {
+    throw new Error('Profile evidence must contain one Windows run and one Ubuntu run')
+  }
+  if (
+    windows.git.before.sha !== ubuntu.git.before.sha ||
+    windows.taskSha256 !== ubuntu.taskSha256 ||
+    windows.fixtureSha256 !== ubuntu.fixtureSha256 ||
+    windows.dsh.actualVersion !== ubuntu.dsh.actualVersion
+  ) {
+    throw new Error(
+      'Windows and Ubuntu evidence do not describe the same source, task, and fixture',
+    )
+  }
+  return Object.freeze({
+    schemaVersion: M12_PROFILE_DUAL_SCHEMA,
+    featureId: 'M12-F001',
+    status: 'pass',
+    acceptancePassed: true,
+    gitSha: windows.git.before.sha,
+    taskSha256: windows.taskSha256,
+    fixtureSha256: windows.fixtureSha256,
+    dshVersion: windows.dsh.actualVersion,
+    generatedAt: now().toISOString(),
+    inputs: Object.freeze({
+      windows: Object.freeze({
+        runId: windows.runId,
+        evidenceSha256: sha256(m12CanonicalJson(windows)),
+      }),
+      ubuntu: Object.freeze({
+        runId: ubuntu.runId,
+        evidenceSha256: sha256(m12CanonicalJson(ubuntu)),
+      }),
+    }),
+  })
+}
+
+async function readEvidence(path) {
+  let raw
+  try {
+    raw = await readFile(resolve(path), 'utf8')
+  } catch {
+    throw new Error('Unable to read profile smoke evidence')
+  }
+  if (Buffer.byteLength(raw, 'utf8') > EVIDENCE_INPUT_LIMIT) {
+    throw new Error('Profile smoke evidence is too large')
+  }
+  try {
+    return JSON.parse(raw)
+  } catch {
+    throw new Error('Profile smoke evidence is not valid JSON')
+  }
+}
+
+function nextArgument(argv, index, option) {
+  const value = argv[index + 1]
+  if (value === undefined || value.startsWith('--')) throw new Error(`${option} requires a path`)
+  return value
+}
+
 function parseArguments(argv) {
-  const options = { live: false }
-  for (let index = 0; index < argv.length; index += 1) {
+  const command = argv[0] !== undefined && !argv[0].startsWith('--') ? argv[0] : 'run'
+  if (command !== 'run' && command !== 'aggregate') throw new Error(`Unknown command: ${command}`)
+  const startIndex = command === 'run' && argv[0] !== 'run' ? 0 : 1
+  const options = { command, live: false }
+  for (let index = startIndex; index < argv.length; index += 1) {
     const argument = argv[index]
-    if (argument === '--live') options.live = true
+    if (argument === '--live' && command === 'run') options.live = true
     else if (argument === '--output') {
-      const value = argv[index + 1]
-      if (value === undefined || value.startsWith('--')) throw new Error('--output requires a path')
-      options.output = value
+      if (options.output !== undefined) throw new Error('--output may only be provided once')
+      options.output = nextArgument(argv, index, '--output')
+      index += 1
+    } else if (argument === '--windows' && command === 'aggregate') {
+      if (options.windows !== undefined) throw new Error('--windows may only be provided once')
+      options.windows = nextArgument(argv, index, '--windows')
+      index += 1
+    } else if (argument === '--ubuntu' && command === 'aggregate') {
+      if (options.ubuntu !== undefined) throw new Error('--ubuntu may only be provided once')
+      options.ubuntu = nextArgument(argv, index, '--ubuntu')
       index += 1
     } else if (argument === '--help') options.help = true
     else throw new Error(`Unknown option: ${argument}`)
   }
+  if (
+    command === 'aggregate' &&
+    options.help !== true &&
+    (options.windows === undefined || options.ubuntu === undefined || options.output === undefined)
+  ) {
+    throw new Error('aggregate requires --windows, --ubuntu, and --output')
+  }
   return options
 }
 
-async function main() {
-  const options = parseArguments(process.argv.slice(2))
+export async function runM12ProfileSmokeCli(argv, log = (value) => console.log(value)) {
+  const options = parseArguments(argv)
   if (options.help === true) {
-    console.log(
-      'Usage: node scripts/acceptance/m12-profile-smoke.mjs [--live] [--output <new-json-path>]',
+    log('Usage: node scripts/acceptance/m12-profile-smoke.mjs [--live] [--output <new-json-path>]')
+    log(
+      '       node scripts/acceptance/m12-profile-smoke.mjs aggregate --windows <json> --ubuntu <json> --output <new-json-path>',
     )
-    console.log(
-      'Without --live, print a non-writing plan. Live mode requires project-local DSH rc2.',
-    )
-    return
+    return 0
+  }
+  if (options.command === 'aggregate') {
+    const evidence = await Promise.all([
+      readEvidence(options.windows),
+      readEvidence(options.ubuntu),
+    ])
+    const result = aggregateM12ProfileSmokeEvidence(evidence)
+    const written = await writeM12ProfileResult(options.output, result)
+    log(JSON.stringify({ ...result, artifact: written }, null, 2))
+    return 0
   }
   const result = await runM12ProfileSmoke(options)
   if (options.output !== undefined) {
-    const written = await writeResult(options.output, result)
-    console.log(JSON.stringify({ ...result, artifact: written }, null, 2))
+    const written = await writeM12ProfileResult(options.output, result)
+    log(JSON.stringify({ ...result, artifact: written }, null, 2))
   } else {
-    console.log(JSON.stringify(result, null, 2))
+    log(JSON.stringify(result, null, 2))
   }
-  if (result.status === 'blocked') process.exitCode = 2
-  else if (result.status === 'fail') process.exitCode = 1
+  if (result.status === 'blocked') return 2
+  if (result.status === 'fail') return 1
+  return 0
+}
+
+async function main() {
+  process.exitCode = await runM12ProfileSmokeCli(process.argv.slice(2))
 }
 
 if (
