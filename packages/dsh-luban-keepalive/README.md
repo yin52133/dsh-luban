@@ -105,6 +105,84 @@ acceptance. Real Ubuntu SSH disconnect/tmux reattach, Windows task installation
 and logout, and authorized Windows/Ubuntu reboot recovery remain blocked checks
 in M03-F001 through M03-F003.
 
+## Staged Ubuntu acceptance
+
+The repository includes a fail-closed Ubuntu/tmux runner for the remaining M03-F001 and M03-F003
+host checks. Run it from a clean, committed checkout on the target Ubuntu host. Its preflight is
+read-only and requires Ubuntu, Node 22.19+ or 24+, `tmux`, `dsh`, `Linger=yes`, and an enabled and
+active `dsh-luban.service` with a positive `MainPID` and the exact
+`LUBAN_BOOT_RESTORE=1` token in that exact MainPID's `/proc` environment. The runner reads the
+MainPID again around this check so a unit-property string or a different process cannot satisfy it:
+
+```sh
+node scripts/acceptance/m03-ubuntu-keepalive.mjs preflight
+```
+
+Choose a new absolute directory outside the repository. `prepare` is the first mutating stage: it
+creates one uniquely owned `luban-m03-*` tmux heartbeat session and matching ledger/checkpoint
+record. The ledger must also be in a canonical, owner-only directory outside the repository (the
+default is under `~/.dsh`). It does not install a unit or change linger.
+
+```sh
+node scripts/acceptance/m03-ubuntu-keepalive.mjs prepare --apply \
+  --run-dir /var/tmp/dsh-luban-m03-acceptance
+```
+
+Disconnect the SSH client manually, reconnect, and create a new external witness JSON using the
+`runId`, machine-id hash, prepared boot id, and `recordedAt` from
+`01-prepared.json`. Both timestamps are epoch milliseconds; `reconnectedAt` must be later than
+`disconnectedAt`.
+
+```json
+{
+  "schemaVersion": "dsh-luban/m03-ubuntu-disconnect-witness/v1",
+  "runId": "<prepared runId>",
+  "machineIdSha256": "<prepared machineIdSha256>",
+  "bootId": "<prepared bootId>",
+  "observer": "<human operator>",
+  "sshDisconnected": true,
+  "disconnectedAt": 0,
+  "reconnectedAt": 1
+}
+```
+
+Continue in order:
+
+```sh
+node scripts/acceptance/m03-ubuntu-keepalive.mjs verify-disconnect \
+  --run-dir /var/tmp/dsh-luban-m03-acceptance \
+  --witness /var/tmp/m03-disconnect-witness.json
+node scripts/acceptance/m03-ubuntu-keepalive.mjs observe-attach \
+  --run-dir /var/tmp/dsh-luban-m03-acceptance
+node scripts/acceptance/m03-ubuntu-keepalive.mjs arm-reboot \
+  --run-dir /var/tmp/dsh-luban-m03-acceptance
+```
+
+`observe-attach` opens the real owned tmux session and waits for the operator to detach normally.
+`arm-reboot` records the boundary but never reboots. After a separately authorized human reboot,
+verify that the boot id changed and that systemd restored the ledger-owned checkpoint and heartbeat,
+then remove only the owned fixture:
+
+```sh
+node scripts/acceptance/m03-ubuntu-keepalive.mjs verify-reboot \
+  --run-dir /var/tmp/dsh-luban-m03-acceptance
+node scripts/acceptance/m03-ubuntu-keepalive.mjs cleanup --apply \
+  --run-dir /var/tmp/dsh-luban-m03-acceptance
+```
+
+The runner never disconnects SSH, invokes reboot, changes linger, or installs/removes systemd
+units. Each stage writes a new hash-chained evidence file and never overwrites earlier evidence.
+The four verification stages also advance only this run's ledger-owned checkpoint (using the same
+cross-process lock as the plugin); they do not change host policy or another session.
+Before attachment or deletion, cleanup enumerates the entire tmux session and requires exactly one
+pane with the owner marker's exact session id and command. `cleanup --apply` can therefore recover
+the exact owned fixture from the canonical owner marker even when the first evidence publication
+failed or the evidence chain is damaged. In that recovery case it reports `cleanup: "pass"` with
+`evidenceAppended: false`; damaged evidence is never rewritten or promoted.
+The SSH witness is explicitly human/operator attestation rather than a cryptographic network trace;
+successful real-host evidence is labeled `operator-attested`. Injected test operators are always
+labeled `simulated` and can never make either feature pass.
+
 ## Service API
 
 The Cordis service key is `lubanKeepalive` and implements `KeepaliveService` from `@luban/core`.
