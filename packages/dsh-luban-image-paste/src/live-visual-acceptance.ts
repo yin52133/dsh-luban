@@ -8,6 +8,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId as DshSessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { asSessionId } from 'dsh-luban-core'
+import type {
+  ProviderRequestIdentityAdapter,
+  ProviderRequestIdentityAttestation,
+  ProviderRequestIdentityQuery,
+} from 'dsh-luban-core'
 import type { Config } from './config.js'
 import { imagePrompt } from './dsh-injection.js'
 import { detectImage } from './image-format.js'
@@ -34,7 +39,11 @@ const DEFAULT_TIMEOUT_MS = 120_000
 const MIN_TIMEOUT_MS = 10_000
 const MAX_TIMEOUT_MS = 10 * 60_000
 const MODEL_PROBE_TIMEOUT_MS = 10_000
+const PROVIDER_IDENTITY_TIMEOUT_MS = 10_000
 const VISUAL_CHALLENGE = /^[A-Za-z0-9_-]{43}$/u
+const PROVIDER_IDENTITY_CHALLENGE = /^[A-Za-z0-9][A-Za-z0-9_-]{31,127}$/u
+const PROVIDER_IDENTITY_ADAPTER = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u
+const SHA256 = /^[a-f0-9]{64}$/u
 const MAX_BUILD_ARTIFACTS = 512
 const MAX_BUILD_ARTIFACT_BYTES = 64 * 1024 * 1024
 const MAX_BUILD_TOTAL_BYTES = 256 * 1024 * 1024
@@ -62,6 +71,26 @@ export interface VisualAcceptanceCheck {
   readonly actual: string
 }
 
+export interface VisualProviderRequestIdentityEvidence {
+  readonly schemaVersion: 'dsh-luban/provider-request-identity-evidence/v1'
+  readonly adapter: {
+    readonly id: string
+    readonly version: string
+    readonly runtimeSha256: string
+  }
+  readonly binding: {
+    readonly sessionIdSha256: string
+    readonly assistantEventSeq: number
+    readonly turn: number
+    readonly step: number
+    readonly assistantMessageIdSha256: string
+    readonly provider: string
+    readonly model: string
+    readonly challengeSha256: string
+  }
+  readonly providerRequestIdSha256: string
+}
+
 export interface VisualAcceptanceEvidence {
   readonly schemaVersion: 2
   readonly featureId: 'M06-F003'
@@ -81,6 +110,7 @@ export interface VisualAcceptanceEvidence {
     readonly provider: string
     readonly model: string
   }
+  readonly providerRequest?: VisualProviderRequestIdentityEvidence
   readonly image?: {
     readonly mime: 'image/png'
     readonly valid: boolean
@@ -633,6 +663,133 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
   )
 }
 
+function isBoundedProviderIdentityText(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length >= 1 &&
+    value.length <= maxLength &&
+    value.trim() === value &&
+    !hasBuildArtifactControlCharacter(value)
+  )
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function validateProviderRequestQuery(query: ProviderRequestIdentityQuery): void {
+  if (
+    !isBoundedProviderIdentityText(query.sessionId, 512) ||
+    !isNonNegativeSafeInteger(query.assistantEventSeq) ||
+    !isNonNegativeSafeInteger(query.turn) ||
+    !isNonNegativeSafeInteger(query.step) ||
+    !isBoundedProviderIdentityText(query.assistantMessageId, 512) ||
+    !isBoundedProviderIdentityText(query.provider, 256) ||
+    !isBoundedProviderIdentityText(query.model, 256) ||
+    !PROVIDER_IDENTITY_CHALLENGE.test(query.challenge)
+  ) {
+    throw new VisualAcceptanceFailure('provider request identity query is invalid')
+  }
+}
+
+function parseProviderRequestIdentityAttestation(
+  query: ProviderRequestIdentityQuery,
+  value: unknown,
+): ProviderRequestIdentityAttestation {
+  validateProviderRequestQuery(query)
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['schemaVersion', 'adapter', 'binding', 'providerRequestId']) ||
+    value.schemaVersion !== 'dsh-luban/provider-request-identity/v1' ||
+    !isRecord(value.adapter) ||
+    !hasExactKeys(value.adapter, ['id', 'version', 'runtimeSha256']) ||
+    typeof value.adapter.id !== 'string' ||
+    !PROVIDER_IDENTITY_ADAPTER.test(value.adapter.id) ||
+    !isBoundedProviderIdentityText(value.adapter.version, 128) ||
+    typeof value.adapter.runtimeSha256 !== 'string' ||
+    !SHA256.test(value.adapter.runtimeSha256) ||
+    !isRecord(value.binding) ||
+    !hasExactKeys(value.binding, [
+      'sessionId',
+      'assistantEventSeq',
+      'turn',
+      'step',
+      'assistantMessageId',
+      'provider',
+      'model',
+      'challengeSha256',
+    ]) ||
+    value.binding.sessionId !== query.sessionId ||
+    value.binding.assistantEventSeq !== query.assistantEventSeq ||
+    value.binding.turn !== query.turn ||
+    value.binding.step !== query.step ||
+    value.binding.assistantMessageId !== query.assistantMessageId ||
+    value.binding.provider !== query.provider ||
+    value.binding.model !== query.model ||
+    value.binding.challengeSha256 !== sha256(query.challenge) ||
+    !isBoundedProviderIdentityText(value.providerRequestId, 512)
+  ) {
+    throw new VisualAcceptanceFailure('provider request identity attestation is invalid')
+  }
+  return Object.freeze({
+    schemaVersion: 'dsh-luban/provider-request-identity/v1',
+    adapter: Object.freeze({
+      id: value.adapter.id,
+      version: value.adapter.version,
+      runtimeSha256: value.adapter.runtimeSha256,
+    }),
+    binding: Object.freeze({
+      sessionId: query.sessionId,
+      assistantEventSeq: query.assistantEventSeq,
+      turn: query.turn,
+      step: query.step,
+      assistantMessageId: query.assistantMessageId,
+      provider: query.provider,
+      model: query.model,
+      challengeSha256: sha256(query.challenge),
+    }),
+    providerRequestId: value.providerRequestId,
+  })
+}
+
+export async function attestVisualProviderRequest(
+  adapter: ProviderRequestIdentityAdapter,
+  query: ProviderRequestIdentityQuery,
+  signal: AbortSignal,
+): Promise<{
+  readonly attestation: ProviderRequestIdentityAttestation
+  readonly evidence: VisualProviderRequestIdentityEvidence
+}> {
+  validateProviderRequestQuery(query)
+  let value: unknown
+  try {
+    signal.throwIfAborted()
+    value = await adapter.attest(Object.freeze({ ...query }), signal)
+    signal.throwIfAborted()
+  } catch {
+    throw new VisualAcceptanceBlocked('provider request identity adapter is unavailable')
+  }
+  const attestation = parseProviderRequestIdentityAttestation(query, value)
+  return Object.freeze({
+    attestation,
+    evidence: Object.freeze({
+      schemaVersion: 'dsh-luban/provider-request-identity-evidence/v1',
+      adapter: attestation.adapter,
+      binding: Object.freeze({
+        sessionIdSha256: sha256(attestation.binding.sessionId),
+        assistantEventSeq: attestation.binding.assistantEventSeq,
+        turn: attestation.binding.turn,
+        step: attestation.binding.step,
+        assistantMessageIdSha256: sha256(attestation.binding.assistantMessageId),
+        provider: attestation.binding.provider,
+        model: attestation.binding.model,
+        challengeSha256: attestation.binding.challengeSha256,
+      }),
+      providerRequestIdSha256: sha256(attestation.providerRequestId),
+    }),
+  })
+}
+
 function ownedDirectory(workspaceRoot: string): string {
   return resolve(workspaceRoot, OWNER_DIRECTORY)
 }
@@ -1046,6 +1203,8 @@ export function createVisualTurnTracker(ctx: Context, agent: Agent): VisualTurnT
 interface ObservedVisualTurn {
   readonly observation: VisualTurnObservation
   readonly route: { readonly provider: string; readonly model: string }
+  readonly assistantEventSeq: number
+  readonly assistantMessageId: string
   readonly step: number
   readonly turn: number
 }
@@ -1135,6 +1294,8 @@ export function observeVisualTurn(
   return {
     turn,
     step: responding.data.step,
+    assistantEventSeq: responding.seq,
+    assistantMessageId: responding.data.message.id,
     route,
     observation: {
       requestedSessionId: agent.id,
@@ -1297,6 +1458,7 @@ export class MountedVisualAcceptanceService {
     let build: VisualAcceptanceBuildEvidence | undefined
     let response: VisualAcceptanceEvidence['response'] | undefined
     let endpoint: VisualAcceptanceEvidence['endpoint'] | undefined
+    let providerRequest: VisualProviderRequestIdentityEvidence | undefined
     let turn: number | undefined
     let baselineSequence: number | undefined
     let turnTracker: VisualTurnTracker | undefined
@@ -1312,6 +1474,10 @@ export class MountedVisualAcceptanceService {
     try {
       const waitTimeout = timeoutMs(options.timeoutMs)
       const requestBody = visualAcceptanceRequestBody(options)
+      const requestChallenge = options.challenge
+      if (requestChallenge === undefined) {
+        throw new VisualAcceptanceFailure('visual acceptance challenge is unavailable')
+      }
       const mount = this.#mount
       if (mount === undefined) {
         throw new VisualAcceptanceBlocked('production service/config mount is unavailable')
@@ -1584,6 +1750,31 @@ export class MountedVisualAcceptanceService {
         )
       }
       recordCheck(checks, 'visual-model-route', 'pass', `${route.provider}/${route.model}`)
+      const providerIdentityAdapter = this.#ctx.get('lubanProviderRequestIdentity')
+      if (providerIdentityAdapter === undefined) {
+        throw new VisualAcceptanceBlocked('provider request identity adapter is unavailable')
+      }
+      const providerIdentity = await attestVisualProviderRequest(
+        providerIdentityAdapter,
+        {
+          sessionId: requestedSessionId,
+          assistantEventSeq: observed.assistantEventSeq,
+          turn: observed.turn,
+          step: observed.step,
+          assistantMessageId: observed.assistantMessageId,
+          provider: route.provider,
+          model: route.model,
+          challenge: requestChallenge,
+        },
+        AbortSignal.timeout(PROVIDER_IDENTITY_TIMEOUT_MS),
+      )
+      providerRequest = providerIdentity.evidence
+      recordCheck(
+        checks,
+        'provider-request-identity',
+        'pass',
+        `adapter=${providerIdentity.evidence.adapter.id};requestSha256=${providerIdentity.evidence.providerRequestIdSha256}`,
+      )
       const postTurnLeaks = findUnexpectedPostTurnNonceLeaks(
         nonce,
         liveAgent.session.events,
@@ -1689,6 +1880,7 @@ export class MountedVisualAcceptanceService {
         ...(turn === undefined ? {} : { turn }),
       },
       ...(route === undefined ? {} : { agent: route }),
+      ...(providerRequest === undefined ? {} : { providerRequest }),
       ...(landedImageEvidence !== undefined
         ? { image: landedImageEvidence }
         : png === undefined || validation === undefined

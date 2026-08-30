@@ -1,7 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { AuthService, ImageIngestService } from 'dsh-luban-core'
+import type {
+  AuthService,
+  ImageIngestService,
+  ProviderRequestIdentityAdapter,
+} from 'dsh-luban-core'
 import { LubanError, modulePrefix, systemClock } from 'dsh-luban-core'
 import { SystemClipboardAdapter } from './clipboard.js'
 import { DynamicSharpProcessor } from './compressor.js'
@@ -16,6 +20,7 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     lubanImageIngest: ImageIngestService
     lubanImageVisualAcceptance: MountedVisualAcceptanceService
+    lubanProviderRequestIdentity: ProviderRequestIdentityAdapter
   }
 }
 
@@ -33,6 +38,7 @@ export { DshImageSessionInjector, imagePrompt } from './dsh-injection.js'
 export { ImagePasteHttpApi } from './http-api.js'
 export {
   MountedVisualAcceptanceService,
+  attestVisualProviderRequest,
   assessVisualObservation,
   createVisualAcceptancePlan,
   downgradeVisualAcceptanceEvidence,
@@ -57,6 +63,7 @@ export type {
   VisualAcceptanceEvidence,
   VisualAcceptanceStatus,
   VisualObservationAssessment,
+  VisualProviderRequestIdentityEvidence,
   VisualTurnObservation,
 } from './live-visual-acceptance.js'
 export { assertMimeMatches, detectImage, normalizeDeclaredMime } from './image-format.js'

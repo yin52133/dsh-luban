@@ -12,6 +12,7 @@
 | v0.4 | 2026-08-30 | Codex | 补齐 ReactDOM 客户端与真实 Sharp resize 验证 |
 | v0.5 | 2026-08-30 | Codex | 增加 mounted live 视觉读图验收与证据边界 |
 | v0.6 | 2026-08-30 | Codex | live 验收绑定实际挂载服务、fresh challenge 与 OS listener/process 身份 |
+| v0.7 | 2026-08-30 | Codex | 定义 provider request-ID adapter 契约并绑定精确响应身份 |
 
 ## 1. 概述与目标
 
@@ -130,13 +131,18 @@ M06-F001 ~ M06-F004 共 4 项，与 `checklist.json` 一一对应。
   live pass。服务端对 fresh challenge 仅返回 challenge/request 摘要与 PID，且自身只能产出 endpoint
   pending candidate；CLI 复验本地 current-HEAD build，并在 Windows 通过系统 `netstat`、Ubuntu 通过
   `/proc` 两次确认同一 PID 持有 literal IPv4 loopback listener，同时核验该进程由 workspace 中的精确
-  DSH entrypoint 启动，最终证据仅记录 Node/DSH entry/command/HTTP response 摘要。当前仍无真实视觉
-  provider session 与可信 provider request-ID adapter 的 direct evidence。
+  DSH entrypoint 启动，最终证据仅记录 Node/DSH entry/command/HTTP response 摘要。
+- 可选 `ctx.lubanProviderRequestIdentity` 契约只接受 provider wire adapter 对精确
+  session/assistant event seq/turn/step/message/provider/model/fresh challenge 的全字段回显；错配、额外字段、
+  非法 runtime 摘要或 adapter 异常均 fail closed。原始 provider request ID 只在进程内短暂存在，M06
+  evidence 仅保存 request/session/message 与 adapter runtime 的 SHA-256。CLI 将该绑定列为 final pass
+  必需项，并再次核对 session/turn/route/challenge，test-double 无法补造生产 pass。
 
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu profile 抽查系统剪贴板、浏览器 paste/drop 与长期 TTL；M06-F003 的
-  明确 blocker 是尚无 mounted live 视觉 provider 读图 pass，且 rc2 公共成功事件未暴露 provider
-  request ID，仍需可信 provider adapter 将本次精确 message/turn/step 与真实请求 ID 关联。
+  本地 adapter 消费与验证边界已完成，但 rc2 公共成功事件本身不暴露 provider request ID，仓库内也
+  没有可替代真实 provider wire observer 的通用实现。明确 blocker 是安装并信任对应 provider 的
+  adapter 后，用真实 mounted 视觉 session 完成读图 pass 与 provider request-ID direct evidence。
 - 最近列表返回数量受 `recentLimit` 限制，但当前 UI 读取原图而非缩略图；大图工作区应调低该值，缩略图列入后续优化。
 - Web 与 CLI API 请求均有 10 秒完整 deadline；该期限覆盖 headers 与 JSON body，JSON 响应另有显式字节上限。

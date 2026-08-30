@@ -119,6 +119,16 @@ message's turn and removes only the attachment it created after that turn
 settles. A timeout or uncertain queue state retains the referenced attachment
 and fails closed.
 
+A live pass also requires the optional `lubanProviderRequestIdentity` service
+from a provider-wire adapter. The adapter must echo the exact session,
+assistant event sequence, turn, step, message, provider, model, and fresh
+challenge binding. The mounted service rejects malformed or mismatched
+attestations; persisted evidence contains only request/session/message and
+adapter-runtime SHA-256 digests, never the raw provider request ID. Because rc2
+success events do not expose that ID, a real provider-specific adapter is an
+external acceptance prerequisite rather than something this generic plugin can
+infer from private replay state.
+
 `luban-img-visual-acceptance` defaults to a plan and cannot call a provider
 unless `--live` is explicit. Live mode calls the authenticated endpoint on the
 already-mounted production plugin; it requires `LUBAN_SESSION_COOKIE`,

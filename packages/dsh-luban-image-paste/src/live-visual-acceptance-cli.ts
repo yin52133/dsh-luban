@@ -53,6 +53,7 @@ const REQUIRED_PASS_CHECKS = Object.freeze([
   'same-provider-model-response',
   'visual-nonce-readback',
   'visual-model-route',
+  'provider-request-identity',
   'nonce-output-boundary',
   'cleanup',
   'git-clean-after',
@@ -409,6 +410,7 @@ function parseProductionEvidence(value: unknown): VisualAcceptanceEvidence {
     'nonceSha256',
     'session',
     'agent',
+    'providerRequest',
     'image',
     'git',
     'build',
@@ -461,6 +463,9 @@ function parseProductionEvidence(value: unknown): VisualAcceptanceEvidence {
   if (value.agent !== undefined && !isAgentEvidence(value.agent)) {
     throw new Error('agent evidence is invalid')
   }
+  if (value.providerRequest !== undefined && !isProviderRequestEvidence(value.providerRequest)) {
+    throw new Error('provider request evidence is invalid')
+  }
   if (value.image !== undefined && !isImageEvidence(value.image)) {
     throw new Error('image evidence is invalid')
   }
@@ -480,10 +485,16 @@ function parseProductionEvidence(value: unknown): VisualAcceptanceEvidence {
     value.session.agentId === value.session.requestedId &&
     isNonNegativeInteger(value.session.turn) &&
     isAgentEvidence(value.agent) &&
+    isProviderRequestEvidence(value.providerRequest) &&
+    value.providerRequest.binding.sessionIdSha256 === sha256(value.session.requestedId) &&
+    value.providerRequest.binding.turn === value.session.turn &&
+    value.providerRequest.binding.provider === value.agent.provider &&
+    value.providerRequest.binding.model === value.agent.model &&
     isImageEvidence(value.image) &&
     isResponseEvidence(value.response) &&
     value.response.matched &&
     isEndpointEvidence(value.endpoint) &&
+    value.providerRequest.binding.challengeSha256 === value.endpoint.challengeSha256 &&
     value.endpoint.listener !== undefined &&
     value.endpoint.responseSha256 !== undefined &&
     value.endpoint.responseBytes !== undefined &&
@@ -585,6 +596,47 @@ function isAgentEvidence(value: unknown): value is NonNullable<VisualAcceptanceE
     hasExactKeys(value, ['provider', 'model']) &&
     isBoundedText(value.provider, 256) &&
     isBoundedText(value.model, 256)
+  )
+}
+
+function isProviderRequestEvidence(
+  value: unknown,
+): value is NonNullable<VisualAcceptanceEvidence['providerRequest']> {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['schemaVersion', 'adapter', 'binding', 'providerRequestIdSha256']) ||
+    value.schemaVersion !== 'dsh-luban/provider-request-identity-evidence/v1' ||
+    !isSha256(value.providerRequestIdSha256) ||
+    !isRecord(value.adapter) ||
+    !hasExactKeys(value.adapter, ['id', 'version', 'runtimeSha256']) ||
+    typeof value.adapter.id !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u.test(value.adapter.id) ||
+    !isBoundedText(value.adapter.version, 128) ||
+    value.adapter.version.trim() !== value.adapter.version ||
+    !isSha256(value.adapter.runtimeSha256) ||
+    !isRecord(value.binding) ||
+    !hasExactKeys(value.binding, [
+      'sessionIdSha256',
+      'assistantEventSeq',
+      'turn',
+      'step',
+      'assistantMessageIdSha256',
+      'provider',
+      'model',
+      'challengeSha256',
+    ])
+  ) {
+    return false
+  }
+  return (
+    isSha256(value.binding.sessionIdSha256) &&
+    isNonNegativeInteger(value.binding.assistantEventSeq) &&
+    isNonNegativeInteger(value.binding.turn) &&
+    isNonNegativeInteger(value.binding.step) &&
+    isSha256(value.binding.assistantMessageIdSha256) &&
+    isBoundedText(value.binding.provider, 256) &&
+    isBoundedText(value.binding.model, 256) &&
+    isSha256(value.binding.challengeSha256)
   )
 }
 
@@ -739,6 +791,11 @@ async function attestMountedAcceptance(
     candidate.session.agentId !== candidate.session.requestedId ||
     !isNonNegativeInteger(candidate.session.turn) ||
     !isAgentEvidence(candidate.agent) ||
+    !isProviderRequestEvidence(candidate.providerRequest) ||
+    candidate.providerRequest.binding.sessionIdSha256 !== sha256(candidate.session.requestedId) ||
+    candidate.providerRequest.binding.turn !== candidate.session.turn ||
+    candidate.providerRequest.binding.provider !== candidate.agent.provider ||
+    candidate.providerRequest.binding.model !== candidate.agent.model ||
     !isImageEvidence(candidate.image) ||
     !isResponseEvidence(candidate.response) ||
     !candidate.response.matched ||
@@ -750,6 +807,7 @@ async function attestMountedAcceptance(
     endpoint.port !== response.port ||
     endpoint.nodeVersion !== candidate.platform.node ||
     endpoint.challengeSha256 !== sha256(response.challenge) ||
+    candidate.providerRequest.binding.challengeSha256 !== endpoint.challengeSha256 ||
     endpoint.requestSha256 !== sha256(response.requestBody) ||
     !serverCandidateChecksPassed(candidate.checks)
   ) {

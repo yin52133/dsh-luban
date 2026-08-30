@@ -10,6 +10,7 @@ import { asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { imagePrompt } from '../src/dsh-injection.js'
 import {
+  attestVisualProviderRequest,
   createVisualAcceptanceRoot,
   inspectCleanVisualAcceptanceGit,
   inspectVisualAcceptanceBuild,
@@ -225,6 +226,85 @@ describe('M06 live visual acceptance', () => {
       simulatedOutcome: 'pass',
     })
     expect(JSON.stringify(result)).not.toContain(NONCE)
+  })
+
+  it('binds provider request identity to the exact response and stores only digests', async () => {
+    const challenge = 'C'.repeat(43)
+    const query = {
+      sessionId: SESSION,
+      assistantEventSeq: 8,
+      turn: 4,
+      step: 2,
+      assistantMessageId: 'assistant-2',
+      provider: PROVIDER,
+      model: MODEL,
+      challenge,
+    } as const
+    const providerRequestId = 'provider-request-sensitive-id'
+    const validAttestation = {
+      schemaVersion: 'dsh-luban/provider-request-identity/v1',
+      adapter: {
+        id: 'provider-wire-test',
+        version: '1.0.0',
+        runtimeSha256: 'a'.repeat(64),
+      },
+      binding: {
+        sessionId: query.sessionId,
+        assistantEventSeq: query.assistantEventSeq,
+        turn: query.turn,
+        step: query.step,
+        assistantMessageId: query.assistantMessageId,
+        provider: query.provider,
+        model: query.model,
+        challengeSha256: createHash('sha256').update(challenge).digest('hex'),
+      },
+      providerRequestId,
+    }
+    const adapter = {
+      attest: vi.fn((): Promise<unknown> => Promise.resolve(validAttestation)),
+    }
+
+    const result = await attestVisualProviderRequest(adapter, query, new AbortController().signal)
+
+    expect(result.attestation.providerRequestId).toBe(providerRequestId)
+    expect(result.evidence).toMatchObject({
+      adapter: { id: 'provider-wire-test', version: '1.0.0' },
+      binding: { turn: 4, step: 2, provider: PROVIDER, model: MODEL },
+    })
+    expect(JSON.stringify(result.evidence)).not.toContain(providerRequestId)
+    expect(result.evidence.providerRequestIdSha256).toBe(
+      createHash('sha256').update(providerRequestId).digest('hex'),
+    )
+
+    adapter.attest.mockResolvedValueOnce({
+      ...validAttestation,
+      binding: {
+        ...validAttestation.binding,
+        step: 3,
+      },
+    })
+    await expect(
+      attestVisualProviderRequest(adapter, query, new AbortController().signal),
+    ).rejects.toThrow('provider request identity attestation is invalid')
+  })
+
+  it('treats an unavailable provider request adapter as an external blocker', async () => {
+    await expect(
+      attestVisualProviderRequest(
+        { attest: () => Promise.reject(new Error('provider secret must not escape')) },
+        {
+          sessionId: SESSION,
+          assistantEventSeq: 8,
+          turn: 4,
+          step: 2,
+          assistantMessageId: 'assistant-2',
+          provider: PROVIDER,
+          model: MODEL,
+          challenge: 'C'.repeat(43),
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('provider request identity adapter is unavailable')
   })
 
   it('allows nonce readback only in model-authored output for the observed turn', () => {
@@ -926,6 +1006,25 @@ function productionEvidence(): VisualAcceptanceEvidence {
     nonceSha256: 'b'.repeat(64),
     session: { requestedId: SESSION, respondingId: SESSION, agentId: SESSION, turn: 4 },
     agent: { provider: PROVIDER, model: MODEL },
+    providerRequest: {
+      schemaVersion: 'dsh-luban/provider-request-identity-evidence/v1',
+      adapter: {
+        id: 'provider-wire-test',
+        version: '1.0.0',
+        runtimeSha256: '6'.repeat(64),
+      },
+      binding: {
+        sessionIdSha256: createHash('sha256').update(SESSION).digest('hex'),
+        assistantEventSeq: 8,
+        turn: 4,
+        step: 2,
+        assistantMessageIdSha256: createHash('sha256').update('assistant-2').digest('hex'),
+        provider: PROVIDER,
+        model: MODEL,
+        challengeSha256: 'f'.repeat(64),
+      },
+      providerRequestIdSha256: '7'.repeat(64),
+    },
     image: {
       mime: 'image/png',
       valid: true,
@@ -980,6 +1079,7 @@ function productionEvidence(): VisualAcceptanceEvidence {
       'same-provider-model-response',
       'visual-nonce-readback',
       'visual-model-route',
+      'provider-request-identity',
       'nonce-output-boundary',
       'cleanup',
       'git-clean-after',
