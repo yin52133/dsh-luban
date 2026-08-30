@@ -1,13 +1,15 @@
+import { existsSync, realpathSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runOperatorCli } from '../src/operator-cli.js'
 import type { ProcessOptions, ProcessResult, ProcessRunner } from '../src/process-runner.js'
 import { UserSystemdInstaller } from '../src/systemd.js'
 
 const directories = new Set<string>()
+const originalPath = process.env.PATH
 
 interface ProcessCall {
   readonly command: string
@@ -17,12 +19,14 @@ interface ProcessCall {
 
 class FakeRunner implements ProcessRunner {
   public readonly calls: ProcessCall[] = []
-  readonly #respond: (call: ProcessCall) => ProcessResult
+  public unitPath: string | undefined
+  public linger = 'yes'
+  public loaded = false
+  public enabled = false
+  public active = false
+  readonly #respond: ((call: ProcessCall) => ProcessResult | undefined) | undefined
 
-  public constructor(
-    respond: (call: ProcessCall) => ProcessResult = (call): ProcessResult =>
-      result(call.command === 'loginctl' ? 'yes\n' : ''),
-  ) {
+  public constructor(respond?: (call: ProcessCall) => ProcessResult | undefined) {
     this.#respond = respond
   }
 
@@ -33,7 +37,46 @@ class FakeRunner implements ProcessRunner {
   ): Promise<ProcessResult> {
     const call = { command, args, options }
     this.calls.push(call)
-    return Promise.resolve(this.#respond(call))
+    const custom = this.#respond?.(call)
+    if (custom !== undefined) return Promise.resolve(custom)
+    if (command === 'loginctl') return Promise.resolve(result(`${this.linger}\n`))
+    if (args.includes('show')) return Promise.resolve(result(this.#snapshot()))
+    if (args.includes('daemon-reload')) {
+      this.loaded = this.unitPath !== undefined && existsSync(this.unitPath)
+      if (!this.loaded) {
+        this.enabled = false
+        this.active = false
+      }
+      return Promise.resolve(result())
+    }
+    if (args.includes('enable') && args.includes('--now')) {
+      this.enabled = true
+      this.active = true
+      return Promise.resolve(result())
+    }
+    if (args.includes('disable')) {
+      this.enabled = false
+      this.active = false
+      return Promise.resolve(result())
+    }
+    return Promise.resolve(result())
+  }
+
+  #snapshot(): string {
+    const service = 'dsh-luban.service'
+    return [
+      `Id=${service}`,
+      `LoadState=${this.loaded ? 'loaded' : 'not-found'}`,
+      `FragmentPath=${this.loaded && this.unitPath !== undefined ? realpathSync(this.unitPath) : ''}`,
+      'DropInPaths=',
+      'NeedDaemonReload=no',
+      `UnitFileState=${this.loaded ? (this.enabled ? 'enabled' : 'disabled') : ''}`,
+      `ActiveState=${this.active ? 'active' : 'inactive'}`,
+      `SubState=${this.active ? 'running' : 'dead'}`,
+      `MainPID=${this.active ? '4242' : '0'}`,
+      `Type=${this.loaded ? 'exec' : ''}`,
+      '',
+    ].join('\n')
   }
 }
 
@@ -48,22 +91,30 @@ function temporaryDirectory(): string {
 }
 
 function installer(runner: ProcessRunner): UserSystemdInstaller {
-  return new UserSystemdInstaller({
+  const target = new UserSystemdInstaller({
     runner,
     serviceName: 'dsh-luban',
-    dshExecutable: 'dsh',
+    dshExecutable: process.execPath,
     timeoutMs: 1_000,
     platform: 'linux',
     unitDirectory: temporaryDirectory(),
     currentUser: 'builder',
   })
+  if (runner instanceof FakeRunner) runner.unitPath = target.unitPath
+  return target
 }
 
 function envelope(output: string): Readonly<Record<string, unknown>> {
   return JSON.parse(output) as Readonly<Record<string, unknown>>
 }
 
+beforeEach((): void => {
+  process.env.PATH = dirname(process.execPath)
+})
+
 afterEach(async (): Promise<void> => {
+  if (originalPath === undefined) delete process.env.PATH
+  else process.env.PATH = originalPath
   await Promise.all(
     [...directories].map(async (directory): Promise<void> => {
       await rm(directory, { recursive: true, force: true })
@@ -88,9 +139,12 @@ describe('server-mode operator CLI', (): void => {
       action: 'install',
       preflight: { linger: 'enabled', unit: 'missing', ready: true },
     })
-    expect(runner.calls.map((call) => [call.command, call.args])).toEqual([
-      ['loginctl', ['show-user', 'builder', '--property=Linger', '--value']],
-    ])
+    expect(runner.calls.some((call) => call.args.includes('show'))).toBe(true)
+    expect(
+      runner.calls.every(
+        (call) => !call.args.includes('enable') && !call.args.includes('daemon-reload'),
+      ),
+    ).toBe(true)
     await expect(readFile(target.unitPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -108,7 +162,7 @@ describe('server-mode operator CLI', (): void => {
       ok: false,
       error: { code: 'E_INVALID_INPUT' },
     })
-    expect(runner.calls).toHaveLength(1)
+    expect(runner.calls.every((call) => !call.args.includes('enable'))).toBe(true)
 
     const installed = await runOperatorCli(['install', '--apply'], { installer: target })
     expect(installed.exitCode).toBe(0)
@@ -119,7 +173,7 @@ describe('server-mode operator CLI', (): void => {
       applied: true,
     })
     expect(await readFile(target.unitPath, 'utf8')).toContain(
-      'ExecStart="/usr/bin/env" "dsh" "--profile" "ubuntu-server" "--no-open"',
+      `ExecStart="${process.execPath.replaceAll('\\', '\\\\')}" "--profile" "ubuntu-server" "--no-open"`,
     )
 
     const uninstalled = await runOperatorCli(['uninstall', '--apply'], { installer: target })
@@ -135,11 +189,10 @@ describe('server-mode operator CLI', (): void => {
 
   it('provides read-only preflight and status with no raw command output', async (): Promise<void> => {
     const secret = 'server-mode-test-secret-value'
-    const runner = new FakeRunner((call): ProcessResult => {
+    const runner = new FakeRunner((call): ProcessResult | undefined => {
       if (call.command === 'loginctl') return result('no\n', 0, secret)
-      if (call.args.includes('is-enabled')) return result('disabled\n', 1, secret)
-      if (call.args.includes('is-active')) return result('inactive\n', 3, secret)
-      return result('', 1, secret)
+      if (call.args.includes('show')) return undefined
+      return undefined
     })
     const target = installer(runner)
 
@@ -155,7 +208,7 @@ describe('server-mode operator CLI', (): void => {
     expect(envelope(status.output)).toMatchObject({
       ok: true,
       mode: 'read-only',
-      status: { linger: 'disabled', enabled: 'disabled', active: 'inactive' },
+      status: { linger: 'disabled', enabled: 'not-found', active: 'inactive' },
     })
     expect(`${preflight.output}${status.output}`).not.toContain(secret)
     expect(runner.calls.every((call) => !call.args.includes('enable-linger'))).toBe(true)

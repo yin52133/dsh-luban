@@ -7,28 +7,43 @@ artifact downloads. The Cordis id and HTTP prefix are `luban-server-mode` and
 
 ## systemd launcher
 
-`lubanServerMode.install({ user, profile: 'ubuntu-server' })` writes
-`~/.config/systemd/user/dsh-luban.service`, enables linger for the named account, reloads user
-units, and runs `systemctl --user enable --now dsh-luban.service`. Commands are argv-based,
-time-bounded, cancellable, and never run through a shell.
+`lubanServerMode.install({ user, profile: 'ubuntu-server' })` first verifies that linger is already
+enabled and resolves `service.dshExecutable` to one executable, absolute, regular-file path. It also
+captures the current Node executable and a bounded, absolute-only service `PATH`. It then writes
+`~/.config/systemd/user/dsh-luban.service`, reloads user units, and runs
+`systemctl --user enable --now dsh-luban.service`. Commands are argv-based, time-bounded,
+cancellable, and never run through a shell.
+
+Preflight and every mutation boundary read one strict, machine-oriented `systemctl show` snapshot.
+The installer rejects same-name units loaded from another search path, drop-ins, stale manager
+configuration, transient enablement, and ambiguous runtime states. Installation succeeds only when
+the managed fragment is current and the service is permanently enabled, `active/running`,
+`Type=exec`, and has `MainPID > 0`. A failed activation restores the exact prior enabled/running
+semantics; a newly created unit is removed only after rollback is verified. Uninstall likewise
+proves `disabled`, stopped, and `MainPID=0` before unlinking the owned unit, then reloads and proves
+the manager no longer has that unit.
 
 The unit runs:
 
 ```text
-ExecStart="/usr/bin/env" "dsh" "--profile" "ubuntu-server" "--no-open"
+ExecStart="/absolute/path/to/dsh" "--profile" "ubuntu-server" "--no-open"
 ```
 
-It sets the exact `LUBAN_BOOT_RESTORE=1` sentinel, forcing M03 to reconstruct ledger-owned tmux
-work even when the profile config sets `bootRestore: false`. Only the literal string `1` activates
-this deployment override; other truthy-looking environment values do not. User linger keeps the
-user service manager running before an interactive login; `loginctl enable-linger` must be
-authorized by local policy. The package intentionally avoids root services.
+The unit carries the validated `PATH` explicitly, with the canonical directory of the current Node
+executable first. The `dsh` and Node file identities are rechecked before and after activation, so
+boot never inherits the systemd user manager's ambient `PATH` (including for npm-style shell shims).
+It sets the exact `LUBAN_BOOT_RESTORE=1` sentinel, forcing M03 to reconstruct ledger-owned tmux work
+even when the profile config sets `bootRestore: false`. Only the literal string `1` activates this
+deployment override; other truthy-looking environment values do not. User linger keeps the user
+service manager running before an interactive login. The installer never changes linger;
+`loginctl enable-linger` is a separate operator/admin action that must be explicitly authorized by
+local policy. The package intentionally avoids root services.
 
 On Windows and macOS the plugin logs that it is disabled and registers no service or routes.
 
 ## Features
 
-- User-level `dsh-luban.service` install/uninstall with linger and boot recovery.
+- User-level `dsh-luban.service` install/uninstall with preverified linger and boot recovery.
 - Durable FIFO build queue with a configurable concurrency ceiling.
 - Disk, load, and per-build timeout guards with fail-closed probe deadlines and optional
   Taskboard alerts.
@@ -46,8 +61,22 @@ dsh plugin --profile ubuntu-server add dsh-luban-auth dsh-luban-keepalive dsh-lu
 ```
 
 The host must provide systemd, `loginctl`, tmux, and each compiler referenced by configured build
-templates. Installation never runs automatically; call `lubanServerMode.install()` after reviewing
-the generated user-level unit and local linger policy.
+templates. Installation never runs automatically. First inspect linger without mutation:
+
+```sh
+loginctl show-user "$USER" --property=Linger --value
+luban-server-mode preflight
+```
+
+If the first command reports `no`, an authorized operator must separately approve and run
+`loginctl enable-linger "$USER"` (or the site-specific equivalent). Neither preflight nor install
+runs that command. After local policy approval and a successful preflight, review the generated
+user-level unit, then apply and inspect the verified runtime state:
+
+```sh
+luban-server-mode install --apply
+luban-server-mode status
+```
 
 ## Configuration
 

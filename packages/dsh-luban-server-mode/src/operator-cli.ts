@@ -19,6 +19,8 @@ Usage:
 Safety:
   With no command, or without --apply, install/uninstall are read-only plans.
   Linger policy is never changed; installation requires loginctl Linger=yes.
+  Preflight resolves and identity-locks dsh, Node, PATH, and the effective unit.
+  Install verifies permanent enablement, active/running, Type=exec, and positive MainPID.
 `
 
 type OperatorCommand = 'plan' | 'preflight' | 'status' | 'install' | 'uninstall'

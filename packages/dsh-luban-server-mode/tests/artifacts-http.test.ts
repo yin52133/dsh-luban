@@ -188,7 +188,7 @@ describe('ServerModeHttpApi', (): void => {
       new UserSystemdInstaller({
         runner: new NoopRunner(),
         serviceName: 'dsh-luban',
-        dshExecutable: 'dsh',
+        dshExecutable: process.execPath,
         timeoutMs: 1_000,
         platform: 'linux',
         unitDirectory: join(directory, 'units'),
