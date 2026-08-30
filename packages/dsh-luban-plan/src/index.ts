@@ -49,6 +49,7 @@ export async function apply(ctx: Context, input: Partial<PlanConfig> = {}): Prom
     taskStoreProvider: (): TaskStore | undefined =>
       ctx.get('lubanTaskStore') as TaskStore | undefined,
     sink: new DshPlanFeedbackSink(ctx.agents),
+    onError: (error: unknown): void => ctx.logger.warn(error),
   })
   await service.initialize()
   const api = new PlanHttpApi(service, auth)

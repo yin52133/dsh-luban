@@ -177,6 +177,128 @@ describe('FilePlanService', () => {
     })
   })
 
+  it('returns a committed submit while isolating feedback listener and sink failures', async () => {
+    const accountListenerError = new Error('account listener failed')
+    const systemListenerError = new Error('system listener failed')
+    const sinkError = new Error('sink failed')
+    const failures: unknown[] = []
+    const accountFeedback: PlanFeedbackEvent[] = []
+    const systemFeedback: PlanFeedbackEvent[] = []
+    const stateFile = join(directory, 'state.json')
+    const service = new FilePlanService({
+      repository: new PlanRepository(stateFile, 'docs/plans', clock),
+      accountSessions,
+      protectedTools: [],
+      exemptTools: [],
+      sink: {
+        deliver: (): Promise<void> => Promise.reject(sinkError),
+      },
+      onError: (error): void => {
+        failures.push(error)
+      },
+    })
+    await service.initialize()
+    service.subscribeFeedback(ALICE, undefined, (): Promise<void> =>
+      Promise.reject(accountListenerError),
+    )
+    service.subscribeFeedback(ALICE, undefined, (event): void => {
+      accountFeedback.push(event)
+    })
+    service.subscribeSystemFeedback((): void => {
+      throw systemListenerError
+    })
+    service.subscribeSystemFeedback((event): void => {
+      systemFeedback.push(event)
+    })
+
+    const submitted = await service.submit({
+      accountId: ALICE,
+      workspace: directory,
+      slug: 'side-effect-failures',
+      sections,
+    })
+
+    expect(submitted.status).toBe('in-review')
+    expect(accountFeedback).toHaveLength(1)
+    expect(systemFeedback).toHaveLength(1)
+    await expect(service.get(submitted.id, ALICE)).resolves.toEqual(submitted)
+    await expect(readFile(stateFile, 'utf8')).resolves.toContain(submitted.id)
+    expect(failures).toHaveLength(3)
+    expect(failures[0]).toMatchObject({
+      code: 'E_IO',
+      details: { planId: submitted.id, operation: 'account-feedback-listener' },
+    })
+    expect(failures[1]).toMatchObject({
+      code: 'E_IO',
+      details: { planId: submitted.id, operation: 'system-feedback-listener' },
+    })
+    expect(failures[2]).toMatchObject({
+      code: 'E_IO',
+      details: { planId: submitted.id, operation: 'feedback-sink' },
+    })
+    expect((failures[0] as Error).cause).toBe(accountListenerError)
+    expect((failures[1] as Error).cause).toBe(systemListenerError)
+    expect((failures[2] as Error).cause).toBe(sinkError)
+  })
+
+  it('returns an approved plan when feedback and linked-task side effects fail', async () => {
+    const sinkError = new Error('approved feedback failed')
+    const taskTransitionError = new Error('task transition failed')
+    const failures: unknown[] = []
+    const transitions = vi.fn<TaskStore['transition']>().mockRejectedValue(taskTransitionError)
+    const taskStore: TaskStore = {
+      create: vi.fn<TaskStore['create']>(),
+      update: vi.fn<TaskStore['update']>(),
+      transition: transitions,
+      get: vi.fn<TaskStore['get']>().mockResolvedValue(todoTask()),
+      query: vi.fn<TaskStore['query']>().mockResolvedValue([]),
+      subscribe: vi.fn<TaskStore['subscribe']>().mockReturnValue((): void => undefined),
+    }
+    const service = new FilePlanService({
+      repository: new PlanRepository(join(directory, 'state.json'), 'docs/plans', clock),
+      accountSessions,
+      protectedTools: [],
+      exemptTools: [],
+      taskStore,
+      sink: {
+        deliver: (event): Promise<void> =>
+          event.status === 'approved' ? Promise.reject(sinkError) : Promise.resolve(),
+      },
+      onError: (error): void => {
+        failures.push(error)
+      },
+    })
+    await service.initialize()
+    const submitted = await service.submit({
+      accountId: ALICE,
+      taskId: asTaskId('T-1'),
+      workspace: directory,
+      slug: 'approved-side-effect-failures',
+      sections,
+    })
+
+    const approved = await service.decide(
+      submitted.id,
+      { decision: 'approve', expectedVersion: submitted.version },
+      reviewer,
+    )
+
+    expect(approved).toMatchObject({ status: 'approved', version: submitted.version + 1 })
+    await expect(service.get(approved.id, ALICE)).resolves.toEqual(approved)
+    expect(transitions).toHaveBeenCalledOnce()
+    expect(failures).toHaveLength(2)
+    expect(failures[0]).toMatchObject({
+      code: 'E_IO',
+      details: { planId: approved.id, operation: 'feedback-sink' },
+    })
+    expect(failures[1]).toMatchObject({
+      code: 'E_IO',
+      details: { planId: approved.id, operation: 'linked-task-transition' },
+    })
+    expect((failures[0] as Error).cause).toBe(sinkError)
+    expect((failures[1] as Error).cause).toBe(taskTransitionError)
+  })
+
   it('requires structured rejection feedback and supports revise-to-review', async () => {
     const service = new FilePlanService({
       repository: new PlanRepository(join(directory, 'state.json'), 'docs/plans', clock),

@@ -40,6 +40,21 @@ export interface PlanFeedbackSink {
   deliver(event: PlanFeedbackEvent): void | Promise<void>
 }
 
+type PlanSideEffect =
+  | 'account-feedback-listener'
+  | 'system-feedback-listener'
+  | 'feedback-sink'
+  | 'feedback-publish'
+  | 'linked-task-transition'
+
+interface PlanFeedbackDetail {
+  readonly decision?: 'approve' | 'reject'
+  readonly comment?: string
+  readonly reviewer?: Actor
+}
+
+type PlanFeedbackListener = (event: PlanFeedbackEvent) => void | Promise<void>
+
 export type { AccountActor, AccountPlanInput } from 'dsh-luban-core'
 
 export interface PlanServiceWithFeedback extends PlanService {
@@ -55,9 +70,9 @@ export interface PlanServiceWithFeedback extends PlanService {
   subscribeFeedback(
     accountId: AccountId,
     sessionId: SessionId | undefined,
-    listener: (event: PlanFeedbackEvent) => void,
+    listener: PlanFeedbackListener,
   ): Unsubscribe
-  subscribeSystemFeedback(listener: (event: PlanFeedbackEvent) => void): Unsubscribe
+  subscribeSystemFeedback(listener: PlanFeedbackListener): Unsubscribe
   getDocument(id: PlanId, accountId: AccountId): Promise<string>
 }
 
@@ -92,10 +107,11 @@ export class FilePlanService implements PlanServiceWithFeedback {
   readonly #accountSessions: AccountSessionRegistry
   readonly #taskStore: () => TaskStore | undefined
   readonly #sink: PlanFeedbackSink | undefined
+  readonly #onError: (error: unknown) => void
   readonly #plans = new Map<PlanId, StoredPlan>()
   readonly #sessionPlans = new Map<SessionId, PlanId>()
-  readonly #listeners = new Map<AccountId, Map<string, Set<(event: PlanFeedbackEvent) => void>>>()
-  readonly #systemListeners = new Set<(event: PlanFeedbackEvent) => void>()
+  readonly #listeners = new Map<AccountId, Map<string, Set<PlanFeedbackListener>>>()
+  readonly #systemListeners = new Set<PlanFeedbackListener>()
 
   public constructor(options: {
     readonly repository: PlanRepository
@@ -105,12 +121,20 @@ export class FilePlanService implements PlanServiceWithFeedback {
     readonly taskStore?: TaskStore
     readonly taskStoreProvider?: () => TaskStore | undefined
     readonly sink?: PlanFeedbackSink
+    readonly onError?: (error: unknown) => void
   }) {
     this.#repository = options.repository
     this.#guard = new ApprovalPlanGuard(options.protectedTools, options.exemptTools)
     this.#accountSessions = options.accountSessions
     this.#taskStore = options.taskStoreProvider ?? ((): TaskStore | undefined => options.taskStore)
     this.#sink = options.sink
+    this.#onError =
+      options.onError ??
+      ((error: unknown): void => {
+        process.emitWarning(error instanceof Error ? error : new Error(String(error)), {
+          code: 'LUBAN_PLAN_SIDE_EFFECT',
+        })
+      })
   }
 
   public async initialize(): Promise<void> {
@@ -130,7 +154,7 @@ export class FilePlanService implements PlanServiceWithFeedback {
     await this.#validateReferences(input)
     const stored = await this.#repository.create(input)
     this.#remember(stored)
-    await this.#publish(stored)
+    await this.#publishCommitted(stored)
     return publicPlan(stored)
   }
 
@@ -138,7 +162,7 @@ export class FilePlanService implements PlanServiceWithFeedback {
     await this.#validateReferences(input)
     const stored = await this.#repository.create({ ...input, status: 'draft' })
     this.#remember(stored)
-    await this.#publish(stored)
+    await this.#publishCommitted(stored)
     return publicPlan(stored)
   }
 
@@ -180,12 +204,16 @@ export class FilePlanService implements PlanServiceWithFeedback {
       },
     )
     this.#remember(stored)
-    await this.#publish(stored, {
+    await this.#publishCommitted(stored, {
       decision: decision.decision,
       ...(decision.comment === undefined ? {} : { comment: decision.comment.trim() }),
       reviewer,
     })
-    if (decision.decision === 'approve') await this.#advanceLinkedTask(stored, reviewer)
+    if (decision.decision === 'approve') {
+      await this.#runSideEffect(stored, 'linked-task-transition', async (): Promise<void> => {
+        await this.#advanceLinkedTask(stored, reviewer)
+      })
+    }
     return publicPlan(stored)
   }
 
@@ -209,7 +237,7 @@ export class FilePlanService implements PlanServiceWithFeedback {
       return { ...current, status: to, version: current.version + 1, updatedAt: now }
     })
     this.#remember(stored)
-    await this.#publish(stored)
+    await this.#publishCommitted(stored)
     return publicPlan(stored)
   }
 
@@ -239,7 +267,7 @@ export class FilePlanService implements PlanServiceWithFeedback {
       }
     })
     this.#remember(stored)
-    await this.#publish(stored)
+    await this.#publishCommitted(stored)
     return publicPlan(stored)
   }
 
@@ -276,7 +304,7 @@ export class FilePlanService implements PlanServiceWithFeedback {
   public subscribeFeedback(
     accountId: AccountId,
     sessionId: SessionId | undefined,
-    listener: (event: PlanFeedbackEvent) => void,
+    listener: PlanFeedbackListener,
   ): Unsubscribe {
     const key = sessionId ?? '*'
     let accountListeners = this.#listeners.get(accountId)
@@ -297,7 +325,7 @@ export class FilePlanService implements PlanServiceWithFeedback {
     }
   }
 
-  public subscribeSystemFeedback(listener: (event: PlanFeedbackEvent) => void): Unsubscribe {
+  public subscribeSystemFeedback(listener: PlanFeedbackListener): Unsubscribe {
     this.#systemListeners.add(listener)
     return (): void => {
       this.#systemListeners.delete(listener)
@@ -323,16 +351,20 @@ export class FilePlanService implements PlanServiceWithFeedback {
     }
   }
 
-  async #publish(
-    plan: StoredPlan,
-    detail: {
-      readonly decision?: 'approve' | 'reject'
-      readonly comment?: string
-      readonly reviewer?: Actor
-    } = {},
-  ): Promise<void> {
+  async #publishCommitted(plan: StoredPlan, detail: PlanFeedbackDetail = {}): Promise<void> {
+    await this.#runSideEffect(plan, 'feedback-publish', async (): Promise<void> => {
+      await this.#publish(plan, detail)
+    })
+  }
+
+  async #publish(plan: StoredPlan, detail: PlanFeedbackDetail): Promise<void> {
     if (plan.accountId === undefined) {
-      throw new LubanError('E_IO', `Plan ${plan.id} has no account ownership`)
+      this.#reportSideEffectFailure(
+        plan,
+        'feedback-publish',
+        new LubanError('E_IO', `Plan ${plan.id} has no account ownership`),
+      )
+      return
     }
     const event: PlanFeedbackEvent = {
       type: 'luban.plan.feedback',
@@ -352,10 +384,56 @@ export class FilePlanService implements PlanServiceWithFeedback {
     for (const key of ['*', plan.sessionId].filter(
       (value): value is string => value !== undefined,
     )) {
-      for (const listener of [...(accountListeners?.get(key) ?? [])]) listener(event)
+      for (const listener of [...(accountListeners?.get(key) ?? [])]) {
+        await this.#runSideEffect(plan, 'account-feedback-listener', async (): Promise<void> => {
+          await listener(event)
+        })
+      }
     }
-    for (const listener of [...this.#systemListeners]) listener(event)
-    await this.#sink?.deliver(event)
+    for (const listener of [...this.#systemListeners]) {
+      await this.#runSideEffect(plan, 'system-feedback-listener', async (): Promise<void> => {
+        await listener(event)
+      })
+    }
+    if (this.#sink !== undefined) {
+      await this.#runSideEffect(plan, 'feedback-sink', async (): Promise<void> => {
+        await this.#sink?.deliver(event)
+      })
+    }
+  }
+
+  async #runSideEffect(
+    plan: StoredPlan,
+    operation: PlanSideEffect,
+    effect: () => void | Promise<void>,
+  ): Promise<void> {
+    try {
+      await effect()
+    } catch (error: unknown) {
+      this.#reportSideEffectFailure(plan, operation, error)
+    }
+  }
+
+  #reportSideEffectFailure(plan: StoredPlan, operation: PlanSideEffect, error: unknown): void {
+    const failure = new LubanError(
+      'E_IO',
+      `Plan ${plan.id} ${operation} failed after the plan state was committed`,
+      {
+        cause: error,
+        details: { planId: plan.id, operation },
+      },
+    )
+    try {
+      this.#onError(failure)
+    } catch (reportError: unknown) {
+      process.emitWarning(
+        new AggregateError(
+          [failure, reportError],
+          `Plan ${plan.id} side-effect failure could not be reported`,
+        ),
+        { code: 'LUBAN_PLAN_SIDE_EFFECT' },
+      )
+    }
   }
 
   async #advanceLinkedTask(plan: StoredPlan, reviewer: Actor): Promise<void> {
