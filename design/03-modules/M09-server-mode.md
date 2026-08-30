@@ -20,6 +20,7 @@ Ubuntu 编译服务器的 dsh 常驻与操作模式：systemd 托管启动、编
 | v0.12 | 2026-08-30 | Codex | 固定 pnpm 版本并补齐完整运行依赖 |
 | v0.13 | 2026-08-30 | Codex | 补齐分阶段 runner 的临时目录与恢复边界 |
 | v0.14 | 2026-08-30 | Codex | 收口为 systemd/reboot 与恢复功能验收 |
+| v0.15 | 2026-08-30 | Codex | 构建恢复、产物保留与资源告警按账号分区 |
 
 ## 1. 概述与目标
 
@@ -114,6 +115,8 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
   执行 `loginctl` 与 `systemctl --user`，需显式调用，非 Linux 平台不注册服务或路由。
 - 原子 build ledger 与 FIFO queue 实现并发上限、重启恢复和稳定状态迁移；构建参数只能进入
   argv/cwd/collect，workspace 与产物源受根目录约束，Node 不启用 shell。
+- 新构建必须携带认证账号；重启时无账号归属的旧 queued/running job 会转为 `failed` 并保留明确原因，
+  不再自动执行。完成产物按账号分别应用 `retainRuns`，资源暂停告警也按当前排队 job 的账号写入看板。
 - M03 托管的独立 worker 以私有 spec/result 文件交接，执行超时、日志尾部和文件数有界；超时或
   取消先发送 TERM 并等候进程关闭和管道排空，一秒后升级 KILL，再以一秒最终关闭边界收敛并
   清理 timer/listener。重启时复用存活 worker 或持久结果，终态销毁托管会话并清除保活账本。
@@ -124,7 +127,7 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
   baseline；workspace、collect、artifact discover/secure/prune 均校验 canonical realpath 与目录
   身份，junction/symlink 换位或逃逸时 fail closed。服务重启后旧浏览器游标高于新序列时立即返回
   新 baseline；下载要求有效的 M01 会话并使用同源链接。
-- 本地 Prettier、ESLint、严格类型检查、构建、37 项测试通过；队列测试覆盖 completion 主动唤醒、
+- 本地 Prettier、ESLint、严格类型检查、构建、65 项测试通过；队列测试覆盖 completion 主动唤醒、
   drain/告警排空、start/dispose 串行化及 launch ledger transition 停机竞态；资源测试包含本机文件系统探测，
   进程测试使用当前 `process.execPath` 验证超时/取消后 PID 已退出和 stdout/stderr 已排空，并以可控 child
   验证 spawn 同步失败、永不 close、TERM/KILL 最终边界、abort/timeout 首因及清理。未安装 systemd
