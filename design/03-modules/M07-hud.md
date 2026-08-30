@@ -12,6 +12,7 @@
 | v0.4 | 2026-08-30 | Codex | 接入 M03 健康状态与 M02 critical 去重告警 |
 | v0.5 | 2026-08-30 | Codex | 补齐 ReactDOM 可见性与 loopback CLI 热刷新验证 |
 | v0.6 | 2026-08-30 | Codex | 对齐 rc2 SessionProjection context pressure 官方口径 |
+| v0.7 | 2026-08-30 | Codex | 增加挂载式速率 ledger、认证窗口导出与 challenge 绑定 |
 
 ## 1. 概述与目标
 
@@ -110,6 +111,9 @@ export interface TelemetrySnapshot {
 - `refreshSec` 下限 1 秒；Provider 并发采样有 timeout，历史保留上限 1440 分钟，SSE replay 固定 256 条。
 - Provider 任意异常仅以固定公共文案进入 API，内部日志先脱敏；非法/溢出 token usage 保持 `unknown/partial`，不伪装为 0。
 - REST/SSE 全部经 M01 认证；对外 SSE 只使用已登记的 `luban.telemetry.snapshot` 事件名和共享递增 ID。
+- 速率 ledger 只保留最近五分钟、最多 10000 条 assistant 元数据；不记录会话正文、replay state
+  原文或其稳定指纹。认证导出只接受精确 1min/5min UTC 半开窗口与有界 challenge，响应仅携带
+  challenge SHA-256；启动、保留期/容量淘汰或 wall/monotonic 时钟漂移导致覆盖不完整时 fail closed。
 - M03 健康异常作为 `HudSnapshotResponse.keepalive` 可选扩展字段加入；旧响应/旧客户端仍可工作。
   健康 detail 去控制字符、凭据脱敏、单条限长，异常集合上限 256；卸载后不再接受事件或推送。
 - M02 后置加载时通过可选 Cordis injection 自动接通。critical 告警只含比例元数据，不含 workspace、
@@ -129,6 +133,13 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
   reasoning token 已包含在 output 中不重复计数。1m/5m 均使用 monotonic 的半开区间 `[start,end)`
   滑动窗口，历史事件按 wall-clock age 映射；对账的 5% 容差逐 request ID、逐 token 分类校验，
   不允许多条请求的正负误差在 aggregate 中相互抵消。
+- production `DshRateCollector` 会将历史回放和实时 `assistant/message` 交给挂载的
+  `HudRateLedger`；ledger 只接受完整 post-mount coverage 内的稳定 message identity，并由 collector
+  对 HUD 滑动窗口跨 fork 去重。认证 `/luban-hud/rate-capture` 导出同一半开 UTC 窗口内的 usage 与
+  session/event/turn/step/message/provider/model 元数据，完全忽略 adapter-private replay state；非法
+  usage 标为 `unknownTokens=1` 使后续对账 fail closed。稳定 message ID 会跨 fork 全局去重，同 ID
+  内容冲突、启动覆盖缺口、五分钟/容量 eviction watermark 与时钟不连续均拒绝导出。真实
+  Cordis/WebServer 集成测试证明端点来自实际挂载实例，并会拒绝挂载初期尚不完整的窗口。
 - `DefaultTelemetryAggregator` 并发采样、按 Provider 注册顺序做字段级 first-wins 合并；generation 防止注册/卸载竞态提交陈旧结果。
 - `snapshotFor(sessionId)` 对指定 live agent 重新采样，不读取或替换全局 HUD 缓存，也不向订阅者发布；
   M08 因而不会把 initiator/running/newest 的全局选择结果误用于另一个刚进入 idle 的会话。
@@ -146,5 +157,8 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu DSH profile 核对 workspace/model/reasoning 切换、Web 常驻 HUD、CLI 首行与页面隐藏重连。
-- 仍需用真实 Provider/账单流水验证 TPM/RPM 口径；真实长会话可继续抽查 M08 的会话定向采样与压缩质量。
+- HUD 侧已能自产挂载实例的窗口 ledger，但当前 rc2 公共事件只稳定提供 DSH message ID，尚无独立
+  provider adapter 把真实账单 request ID 与该身份可信关联；仍需补该适配器并用真实 Provider/账单
+  流水完成双端对账。该缺口存在前，M07-F004 保持 `doing`，不得将 mounted capture 单独视为通过。
+- 真实长会话可继续抽查 M08 的会话定向采样与压缩质量。
 - 仍需在真实掉线长任务中核对 M03 巡检到 HUD/Taskboard 的端到端可见时延。

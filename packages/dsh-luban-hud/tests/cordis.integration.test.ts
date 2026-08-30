@@ -126,6 +126,22 @@ describe('HUD Cordis integration', (): void => {
           ratio: official.projectedTokens / official.contextWindow,
         })
 
+        const captureEndMs = Date.now()
+        const captureEnd = new Date(captureEndMs).toISOString()
+        const captureStart = new Date(captureEndMs - 60_000).toISOString()
+        const captureUrl = new URL(
+          `http://127.0.0.1:${String(context.webServer.port)}/luban-hud/rate-capture`,
+        )
+        captureUrl.searchParams.set('startUtc', captureStart)
+        captureUrl.searchParams.set('endUtc', captureEnd)
+        captureUrl.searchParams.set('challenge', 'mounted_capture_0123456789abcdef')
+        const captureResponse = await fetch(captureUrl)
+        expect(captureResponse.status).toBe(503)
+        expect(await captureResponse.json()).toMatchObject({
+          error: 'E_UNAVAILABLE',
+          message: 'Rate capture window is outside complete mounted coverage',
+        })
+
         await meterFiber.dispose()
         disposeMeter = undefined
         const afterKeyUnload = await context.lubanTelemetry.snapshotFor(asSessionId(id))

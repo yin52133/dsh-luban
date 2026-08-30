@@ -7,7 +7,7 @@ An authenticated, always-visible DSH telemetry HUD backed by concurrent, pluggab
 - **M07-F001** — concurrent `TelemetryProvider` sampling with field-level first-provider priority, per-provider timeout, immutable snapshots, and partial-failure diagnostics.
 - **M07-F002** — official rc2 `SessionProjectionRegistry.contextPressure` first; only a missing or unloaded projection service/key falls back to `assistant/message.usage`, `request/context.contextWindow`, and content estimation. An incomplete official projection stays unknown.
 - **M07-F003** — workspace-relative display plus live model and reasoning-effort values from public rc2 `Session`/`AgentRegistry` interfaces. Selection prefers the current initiator, then a running agent, then the newest registered agent.
-- **M07-F004** — monotonic 1-minute and 5-minute sliding TPM/RPM windows. Cached input/output fields are disjoint and included; reasoning tokens are not double-counted inside output.
+- **M07-F004** — monotonic 1-minute and 5-minute sliding TPM/RPM windows plus a mounted, authenticated UTC-window ledger export. Cached input/output fields are disjoint and included; reasoning tokens are not double-counted inside output.
 - **M07-F005** — compact/full Web status bar in the official rc2 `shell.overlay` slot and a one-line `luban-hud` CLI rendered from the same snapshot response.
 - **M07-F006** — normal/warn/danger/critical states at 70%/85%/95%; critical renders a compaction advisory and, when M02 is present, creates one deduplicated active Taskboard alert while M08 independently requests a fresh `lubanTelemetry.snapshotFor(sessionId)` without a runtime dependency cycle.
 - **M03-F004 integration** — consumes `luban.keepalive.health` without importing M03, exposes bounded/redacted current failures in REST/SSE, and renders `keepalive N down` in both the Web bar and CLI.
@@ -57,8 +57,17 @@ five-minute denominator, so a single 100-token request contributes `20 TPM` and 
 window.
 `refreshSec` is bounded to 1–60 seconds and history retention to 1–1440 minutes so configuration cannot exceed the registered one-second event cadence or create an unbounded retention window.
 
-Every HTTP endpoint is authenticated through `lubanAuth` at `/luban-hud/snapshot`, `/luban-hud/history`, and `/luban-hud/events`.
+Every HTTP endpoint is authenticated through `lubanAuth` at `/luban-hud/snapshot`, `/luban-hud/history`, `/luban-hud/rate-capture`, and `/luban-hud/events`.
 The event stream uses the registered `luban.telemetry.snapshot` name and bounded `Last-Event-ID` replay; a replay gap receives the latest immutable envelope.
+The mounted host keeps at most 10,000 durable assistant-event records from the latest five minutes.
+`GET /luban-hud/rate-capture` requires canonical `startUtc`/`endUtc` query values for an exact
+one- or five-minute `[start,end)` window plus a 32–128 character `challenge`. Its response binds the
+challenge by SHA-256 and exposes only usage and bounded route/event metadata; adapter-private replay
+state is neither inspected nor returned. Missing or malformed usage becomes `unknownTokens=1` so
+reconciliation fails closed. Stable message identity deduplicates forked history. Capture is unavailable
+until a complete one-minute window has elapsed after mount, and any retention/capacity eviction,
+identity conflict, or wall/monotonic clock discontinuity advances or invalidates the coverage watermark
+rather than silently exporting a partial ledger.
 `HudSnapshotResponse.keepalive` is an optional compatibility extension. Health changes immediately
 publish a new envelope through the same SSE event; M03 diagnostic text is stripped of controls,
 redacted, capped, and never persisted by HUD. At most 256 current failures are retained in memory.
@@ -98,8 +107,10 @@ The implementation uses the public rc2 `AgentRegistry`, `Session.requestContext(
 - Ubuntu/Linux: the same host, Web, and CLI implementation is used.
 - Web: current DSH rc2 browser client; subscriptions pause when `document.hidden`.
 
-Window math and token-source projection are directly tested. Comparison with a
-real provider billing/token ledger remains the explicit M07-F004 blocker.
+Window math, token-source projection, and the actual Cordis-mounted capture endpoint are directly
+tested. The export currently identifies requests by durable DSH message ID. A trusted provider adapter
+must still correlate that identity with an independent real billing/token ledger on both target hosts;
+until then, M07-F004 remains in progress rather than accepted.
 
 ## License
 

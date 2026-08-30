@@ -3,6 +3,7 @@ import type { AuthService } from 'dsh-luban-core'
 import { LubanError, isLubanError, modulePrefix } from 'dsh-luban-core'
 import type { DefaultTelemetryAggregator } from './aggregator.js'
 import { HudKeepaliveHealthStore } from './keepalive-health.js'
+import type { HudRateLedger } from './rate-ledger.js'
 import { HUD_TELEMETRY_EVENT } from './types.js'
 import type { HudPublicConfig, HudSnapshotResponse, HudTelemetryEnvelope } from './types.js'
 
@@ -185,6 +186,7 @@ export interface HudHttpApiOptions {
   readonly auth: AuthService
   readonly config: HudPublicConfig
   readonly keepalive?: HudKeepaliveHealthStore
+  readonly rateCapture?: Pick<HudRateLedger, 'capture'>
   readonly onError?: (error: unknown) => void
 }
 
@@ -195,6 +197,7 @@ export class HudHttpApi {
   readonly #config: HudPublicConfig
   readonly #keepalive: HudKeepaliveHealthStore
   readonly #ownsKeepalive: boolean
+  readonly #rateCapture: Pick<HudRateLedger, 'capture'> | undefined
   readonly #onError: (error: unknown) => void
   readonly #stream = new HudEventStream()
   readonly #unsubscribeTelemetry: () => void
@@ -207,6 +210,7 @@ export class HudHttpApi {
     this.#config = options.config
     this.#keepalive = options.keepalive ?? new HudKeepaliveHealthStore()
     this.#ownsKeepalive = options.keepalive === undefined
+    this.#rateCapture = options.rateCapture
     this.#onError = options.onError ?? ((): void => undefined)
     this.#unsubscribeTelemetry = this.#telemetry.subscribe((): void => this.#publishLatest())
     this.#unsubscribeKeepalive = this.#keepalive.subscribe((): void => this.#publishLatest())
@@ -233,6 +237,19 @@ export class HudHttpApi {
       }
       if (url.pathname === `${PREFIX}/history`) {
         sendJson(response, 200, { snapshots: this.#telemetry.history() })
+        return
+      }
+      if (url.pathname === `${PREFIX}/rate-capture`) {
+        if (this.#rateCapture === undefined) {
+          throw new LubanError('E_UNAVAILABLE', 'HUD rate capture is unavailable')
+        }
+        const startUtc = url.searchParams.get('startUtc')
+        const endUtc = url.searchParams.get('endUtc')
+        const challenge = url.searchParams.get('challenge')
+        if (startUtc === null || endUtc === null || challenge === null) {
+          throw new LubanError('E_INVALID_INPUT', 'Rate capture query is incomplete')
+        }
+        sendJson(response, 200, this.#rateCapture.capture({ startUtc, endUtc }, challenge))
         return
       }
       if (url.pathname === `${PREFIX}/events`) {

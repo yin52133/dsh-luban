@@ -15,6 +15,7 @@ import {
 } from './dsh-telemetry.js'
 import { HudHttpApi } from './http-api.js'
 import { HudKeepaliveHealthStore } from './keepalive-health.js'
+import { HudRateLedger } from './rate-ledger.js'
 import { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
 import type { KeepaliveHealthPayload } from './types.js'
 
@@ -53,10 +54,12 @@ export {
   selectTelemetryAgent,
   tokenUsageTotal,
 } from './dsh-telemetry.js'
-export type { AgentLookup } from './dsh-telemetry.js'
+export type { AgentLookup, HudRateEventSink } from './dsh-telemetry.js'
 export type { SessionProjectionReader, SessionProjectionResolver } from './dsh-telemetry.js'
 export { HudEventStream, HudHttpApi } from './http-api.js'
 export { HudKeepaliveHealthStore } from './keepalive-health.js'
+export { HUD_RATE_CAPTURE_SCHEMA, HudRateLedger } from './rate-ledger.js'
+export type { HudRateCapture, HudRateCaptureMetadata, HudRateLedgerOptions } from './rate-ledger.js'
 export { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
 export type { MonotonicClock } from './rate-window.js'
 export {
@@ -107,10 +110,15 @@ export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
   const auth = ctx.get('lubanAuth')
   if (auth === undefined) throw new LubanError('E_UNAVAILABLE', 'lubanAuth is required')
   const window = new SlidingRateWindow(systemMonotonicClock)
+  const rateLedger = new HudRateLedger({
+    clock: systemClock,
+    monotonicClock: systemMonotonicClock,
+  })
   const collector = new DshRateCollector({
     window,
     clock: systemClock,
     monotonicClock: systemMonotonicClock,
+    rateLedger,
   })
   const telemetry = new DefaultTelemetryAggregator({
     refreshMs: config.refreshSec * 1_000,
@@ -147,6 +155,7 @@ export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
     auth,
     config: publicConfig,
     keepalive,
+    rateCapture: rateLedger,
     onError: (error: unknown): void =>
       ctx.logger.warn(`luban-hud: stream refresh failed: ${diagnostic(error)}`),
   })

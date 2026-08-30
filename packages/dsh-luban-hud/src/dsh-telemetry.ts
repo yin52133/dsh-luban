@@ -302,24 +302,32 @@ export class DshContextEstimatorProvider implements TelemetryProvider {
   }
 }
 
+export interface HudRateEventSink {
+  observe(session: Session, event: SessionEvent): void
+}
+
 /** Replays recent rc2 assistant usage once, then ingests the live session/event feed by sequence. */
 export class DshRateCollector {
   readonly #window: SlidingRateWindow
   readonly #clock: Clock
   readonly #monotonicClock: MonotonicClock
+  readonly #rateLedger: HudRateEventSink | undefined
   readonly #lastSequence = new Map<
     string,
     { readonly sequence: number; readonly touchedAt: number }
   >()
+  readonly #seenMessages = new Map<string, number>()
 
   public constructor(options: {
     readonly window: SlidingRateWindow
     readonly clock?: Clock
     readonly monotonicClock?: MonotonicClock
+    readonly rateLedger?: HudRateEventSink
   }) {
     this.#window = options.window
     this.#clock = options.clock ?? systemClock
     this.#monotonicClock = options.monotonicClock ?? systemMonotonicClock
+    this.#rateLedger = options.rateLedger
   }
 
   public adopt(session: Session): void {
@@ -346,13 +354,19 @@ export class DshRateCollector {
     if (event.seq <= previous) return
     this.#lastSequence.set(session.id, { sequence: event.seq, touchedAt: now })
     if (event.type !== 'assistant/message') return
+    this.#rateLedger?.observe(session, event)
+    const wallNow = this.#clock.now()
+    this.#pruneMessages(wallNow)
+    const messageId = String(event.data.message.id)
+    if (this.#seenMessages.has(messageId)) return
+    this.#seenMessages.set(messageId, event.time)
     const tokens =
       event.data.usage === undefined ? ('unknown' as const) : tokenUsageTotal(event.data.usage)
     if (live) {
       this.#window.record(tokens, 1)
       return
     }
-    const age = Math.max(0, this.#clock.now() - event.time)
+    const age = Math.max(0, wallNow - event.time)
     if (age > FIVE_MINUTES_MS) return
     const mapped = now - age
     this.#window.record(tokens, 1, mapped)
@@ -363,6 +377,13 @@ export class DshRateCollector {
       if (sessionId !== activeSessionId && now - state.touchedAt > FIVE_MINUTES_MS) {
         this.#lastSequence.delete(sessionId)
       }
+    }
+  }
+
+  #pruneMessages(now: number): void {
+    const cutoff = now - FIVE_MINUTES_MS
+    for (const [messageId, occurredAt] of this.#seenMessages) {
+      if (occurredAt < cutoff) this.#seenMessages.delete(messageId)
     }
   }
 }
