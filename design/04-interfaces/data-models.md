@@ -7,6 +7,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：任务/认证/保活/遥测等公共结构 + checklist.json schema |
 | v0.2 | 2026-08-30 | Codex | 增加 claim lease 身份及压缩前后 surface 快照兼容类型 |
 | v0.3 | 2026-08-30 | Codex | 明确 checklist 状态类型、需求汇总规则与里程碑派生状态 |
+| v0.4 | 2026-08-30 | Codex | 增加夜间调度 claim 的可信执行所有权标记 |
 
 > 本文档定义跨模块公共数据结构与 `checklist.json` 的 schema。模块专属字段在各模块文档「数据模型」章节补充。通用字段约定（version 乐观锁、epoch ms、Actor、LubanError）见 [api-overview.md](api-overview.md) §2。
 
@@ -31,6 +32,7 @@ export interface Task {
   claim?: {
     actor: Actor; sessionId: SessionId; claimedAt: number;
     leaseId?: string;                // 新 claim 必有；仅旧账本解码时可缺省
+    executionOwner?: 'night-scheduler'; // 仅可信进程内调度器可设置；HTTP claim 不透传
   } | null;
   outputs: TaskOutput[];             // 产出引用（笔记/commit/产物路径）
   autoDone?: boolean;                // 夜间自动完成，待人复核

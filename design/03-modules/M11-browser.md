@@ -11,6 +11,7 @@
 | v0.3 | 2026-08-30 | Codex | 记录 JSONL 桥接、模板发布、鉴权 API 与看板联动实现验证 |
 | v0.4 | 2026-08-30 | Codex | 收紧自动任务域名白名单，拒绝裸 `*` wildcard |
 | v0.5 | 2026-08-30 | Codex | 收口 bridge 子进程退出与 task claim 轮换竞态 |
+| v0.6 | 2026-08-30 | Codex | 夜间执行改由 scheduler 路由并独占终态 claim 写入 |
 
 ## 1. 概述与目标
 
@@ -108,7 +109,9 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
   自动任务仅响应已由 agent 认领且带 `browser`、`auto-ok` 和唯一模板标签的看板卡片。
 - 自动任务按 claim `leaseId` 分代去重并串行；同毫秒 A→B 重领时 A 的 progress/complete/fail
   全部被账本拒绝，B 仍继续 queue/progress/artifact 并进入 `review(autoDone)`。
-- 本地 ESLint、严格类型、构建、19 项 M11 包测试、6 项 M11 跨模块集成与 13 项 `uv --locked`
+- 夜间浏览器任务通过共享 `NightTaskExecutorRoute` 进入 queue；browser 只上报进度并返回产物，
+  scheduler 独占 complete/fail。持久化 `executionOwner` 防止普通 listener 双执行且不能由 HTTP 伪造。
+- 本地 ESLint、严格类型、构建、22 项 M11 包测试、6 项 M11 跨模块集成与 13 项 `uv --locked`
   Python 测试、Ruff、compileall、ESM 导入及 npm pack 白名单均通过。真实 uv JSONL 子进程已完成
   ping→shutdown→exit 0 且剥离模型凭据；本机 browser-use/Chrome 已加载 loopback DOM，并验证
   临时复制 profile 清理，未访问外部网站或模型提供商。
