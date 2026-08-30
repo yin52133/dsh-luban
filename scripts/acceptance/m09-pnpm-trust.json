@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "dsh-luban/m09-pnpm-trust/v1",
+  "name": "pnpm",
+  "version": "11.24.0",
+  "registry": "https://registry.npmjs.org/",
+  "tarball": "https://registry.npmjs.org/pnpm/-/pnpm-11.24.0.tgz",
+  "tarballIntegrity": "sha512-vSfjRel23LC+C3oSKCF7BJqBfiGx81XJDb59xGZxiVqLwebQbCRVRQXqk+oLRfSJon7Bv7yN5qlln8oPFvoAAA==",
+  "tarballSha1": "a042a648b5e519c43c5b2c3ff99901448190cd66",
+  "unpackedSize": 20095957,
+  "entry": "bin/pnpm.mjs",
+  "entrySha256": "ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd",
+  "runtimeFiles": 455,
+  "runtimeSha256": "ae41ae90778f9f2ad79fee5ab06d7bcfab0838491540129a8886a628d8e24dac"
+}

@@ -11,6 +11,11 @@
 | v0.5 | 2026-08-30 | Codex | 同步 A 档 lock v2、安装授权门禁与 profile smoke |
 | v0.6 | 2026-08-30 | Codex | 同步 A 档 lock v3、精确原生构建许可与安装后验收链 |
 | v0.7 | 2026-08-30 | Codex | 将 profile smoke 证据绑定到 CI commit、run identity 与 attempt |
+| v0.8 | 2026-08-30 | Codex | 增加 M09 systemd 分阶段安装、重启与清理验收命令 |
+| v0.9 | 2026-08-30 | Codex | 收紧 M09 fresh-build provenance、可恢复 attempt 账本与 logind/InvocationID 验证 |
+| v0.10 | 2026-08-30 | Codex | 要求 M09 使用 frozen/offline 隔离 pnpm 工具链后再进入系统副作用阶段 |
+| v0.11 | 2026-08-30 | Codex | 将 M09 pnpm 候选严格绑定到 tracked HEAD 官方 tarball 与 runtime tree manifest |
+| v0.12 | 2026-08-30 | Codex | 要求仅从 runner 私有 pnpm runtime 快照执行，关闭外部候选目录 TOCTOU |
 
 ## 1. 目标形态
 
@@ -62,6 +67,50 @@ WantedBy=default.target
 `LUBAN_BOOT_RESTORE=1` 是部署层强制恢复哨兵：即使 profile 中配置
 `bootRestore: false`，M03 仍会在该 systemd 启动路径执行恢复。只有精确字符串 `1`
 生效，其他类 truthy 文本不取得覆盖语义。
+
+M09-F001 的真实验收使用仓库已构建的 production operator CLI，证据目录必须是仓库外的绝对
+私有目录。除 plan 外的阶段需 `--apply` 才写证据；其中只有 install/cleanup 会修改 user unit：
+
+```sh
+# Zero-write plan
+node scripts/acceptance/m09-systemd-reboot.mjs
+
+# Run as the target non-root user after an authorized administrator enabled linger.
+mkdir -m 700 /tmp/luban-m09-$USER
+node scripts/acceptance/m09-systemd-reboot.mjs preflight --apply \
+  --run-dir /tmp/luban-m09-$USER/run
+node scripts/acceptance/m09-systemd-reboot.mjs install --apply \
+  --run-dir /tmp/luban-m09-$USER/run
+node scripts/acceptance/m09-systemd-reboot.mjs arm-reboot --apply \
+  --run-dir /tmp/luban-m09-$USER/run
+
+# Human authorization boundary: reboot the same host outside this runner, then log in again.
+node scripts/acceptance/m09-systemd-reboot.mjs verify-reboot --apply \
+  --run-dir /tmp/luban-m09-$USER/run
+node scripts/acceptance/m09-systemd-reboot.mjs cleanup --apply \
+  --run-dir /tmp/luban-m09-$USER/run
+```
+
+执行前需先完成 package build 并保持 tracked worktree clean；`NODE_OPTIONS`、`NODE_PATH` 与外来
+`GIT_*` 必须为空，并需预先准备 `package.json#packageManager` 指定精确版本的独立 pnpm 安装及完整
+离线 store。该 pnpm 必须逐文件匹配 HEAD 内 `scripts/acceptance/m09-pnpm-trust.json` 固定的官方
+registry tarball SRI、manifest 入口摘要、unpacked size 与确定性完整 runtime tree 摘要；PATH launcher、
+package.json 和 `--version` 自报均不构成信任。匹配的外部包只作为字节源复制到 runner-owned 0700
+临时目录，runner 复核快照的同一完整 tree 后，仅用固定 Node 执行快照中的 manifest 入口；外部目录
+复制后或构建后发生漂移同样 fail closed。每个阶段都会在仓库外临时快照中从当前 HEAD 复制完整构建
+输入，执行
+`offline + frozen-lockfile + ignore-scripts + verify-store-integrity + copy` 隔离安装；用户/全局 npm
+配置不会参与，缺包或工具闭包漂移直接 blocked，绝不回退到 workspace `node_modules`。随后 fresh
+build，并把 core/server 的完整 JavaScript inventory 与当前 dist 逐字节摘要比较，同时绑定源码、
+package、tsconfig、tsdown、workspace 与 lockfile 输入。install/cleanup 的内部证据顺序为 durable
+attempt → production CLI 副作用 → confirmed；已确认完成的副作用不重复，部分副作用按 exact
+ownership 安全重试完成。
+
+安装前必须 absent，安装后必须 exact/enabled/active/running。重启后 boot ID 与 systemd
+`InvocationID` 必须变化，MainPID 只要求为正（允许跨 boot 数字复用）；服务 activation monotonic
+必须早于 logind `self` 所属用户当前可见的最早 session，runner 不信任 `XDG_SESSION_ID`。cleanup
+只会卸载证据拥有且身份未变的 exact unit，并在 missing/not-found/inactive 后保留最终证据。runner
+**永不**启用 linger、执行 reboot、logout 或 disconnect；这些动作需要独立人工授权。
 
 6. **linger**：`sudo loginctl enable-linger <user>`——不登录桌面也让 user 级服务开机自启（R02 关键）。
 7. **认证初始化**：首启引导建管理员；`config.port` 自定义（默认 42600）。
