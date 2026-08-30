@@ -1,93 +1,835 @@
 #!/usr/bin/env node
 
+import { spawnSync } from 'node:child_process'
+import { lstat, mkdir, open, realpath } from 'node:fs/promises'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { parseArgs } from 'node:util'
+import {
+  createVisualAcceptancePlan,
+  downgradeVisualAcceptanceEvidence,
+  inspectCleanVisualAcceptanceGit,
+  sameVisualAcceptanceGit,
+  VISUAL_ACCEPTANCE_BUILD_SCHEMA,
+  type GitIdentity,
+  type VisualAcceptanceEvidence,
+} from './live-visual-acceptance.js'
 
-interface CliOptions {
+const HELP = `Usage: luban-img-visual-acceptance [options]
+
+Default mode is a read-only plan. A provider turn is possible only with --live.
+
+Options:
+  --live                 Invoke the mounted production visual acceptance service
+  --session <id>         Existing idle top-level DSH session (required with --live)
+  --timeout-ms <number>  Turn timeout forwarded to the mounted service
+  --base-url <url>       Authenticated API root (literal loopback host only)
+  --output <path>        New evidence file (live: below .luban/acceptance)
+  --help                 Show this help
+
+Authentication is read only from LUBAN_SESSION_COOKIE and LUBAN_CSRF_TOKEN.
+`
+
+const MAX_RESPONSE_BYTES = 256 * 1024
+const DEFAULT_LIVE_TIMEOUT_MS = 120_000
+const REQUEST_GRACE_MS = 30_000
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]', '::1'])
+const REQUIRED_PASS_CHECKS = Object.freeze([
+  'target-platform',
+  'git-clean',
+  'plugin-build-provenance',
+  'live-agent-session',
+  'png-valid',
+  'production-image-landing',
+  'nonce-not-seeded',
+  'exact-message-turn',
+  'same-session-response',
+  'same-provider-model-response',
+  'visual-nonce-readback',
+  'visual-model-route',
+  'nonce-output-boundary',
+  'cleanup',
+  'git-clean-after',
+] as const)
+
+interface ParsedCli {
   readonly live: boolean
-  readonly sessionId?: string
   readonly help: boolean
+  readonly sessionId?: string
+  readonly timeoutMs?: number
+  readonly baseUrl?: string
+  readonly output?: string
 }
 
-function parseArguments(argv: readonly string[]): CliOptions {
-  let live = false
-  let help = false
-  let sessionId: string | undefined
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index]
-    const value = (): string => {
-      const next = argv[index + 1]
-      if (next === undefined || next.startsWith('--'))
-        throw new Error(`${String(argument)} requires a value`)
-      index += 1
-      return next
-    }
-    if (argument === '--live') live = true
-    else if (argument === '--session') sessionId = value()
-    else if (argument === '--help') help = true
-    else throw new Error(`Unknown option: ${String(argument)}`)
+interface CliIo {
+  readonly cwd: string
+  readonly environment: Readonly<Record<string, string | undefined>>
+  readonly fetch: typeof fetch
+  write(value: string): void
+}
+
+interface CliGitBoundary {
+  readonly repositoryRoot: string
+  readonly identity: GitIdentity
+}
+
+export interface VisualAcceptanceCliTestDependencies {
+  readonly cwd?: string
+  readonly environment?: Readonly<Record<string, string | undefined>>
+  readonly fetch?: typeof fetch
+  readonly write?: (value: string) => void
+}
+
+export interface VisualAcceptanceCliResult {
+  readonly exitCode: 0 | 1 | 2
+  readonly evidence?: VisualAcceptanceEvidence
+  readonly evidencePath?: string
+  readonly output: string
+}
+
+function parseCli(argv: readonly string[]): ParsedCli {
+  const parsed = parseArgs({
+    args: [...argv],
+    allowPositionals: false,
+    strict: true,
+    options: {
+      live: { type: 'boolean' },
+      session: { type: 'string' },
+      'timeout-ms': { type: 'string' },
+      'base-url': { type: 'string' },
+      output: { type: 'string' },
+      help: { type: 'boolean', short: 'h' },
+    },
+  })
+  const live = parsed.values.live === true
+  const sessionId = parsed.values.session
+  if (sessionId !== undefined && (sessionId.trim() === '' || sessionId.length > 512)) {
+    throw new Error('session id is invalid')
   }
+  let timeoutMs: number | undefined
+  if (parsed.values['timeout-ms'] !== undefined) {
+    if (!/^\d+$/u.test(parsed.values['timeout-ms'])) throw new Error('timeout is invalid')
+    timeoutMs = Number(parsed.values['timeout-ms'])
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 10_000 || timeoutMs > 10 * 60_000) {
+      throw new Error('timeout is invalid')
+    }
+  }
+  if (live && sessionId === undefined) throw new Error('--live requires --session')
+  if (!live && timeoutMs !== undefined) throw new Error('--timeout-ms requires --live')
   return {
     live,
-    help,
+    help: parsed.values.help === true,
     ...(sessionId === undefined ? {} : { sessionId }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(parsed.values['base-url'] === undefined ? {} : { baseUrl: parsed.values['base-url'] }),
+    ...(parsed.values.output === undefined ? {} : { output: parsed.values.output }),
   }
 }
 
-function usage(): string {
-  return `Usage: luban-img-visual-acceptance [--live --session <id>]
-
-This standalone command never constructs or fakes a DSH provider turn. The live
-acceptance API must run inside the mounted dsh-luban-image-paste Cordis plugin:
-
-  await ctx.lubanImageVisualAcceptance.run({
-    live: true,
-    sessionId: '<live top-level rc2 session>'
-  })`
+function apiRoot(value: string): string {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error('base URL is invalid')
+  }
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    !LOOPBACK_HOSTNAMES.has(url.hostname.toLowerCase()) ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.search !== '' ||
+    url.hash !== ''
+  ) {
+    throw new Error('base URL must use a literal loopback host without credentials or fragments')
+  }
+  url.pathname = url.pathname.replace(/\/+$/u, '')
+  if (!url.pathname.endsWith('/luban-image-paste')) {
+    throw new Error('base URL must end with /luban-image-paste')
+  }
+  return url.toString().replace(/\/$/u, '')
 }
 
-export function visualAcceptanceCliResult(options: CliOptions): Readonly<Record<string, unknown>> {
-  if (!options.live) {
-    return {
-      schemaVersion: 1,
-      featureId: 'M06-F003',
-      evidenceKind: 'none',
-      status: 'planned',
-      acceptancePassed: false,
-      requiredEntry: 'ctx.lubanImageVisualAcceptance.run',
-      reason: 'live execution requires an already-mounted Cordis AgentRegistry and LLM runtime',
+function gitOutput(cwd: string, args: readonly string[]): string {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+  })
+  if (result.error !== undefined || result.status !== 0) {
+    throw new Error('live evidence requires an available Git repository')
+  }
+  return result.stdout.trim()
+}
+
+async function inspectCliGitBoundary(cwd: string): Promise<CliGitBoundary> {
+  const rawRoot = gitOutput(cwd, ['rev-parse', '--show-toplevel'])
+  if (rawRoot === '') throw new Error('live evidence requires an available Git repository')
+  const repositoryRoot = await realpath(resolve(rawRoot))
+  return {
+    repositoryRoot,
+    identity: inspectCleanVisualAcceptanceGit(repositoryRoot),
+  }
+}
+
+function gitIgnored(repositoryRoot: string, target: string): boolean {
+  const result = spawnSync('git', ['check-ignore', '--quiet', '--no-index', '--', target], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10_000,
+    maxBuffer: 64 * 1024,
+  })
+  if (result.error !== undefined || (result.status !== 0 && result.status !== 1)) {
+    throw new Error('unable to verify the live evidence output boundary')
+  }
+  return result.status === 0
+}
+
+/** Live output is confined to the repository's dedicated ignored evidence root. */
+export function assertVisualAcceptanceOutputBoundary(
+  repositoryRoot: string,
+  outputPath: string,
+  isIgnored: (repository: string, target: string) => boolean = gitIgnored,
+): string {
+  const repository = resolve(repositoryRoot)
+  const target = resolve(outputPath)
+  const acceptanceRoot = resolve(repository, '.luban', 'acceptance')
+  const within = relative(acceptanceRoot, target)
+  if (
+    within === '' ||
+    within === '..' ||
+    within.startsWith(`..${sep}`) ||
+    isAbsolute(within) ||
+    !isIgnored(repository, target)
+  ) {
+    throw new Error('live evidence output must be below the ignored .luban/acceptance directory')
+  }
+  return target
+}
+
+export async function assertVisualAcceptanceOutputParents(
+  repositoryRoot: string,
+  outputPath: string,
+): Promise<void> {
+  const repository = resolve(repositoryRoot)
+  const targetParent = dirname(resolve(outputPath))
+  const within = relative(repository, targetParent)
+  if (within === '' || within === '..' || within.startsWith(`..${sep}`) || isAbsolute(within)) {
+    throw new Error('live evidence output parent escaped the repository')
+  }
+  let current = repository
+  for (const part of within.split(sep)) {
+    current = resolve(current, part)
+    try {
+      const entry = await lstat(current)
+      if (!entry.isDirectory() || entry.isSymbolicLink()) {
+        throw new Error('live evidence output parent is not a real directory')
+      }
+      if (relative(await realpath(current), current) !== '') {
+        throw new Error('live evidence output parent changed identity')
+      }
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
     }
   }
-  return {
-    schemaVersion: 1,
-    featureId: 'M06-F003',
-    evidenceKind: 'none',
-    status: 'blocked',
-    acceptancePassed: false,
-    ...(options.sessionId === undefined ? {} : { requestedSessionId: options.sessionId }),
-    requiredEntry: 'ctx.lubanImageVisualAcceptance.run',
-    reason:
-      'standalone CLI cannot safely access the mounted live Agent/session/provider composition',
+}
+
+function pendingOutput(cwd: string): string {
+  return resolve(cwd, '.luban', 'acceptance', 'm06-pending.json')
+}
+
+function requireSameCliGit(boundary: CliGitBoundary): void {
+  const current = inspectCleanVisualAcceptanceGit(boundary.repositoryRoot)
+  if (!sameVisualAcceptanceGit(boundary.identity, current)) {
+    throw new Error('Git identity changed during the live acceptance command')
   }
 }
 
-function main(): void {
-  const options = parseArguments(process.argv.slice(2))
-  if (options.help) {
-    console.log(usage())
-    return
-  }
-  const result = visualAcceptanceCliResult(options)
-  console.log(JSON.stringify(result, null, 2))
-  if (result.status === 'blocked') process.exitCode = 2
+function requiredEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+  name: string,
+): string {
+  const value = environment[name]
+  if (value === undefined || value.trim() === '') throw new Error(`${name} is required`)
+  return value
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+async function boundedResponseText(response: Response): Promise<string> {
+  const declared = Number.parseInt(response.headers.get('content-length') ?? '', 10)
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel()
+    throw new Error('mounted acceptance response is too large')
+  }
+  if (response.body === null) return ''
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
   try {
-    main()
-  } catch (error: unknown) {
-    console.error(
-      `luban-img-visual-acceptance: ${error instanceof Error ? error.message : 'unknown error'}`,
-    )
-    process.exitCode = 1
+    for (;;) {
+      const next = await reader.read()
+      if (next.done) break
+      total += next.value.byteLength
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel()
+        throw new Error('mounted acceptance response is too large')
+      }
+      chunks.push(next.value)
+    }
+  } finally {
+    reader.releaseLock()
   }
+  return Buffer.concat(
+    chunks.map((chunk): Buffer => Buffer.from(chunk)),
+    total,
+  ).toString('utf8')
+}
+
+async function requestMountedAcceptance(
+  parsed: ParsedCli,
+  io: CliIo,
+): Promise<VisualAcceptanceEvidence> {
+  const cookie = requiredEnvironment(io.environment, 'LUBAN_SESSION_COOKIE')
+  const csrf = requiredEnvironment(io.environment, 'LUBAN_CSRF_TOKEN')
+  const root = apiRoot(
+    parsed.baseUrl ??
+      io.environment.LUBAN_IMAGE_BASE_URL ??
+      'http://127.0.0.1:42600/luban-image-paste',
+  )
+  const controller = new AbortController()
+  const timer = setTimeout(
+    (): void => controller.abort(),
+    (parsed.timeoutMs ?? DEFAULT_LIVE_TIMEOUT_MS) + REQUEST_GRACE_MS,
+  )
+  timer.unref()
+  let response: Response
+  try {
+    response = await io.fetch(`${root}/visual-acceptance`, {
+      method: 'POST',
+      redirect: 'error',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        cookie,
+        'x-luban-csrf': csrf,
+      },
+      body: JSON.stringify({
+        live: true,
+        sessionId: parsed.sessionId,
+        ...(parsed.timeoutMs === undefined ? {} : { timeoutMs: parsed.timeoutMs }),
+      }),
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw new Error(`mounted acceptance request failed (${String(response.status)})`)
+    }
+    const raw = await boundedResponseText(response)
+    if (controller.signal.aborted) throw new Error('mounted acceptance request timed out')
+    const decoded: unknown = JSON.parse(raw)
+    if (!isRecord(decoded) || !hasExactKeys(decoded, ['evidence'])) {
+      throw new Error('mounted acceptance returned invalid JSON')
+    }
+    const evidence = parseProductionEvidence(decoded.evidence)
+    if (evidence.session?.requestedId !== parsed.sessionId) {
+      throw new Error('mounted acceptance returned evidence for another session')
+    }
+    return evidence
+  } catch (error: unknown) {
+    if (controller.signal.aborted) throw new Error('mounted acceptance request timed out')
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function parseProductionEvidence(value: unknown): VisualAcceptanceEvidence {
+  if (!isRecord(value)) throw new Error('mounted acceptance evidence is invalid')
+  const allowed = [
+    'schemaVersion',
+    'featureId',
+    'runId',
+    'execution',
+    'evidenceKind',
+    'status',
+    'acceptancePassed',
+    'nonceSha256',
+    'session',
+    'agent',
+    'image',
+    'git',
+    'build',
+    'platform',
+    'response',
+    'checks',
+    'cleanup',
+    'error',
+    'startedAt',
+    'finishedAt',
+  ]
+  if (
+    Object.keys(value).some((key): boolean => !allowed.includes(key)) ||
+    value.schemaVersion !== 2 ||
+    value.featureId !== 'M06-F003' ||
+    typeof value.runId !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.runId) ||
+    value.execution !== 'production' ||
+    value.evidenceKind !== 'live' ||
+    typeof value.status !== 'string' ||
+    !['pass', 'fail', 'blocked'].includes(value.status) ||
+    typeof value.acceptancePassed !== 'boolean' ||
+    !isIsoTimestamp(value.startedAt) ||
+    !isIsoTimestamp(value.finishedAt) ||
+    Date.parse(value.finishedAt) < Date.parse(value.startedAt) ||
+    !isPlatform(value.platform) ||
+    !isChecks(value.checks) ||
+    typeof value.cleanup !== 'string' ||
+    !['not-needed', 'pass', 'fail'].includes(value.cleanup) ||
+    (value.nonceSha256 !== undefined && !isSha256(value.nonceSha256)) ||
+    (value.error !== undefined && !isBoundedText(value.error, 500))
+  ) {
+    throw new Error('mounted acceptance evidence is invalid')
+  }
+  const git = value.git
+  const build = value.build
+  if (git !== undefined && !isGitEvidence(git)) throw new Error('Git evidence is invalid')
+  if (build !== undefined && !isBuildEvidence(build)) throw new Error('build evidence is invalid')
+  if (
+    git !== undefined &&
+    build !== undefined &&
+    (git as { readonly head: string }).head !== (build as { readonly gitHead: string }).gitHead
+  ) {
+    throw new Error('build and Git evidence disagree')
+  }
+  if (value.session !== undefined && !isSessionEvidence(value.session)) {
+    throw new Error('session evidence is invalid')
+  }
+  if (value.agent !== undefined && !isAgentEvidence(value.agent)) {
+    throw new Error('agent evidence is invalid')
+  }
+  if (value.image !== undefined && !isImageEvidence(value.image)) {
+    throw new Error('image evidence is invalid')
+  }
+  if (value.response !== undefined && !isResponseEvidence(value.response)) {
+    throw new Error('response evidence is invalid')
+  }
+  const passing =
+    value.status === 'pass' &&
+    value.cleanup === 'pass' &&
+    isGitEvidence(git) &&
+    isBuildEvidence(build) &&
+    isSessionEvidence(value.session) &&
+    value.session.respondingId === value.session.requestedId &&
+    value.session.agentId === value.session.requestedId &&
+    isNonNegativeInteger(value.session.turn) &&
+    isAgentEvidence(value.agent) &&
+    isImageEvidence(value.image) &&
+    isResponseEvidence(value.response) &&
+    value.response.matched &&
+    isSha256(value.nonceSha256) &&
+    value.platform.target !== 'other' &&
+    value.error === undefined &&
+    requiredChecksPassed(value.checks)
+  if (value.acceptancePassed !== passing || (value.status === 'pass') !== passing) {
+    throw new Error('acceptance verdict contradicts evidence')
+  }
+  return value as unknown as VisualAcceptanceEvidence
+}
+
+function isPlatform(value: unknown): value is VisualAcceptanceEvidence['platform'] {
+  if (!isRecord(value)) return false
+  if (!hasExactKeys(value, ['target', 'runtimePlatform', 'arch', 'node'], ['osReleaseId'])) {
+    return false
+  }
+  if (
+    !isBoundedText(value.arch, 64) ||
+    !isBoundedText(value.runtimePlatform, 32) ||
+    typeof value.node !== 'string' ||
+    !/^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(value.node)
+  ) {
+    return false
+  }
+  if (value.target === 'windows') {
+    return value.runtimePlatform === 'win32' && value.osReleaseId === undefined
+  }
+  if (value.target === 'ubuntu') {
+    return value.runtimePlatform === 'linux' && value.osReleaseId === 'ubuntu'
+  }
+  return value.target === 'other' && value.osReleaseId === undefined
+}
+
+function isGitEvidence(value: unknown): value is { readonly clean: true; readonly head: string } {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['clean', 'head']) &&
+    value.clean === true &&
+    typeof value.head === 'string' &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value.head)
+  )
+}
+
+function isBuildEvidence(value: unknown): value is NonNullable<VisualAcceptanceEvidence['build']> {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, [
+      'schemaVersion',
+      'gitHead',
+      'buildId',
+      'dirty',
+      'runtime',
+      'runtimeArtifact',
+    ]) &&
+    value.schemaVersion === VISUAL_ACCEPTANCE_BUILD_SCHEMA &&
+    typeof value.gitHead === 'string' &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value.gitHead) &&
+    typeof value.buildId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.buildId) &&
+    value.dirty === false &&
+    value.runtime === 'repo-dist' &&
+    isRuntimeArtifact(value.runtimeArtifact)
+  )
+}
+
+function isRuntimeArtifact(
+  value: unknown,
+): value is NonNullable<VisualAcceptanceEvidence['build']>['runtimeArtifact'] {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['path', 'sha256', 'bytes']) &&
+    isBoundedText(value.path, 512) &&
+    !value.path.includes('\\') &&
+    value.path.split('/').every((part): boolean => part !== '' && part !== '.' && part !== '..') &&
+    isSha256(value.sha256) &&
+    isNonNegativeInteger(value.bytes) &&
+    value.bytes > 0
+  )
+}
+
+function isSessionEvidence(
+  value: unknown,
+): value is NonNullable<VisualAcceptanceEvidence['session']> {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['requestedId'], ['respondingId', 'agentId', 'turn']) &&
+    isBoundedText(value.requestedId, 512) &&
+    (value.respondingId === undefined || isBoundedText(value.respondingId, 512)) &&
+    (value.agentId === undefined || isBoundedText(value.agentId, 512)) &&
+    (value.turn === undefined || isNonNegativeInteger(value.turn))
+  )
+}
+
+function isAgentEvidence(value: unknown): value is NonNullable<VisualAcceptanceEvidence['agent']> {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['provider', 'model']) &&
+    isBoundedText(value.provider, 256) &&
+    isBoundedText(value.model, 256)
+  )
+}
+
+function isImageEvidence(value: unknown): value is NonNullable<VisualAcceptanceEvidence['image']> {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['mime', 'valid', 'bytes', 'sha256'], ['width', 'height']) &&
+    value.mime === 'image/png' &&
+    value.valid === true &&
+    isNonNegativeInteger(value.bytes) &&
+    value.bytes > 0 &&
+    isSha256(value.sha256) &&
+    (value.width === undefined || (isNonNegativeInteger(value.width) && value.width > 0)) &&
+    (value.height === undefined || (isNonNegativeInteger(value.height) && value.height > 0))
+  )
+}
+
+function isResponseEvidence(value: unknown): value is {
+  readonly matched: boolean
+  readonly sha256: string
+  readonly bytes: number
+} {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['matched', 'sha256', 'bytes']) &&
+    typeof value.matched === 'boolean' &&
+    isSha256(value.sha256) &&
+    isNonNegativeInteger(value.bytes) &&
+    value.bytes > 0
+  )
+}
+
+function isChecks(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > 64) return false
+  const ids = new Set<string>()
+  return value.every((check): boolean => {
+    if (
+      !isRecord(check) ||
+      !hasExactKeys(check, ['id', 'status', 'actual']) ||
+      !isBoundedText(check.id, 128) ||
+      typeof check.status !== 'string' ||
+      !['pass', 'fail', 'blocked'].includes(check.status) ||
+      !isBoundedText(check.actual, 500) ||
+      ids.has(check.id)
+    ) {
+      return false
+    }
+    ids.add(check.id)
+    return true
+  })
+}
+
+function requiredChecksPassed(value: unknown): boolean {
+  if (!Array.isArray(value)) return false
+  if (value.some((check): boolean => !isRecord(check) || check.status !== 'pass')) return false
+  const passed = new Set(
+    value.flatMap((check): string[] =>
+      isRecord(check) && check.status === 'pass' && typeof check.id === 'string' ? [check.id] : [],
+    ),
+  )
+  return REQUIRED_PASS_CHECKS.every((id): boolean => passed.has(id))
+}
+
+export function defaultVisualAcceptanceOutput(
+  cwd: string,
+  evidence: VisualAcceptanceEvidence,
+  liveRepositoryRoot?: string,
+): string {
+  return resolve(
+    liveRepositoryRoot ?? cwd,
+    '.luban',
+    'acceptance',
+    `m06-${evidence.platform.target}-${evidence.runId}.json`,
+  )
+}
+
+export async function writeVisualAcceptanceEvidence(
+  path: string,
+  evidence: VisualAcceptanceEvidence,
+  secrets: readonly string[] = [],
+  verifyAfterWrite?: () => void,
+): Promise<string> {
+  const target = resolve(path)
+  const serialized = `${JSON.stringify(evidence, undefined, 2)}\n`
+  for (const secret of secrets) {
+    if (secret.length >= 8 && serialized.includes(secret)) {
+      throw new Error('refusing to write evidence containing a credential')
+    }
+  }
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 })
+  let handle
+  try {
+    handle = await open(target, 'wx', 0o600)
+    await handle.writeFile(serialized, 'utf8')
+    await handle.sync()
+    if (verifyAfterWrite !== undefined) {
+      try {
+        verifyAfterWrite()
+      } catch (error: unknown) {
+        const invalid = Buffer.from(
+          `${JSON.stringify({
+            schemaVersion: 1,
+            acceptancePassed: false,
+            error: 'Git identity changed after evidence output',
+          })}\n`,
+          'utf8',
+        )
+        await handle.truncate(0)
+        await handle.write(invalid, 0, invalid.byteLength, 0)
+        await handle.sync()
+        throw error
+      }
+    }
+  } finally {
+    await handle?.close()
+  }
+  return target
+}
+
+async function requireUnusedOutput(path: string): Promise<void> {
+  try {
+    await lstat(resolve(path))
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  throw new Error('evidence output already exists')
+}
+
+async function runCli(
+  argv: readonly string[],
+  io: CliIo,
+  testDouble: boolean,
+): Promise<VisualAcceptanceCliResult> {
+  try {
+    const parsed = parseCli(argv)
+    if (parsed.help) {
+      const output = HELP.trimEnd()
+      io.write(`${output}\n`)
+      return { exitCode: 0, output }
+    }
+    const gitBoundary = parsed.live && !testDouble ? await inspectCliGitBoundary(io.cwd) : undefined
+    if (gitBoundary !== undefined) {
+      assertVisualAcceptanceOutputBoundary(
+        gitBoundary.repositoryRoot,
+        parsed.output ?? pendingOutput(gitBoundary.repositoryRoot),
+      )
+      await assertVisualAcceptanceOutputParents(
+        gitBoundary.repositoryRoot,
+        parsed.output ?? pendingOutput(gitBoundary.repositoryRoot),
+      )
+    }
+    if (parsed.live && parsed.output !== undefined) {
+      await requireUnusedOutput(parsed.output)
+    }
+    const received = parsed.live
+      ? await requestMountedAcceptance(parsed, io)
+      : createVisualAcceptancePlan(parsed.sessionId)
+    const evidence =
+      parsed.live && testDouble ? downgradeVisualAcceptanceEvidence(received) : received
+    const output =
+      parsed.output ?? defaultVisualAcceptanceOutput(io.cwd, evidence, gitBoundary?.repositoryRoot)
+    if (gitBoundary !== undefined) {
+      assertVisualAcceptanceOutputBoundary(gitBoundary.repositoryRoot, output)
+      await assertVisualAcceptanceOutputParents(gitBoundary.repositoryRoot, output)
+      if (evidence.git !== undefined && evidence.git.head !== gitBoundary.identity.head) {
+        throw new Error('mounted acceptance evidence belongs to another Git HEAD')
+      }
+      if (evidence.build !== undefined && evidence.build.gitHead !== gitBoundary.identity.head) {
+        throw new Error('mounted acceptance build belongs to another Git HEAD')
+      }
+      requireSameCliGit(gitBoundary)
+    }
+    const path = await writeVisualAcceptanceEvidence(
+      output,
+      evidence,
+      secretValues(io.environment),
+      gitBoundary === undefined ? undefined : (): void => requireSameCliGit(gitBoundary),
+    )
+    const summary = JSON.stringify({
+      schemaVersion: evidence.schemaVersion,
+      runId: evidence.runId,
+      execution: evidence.execution,
+      evidenceKind: evidence.evidenceKind,
+      status: evidence.status,
+      acceptancePassed: evidence.acceptancePassed,
+      evidencePath: path,
+    })
+    io.write(`${summary}\n`)
+    const exitCode = evidence.acceptancePassed
+      ? 0
+      : evidence.status === 'blocked' || received.status === 'blocked'
+        ? 2
+        : parsed.live
+          ? 1
+          : 0
+    return { exitCode, evidence, evidencePath: path, output: summary }
+  } catch {
+    const output = JSON.stringify({
+      schemaVersion: 1,
+      ok: false,
+      error: { code: 'E_VISUAL_ACCEPTANCE', message: 'Visual acceptance command failed' },
+    })
+    io.write(`${output}\n`)
+    return { exitCode: 1, output }
+  }
+}
+
+/** Test seam: injected transport can only emit simulated, never production, evidence. */
+export function runVisualAcceptanceCliForTest(
+  argv: readonly string[],
+  dependencies: VisualAcceptanceCliTestDependencies = {},
+): Promise<VisualAcceptanceCliResult> {
+  return runCli(
+    argv,
+    {
+      cwd: dependencies.cwd ?? process.cwd(),
+      environment: dependencies.environment ?? {},
+      fetch:
+        dependencies.fetch ?? (() => Promise.reject(new Error('test transport is not configured'))),
+      write: dependencies.write ?? ((): void => undefined),
+    },
+    true,
+  )
+}
+
+function secretValues(environment: Readonly<Record<string, string | undefined>>): string[] {
+  return Object.entries(environment).flatMap(([name, value]): string[] =>
+    value !== undefined &&
+    value.length >= 8 &&
+    (/(?:API_KEY|TOKEN|SECRET|PASSWORD)$/u.test(name) ||
+      name === 'LUBAN_SESSION_COOKIE' ||
+      name === 'LUBAN_CSRF_TOKEN')
+      ? [value]
+      : [],
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const keys = Object.keys(value)
+  const allowed = new Set([...required, ...optional])
+  return (
+    required.every((key): boolean => Object.hasOwn(value, key)) &&
+    keys.every((key): boolean => allowed.has(key))
+  )
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isBoundedText(value: unknown, maximum: number): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length >= 1 &&
+    value.length <= maximum &&
+    hasNoControlCharacters(value)
+  )
+}
+
+function hasNoControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 32 || code === 127) return false
+  }
+  return true
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+}
+
+function isMain(): boolean {
+  const entry = process.argv[1]
+  return entry !== undefined && import.meta.url === pathToFileURL(resolve(entry)).href
+}
+
+if (isMain()) {
+  const result = await runCli(
+    process.argv.slice(2),
+    {
+      cwd: process.cwd(),
+      environment: process.env,
+      fetch,
+      write: (value): void => {
+        process.stdout.write(value)
+      },
+    },
+    false,
+  )
+  process.exitCode = result.exitCode
 }

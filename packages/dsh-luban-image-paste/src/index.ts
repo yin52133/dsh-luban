@@ -34,15 +34,23 @@ export { ImagePasteHttpApi } from './http-api.js'
 export {
   MountedVisualAcceptanceService,
   assessVisualObservation,
+  createVisualAcceptancePlan,
+  downgradeVisualAcceptanceEvidence,
   findVisualNonceLeaks,
+  inspectCleanVisualAcceptanceGit,
+  inspectVisualAcceptanceBuild,
   isOwnedVisualAcceptanceRoot,
   removeVisualAcceptanceRoot,
   runSimulatedVisualAcceptance,
+  sameVisualAcceptanceGit,
+  VISUAL_ACCEPTANCE_BUILD_SCHEMA,
   visualAcceptanceInstruction,
 } from './live-visual-acceptance.js'
 export type {
   MountedVisualAcceptanceOptions,
   SimulatedVisualAcceptanceOptions,
+  GitIdentity,
+  VisualAcceptanceBuildEvidence,
   VisualAcceptanceCheck,
   VisualAcceptanceEvidence,
   VisualAcceptanceStatus,
@@ -93,12 +101,10 @@ export async function apply(ctx: Context, input: Partial<ImagePasteConfig> = {})
     processor: new DynamicSharpProcessor(),
     config,
   })
-  const api = new ImagePasteHttpApi(service, auth)
+  const visualAcceptance = new MountedVisualAcceptanceService(ctx, repository.workspaceRoot)
+  const api = new ImagePasteHttpApi(service, auth, visualAcceptance)
   ctx.provide('lubanImageIngest', service)
-  ctx.provide(
-    'lubanImageVisualAcceptance',
-    new MountedVisualAcceptanceService(ctx, repository.workspaceRoot),
-  )
+  ctx.provide('lubanImageVisualAcceptance', visualAcceptance)
   ctx.effect(() => {
     const unregister = ctx.webServer.register({
       kind: 'prefix',

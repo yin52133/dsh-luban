@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile, realpath, rm } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { lstat, mkdir, readFile, readdir, realpath, rm } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -19,8 +20,12 @@ import {
   type ValidatedNoncePng,
 } from './visual-nonce-png.js'
 
+declare const __DSH_LUBAN_IMAGE_BUILD_HEAD__: string | undefined
+declare const __DSH_LUBAN_IMAGE_BUILD_ID__: string | undefined
+
 const FEATURE_ID = 'M06-F003'
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
+export const VISUAL_ACCEPTANCE_BUILD_SCHEMA = 'dsh-luban/image-paste-build-provenance/v3' as const
 const LUBAN_DIRECTORY = '.luban'
 const OWNER_DIRECTORY = '.luban/m06-visual-acceptance'
 const RUN_DIRECTORY = /^run-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
@@ -28,6 +33,22 @@ const DEFAULT_TIMEOUT_MS = 120_000
 const MIN_TIMEOUT_MS = 10_000
 const MAX_TIMEOUT_MS = 10 * 60_000
 const MODEL_PROBE_TIMEOUT_MS = 10_000
+const MAX_BUILD_ARTIFACTS = 512
+const MAX_BUILD_ARTIFACT_BYTES = 64 * 1024 * 1024
+const MAX_BUILD_TOTAL_BYTES = 256 * 1024 * 1024
+const LOADED_RUNTIME_MODULE_PATH = fileURLToPath(import.meta.url)
+const LOADED_BUILD_IDENTITY =
+  typeof __DSH_LUBAN_IMAGE_BUILD_HEAD__ === 'string' &&
+  /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(__DSH_LUBAN_IMAGE_BUILD_HEAD__) &&
+  typeof __DSH_LUBAN_IMAGE_BUILD_ID__ === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+    __DSH_LUBAN_IMAGE_BUILD_ID__,
+  )
+    ? Object.freeze({
+        gitHead: __DSH_LUBAN_IMAGE_BUILD_HEAD__,
+        buildId: __DSH_LUBAN_IMAGE_BUILD_ID__,
+      })
+    : undefined
 const ACCEPTANCE_INSTRUCTION =
   'Open and inspect the referenced PNG with the available image/file tool. Reply with only the short code visible in the image pixels; do not infer it from filenames or surrounding text.'
 
@@ -40,8 +61,10 @@ export interface VisualAcceptanceCheck {
 }
 
 export interface VisualAcceptanceEvidence {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
   readonly featureId: 'M06-F003'
+  readonly runId: string
+  readonly execution: 'operator-plan' | 'production' | 'test-double'
   readonly evidenceKind: 'none' | 'live' | 'simulated'
   readonly status: VisualAcceptanceStatus
   readonly acceptancePassed: boolean
@@ -65,6 +88,7 @@ export interface VisualAcceptanceEvidence {
     readonly sha256: string
   }
   readonly git?: { readonly clean: boolean; readonly head: string }
+  readonly build?: VisualAcceptanceBuildEvidence
   readonly platform: {
     readonly target: 'windows' | 'ubuntu' | 'other'
     readonly runtimePlatform: NodeJS.Platform
@@ -83,6 +107,24 @@ export interface VisualAcceptanceEvidence {
   readonly error?: string
   readonly startedAt: string
   readonly finishedAt: string
+}
+
+export interface VisualAcceptanceBuildEvidence {
+  readonly schemaVersion: typeof VISUAL_ACCEPTANCE_BUILD_SCHEMA
+  readonly gitHead: string
+  readonly buildId: string
+  readonly dirty: false
+  readonly runtime: 'repo-dist'
+  readonly runtimeArtifact: {
+    readonly path: string
+    readonly sha256: string
+    readonly bytes: number
+  }
+}
+
+export interface LoadedVisualAcceptanceBuildIdentity {
+  readonly gitHead: string
+  readonly buildId: string
 }
 
 export interface MountedVisualAcceptanceOptions {
@@ -120,8 +162,9 @@ export interface SimulatedVisualAcceptanceOptions {
   readonly cleanup?: () => Promise<void>
 }
 
-interface GitIdentity {
+export interface GitIdentity {
   readonly head: string
+  readonly clean: true
 }
 
 class VisualAcceptanceBlocked extends Error {
@@ -152,6 +195,53 @@ function platformEvidence(): VisualAcceptanceEvidence['platform'] {
     runtimePlatform: process.platform,
     arch: process.arch,
     node: process.version,
+  }
+}
+
+export function createVisualAcceptancePlan(sessionId?: string): VisualAcceptanceEvidence {
+  const startedAt = isoNow()
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    featureId: FEATURE_ID,
+    runId: randomUUID(),
+    execution: 'operator-plan',
+    evidenceKind: 'none',
+    status: 'planned',
+    acceptancePassed: false,
+    ...(sessionId === undefined ? {} : { session: { requestedId: sessionId } }),
+    platform: platformEvidence(),
+    checks: [],
+    cleanup: 'not-needed',
+    startedAt,
+    finishedAt: isoNow(),
+  }
+}
+
+/** Permanently downgrade evidence crossing any injected/test execution seam. */
+export function downgradeVisualAcceptanceEvidence(
+  evidence: VisualAcceptanceEvidence,
+): VisualAcceptanceEvidence {
+  const startedAt = isoNow()
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    featureId: FEATURE_ID,
+    runId: randomUUID(),
+    execution: 'test-double',
+    evidenceKind: 'simulated',
+    status: 'simulated',
+    acceptancePassed: false,
+    platform: platformEvidence(),
+    checks: [
+      {
+        id: 'test-double-boundary',
+        status: 'blocked',
+        actual: 'injected execution cannot produce production evidence',
+      },
+    ],
+    cleanup: 'not-needed',
+    simulatedOutcome: evidence.acceptancePassed ? 'pass' : 'fail',
+    startedAt,
+    finishedAt: isoNow(),
   }
 }
 
@@ -202,12 +292,30 @@ function runGit(workspaceRoot: string, args: readonly string[]): string {
   return result.stdout.trim()
 }
 
-function requireCleanGit(workspaceRoot: string): GitIdentity {
-  const status = runGit(workspaceRoot, ['status', '--porcelain=v1', '--untracked-files=normal'])
+export function inspectCleanVisualAcceptanceGit(
+  workspaceRoot: string,
+  execute: (args: readonly string[]) => string = (args): string => runGit(workspaceRoot, args),
+): GitIdentity {
+  const headBefore = execute(['rev-parse', '--verify', 'HEAD']).trim().toLowerCase()
+  const status = execute(['status', '--porcelain=v1', '--untracked-files=normal'])
+  const headAfter = execute(['rev-parse', '--verify', 'HEAD']).trim().toLowerCase()
   if (status !== '') throw new VisualAcceptanceBlocked('git worktree is not clean')
-  const head = runGit(workspaceRoot, ['rev-parse', '--verify', 'HEAD'])
-  if (!/^[a-f0-9]{40,64}$/u.test(head)) throw new VisualAcceptanceBlocked('git HEAD is invalid')
-  return { head }
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(headBefore) || headAfter !== headBefore) {
+    throw new VisualAcceptanceBlocked('git HEAD is invalid or changed during inspection')
+  }
+  return { head: headBefore, clean: true }
+}
+
+export function sameVisualAcceptanceGit(before: GitIdentity, after: GitIdentity): boolean {
+  const rawBefore: unknown = before
+  const rawAfter: unknown = after
+  return (
+    isRecord(rawBefore) &&
+    isRecord(rawAfter) &&
+    rawBefore.clean === true &&
+    rawAfter.clean === true &&
+    rawBefore.head === rawAfter.head
+  )
 }
 
 function osReleaseId(contents: string): string | undefined {
@@ -251,8 +359,218 @@ export async function inspectVisualAcceptancePlatform(
   }
 }
 
+/** Bind a production run to the clean build actually loaded from this repository. */
+export async function inspectVisualAcceptanceBuild(
+  repositoryRoot: string,
+  expectedGit: GitIdentity,
+  runtimeModulePath = LOADED_RUNTIME_MODULE_PATH,
+  loadedBuildIdentity?: LoadedVisualAcceptanceBuildIdentity,
+): Promise<VisualAcceptanceBuildEvidence> {
+  try {
+    const rawExpectedGit: unknown = expectedGit
+    if (
+      !isRecord(rawExpectedGit) ||
+      rawExpectedGit.clean !== true ||
+      typeof rawExpectedGit.head !== 'string'
+    ) {
+      throw new Error('invalid expected Git identity')
+    }
+    const repository = await realpath(repositoryRoot)
+    const distribution = join(repository, 'packages', 'dsh-luban-image-paste', 'dist')
+    const distributionEntry = await lstat(distribution)
+    if (!distributionEntry.isDirectory() || distributionEntry.isSymbolicLink()) {
+      throw new Error('invalid distribution')
+    }
+    const canonicalDistribution = await realpath(distribution)
+    const runtimeEntry = await lstat(runtimeModulePath)
+    if (!runtimeEntry.isFile() || runtimeEntry.isSymbolicLink()) {
+      throw new Error('invalid runtime module')
+    }
+    const runtime = await realpath(runtimeModulePath)
+    if (!pathWithin(canonicalDistribution, runtime)) {
+      throw new Error('runtime outside repository distribution')
+    }
+
+    const provenancePath = join(canonicalDistribution, 'build-provenance.json')
+    const provenanceEntry = await lstat(provenancePath)
+    if (
+      !provenanceEntry.isFile() ||
+      provenanceEntry.isSymbolicLink() ||
+      provenanceEntry.size < 1 ||
+      provenanceEntry.size > 64 * 1024
+    ) {
+      throw new Error('invalid provenance file')
+    }
+    if (!samePath(await realpath(provenancePath), provenancePath)) {
+      throw new Error('provenance escaped distribution')
+    }
+    const decoded: unknown = JSON.parse(await readFile(provenancePath, 'utf8'))
+    if (
+      !isRecord(decoded) ||
+      !hasExactKeys(decoded, ['schemaVersion', 'gitHead', 'buildId', 'dirty', 'artifacts']) ||
+      decoded.schemaVersion !== VISUAL_ACCEPTANCE_BUILD_SCHEMA ||
+      typeof decoded.gitHead !== 'string' ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(decoded.gitHead) ||
+      decoded.dirty !== false ||
+      decoded.gitHead !== rawExpectedGit.head ||
+      typeof decoded.buildId !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+        decoded.buildId,
+      ) ||
+      !Array.isArray(decoded.artifacts) ||
+      decoded.artifacts.length < 1 ||
+      decoded.artifacts.length > MAX_BUILD_ARTIFACTS
+    ) {
+      throw new Error('build provenance mismatch')
+    }
+    const isLoadedRuntime = runtimeModulePath === LOADED_RUNTIME_MODULE_PATH
+    if (isLoadedRuntime && loadedBuildIdentity !== undefined) {
+      throw new Error('loaded runtime identity cannot be overridden')
+    }
+    const loadedIdentity = isLoadedRuntime ? LOADED_BUILD_IDENTITY : loadedBuildIdentity
+    if (loadedIdentity?.gitHead !== decoded.gitHead || loadedIdentity.buildId !== decoded.buildId) {
+      throw new Error('loaded build identity does not match disk provenance')
+    }
+    const runtimeRelative = relative(canonicalDistribution, runtime).split(sep).join('/')
+    const artifactPaths = new Set<string>()
+    let totalArtifactBytes = 0
+    let runtimeArtifact: VisualAcceptanceBuildEvidence['runtimeArtifact'] | undefined
+    for (const candidate of decoded.artifacts) {
+      if (
+        !isRecord(candidate) ||
+        !hasExactKeys(candidate, ['path', 'sha256', 'bytes']) ||
+        typeof candidate.path !== 'string' ||
+        !isSafeBuildArtifactPath(candidate.path) ||
+        artifactPaths.has(candidate.path) ||
+        typeof candidate.sha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/u.test(candidate.sha256) ||
+        typeof candidate.bytes !== 'number' ||
+        !Number.isSafeInteger(candidate.bytes) ||
+        candidate.bytes < 1 ||
+        candidate.bytes > MAX_BUILD_ARTIFACT_BYTES ||
+        totalArtifactBytes + candidate.bytes > MAX_BUILD_TOTAL_BYTES
+      ) {
+        throw new Error('invalid build artifact')
+      }
+      totalArtifactBytes += candidate.bytes
+      artifactPaths.add(candidate.path)
+      const artifactPath = resolve(canonicalDistribution, ...candidate.path.split('/'))
+      if (
+        !pathWithin(canonicalDistribution, artifactPath) ||
+        relative(canonicalDistribution, artifactPath).split(sep).join('/') !== candidate.path
+      ) {
+        throw new Error('build artifact escaped distribution')
+      }
+      const artifactEntry = await lstat(artifactPath)
+      if (
+        !artifactEntry.isFile() ||
+        artifactEntry.isSymbolicLink() ||
+        artifactEntry.size !== candidate.bytes ||
+        !pathWithin(canonicalDistribution, await realpath(artifactPath))
+      ) {
+        throw new Error('build artifact metadata mismatch')
+      }
+      const artifactBytes = await readFile(artifactPath)
+      if (
+        artifactBytes.byteLength !== candidate.bytes ||
+        sha256(artifactBytes) !== candidate.sha256
+      ) {
+        throw new Error('build artifact digest mismatch')
+      }
+      if (candidate.path === runtimeRelative) {
+        runtimeArtifact = {
+          path: candidate.path,
+          sha256: candidate.sha256,
+          bytes: candidate.bytes,
+        }
+      }
+    }
+    if (runtimeArtifact === undefined) {
+      throw new Error('runtime module is not in the build manifest')
+    }
+    const currentArtifactPaths = await collectBuildArtifactPaths(canonicalDistribution)
+    if (
+      currentArtifactPaths.length !== artifactPaths.size ||
+      currentArtifactPaths.some((path): boolean => !artifactPaths.has(path))
+    ) {
+      throw new Error('distribution contents do not match the build manifest')
+    }
+    return {
+      schemaVersion: VISUAL_ACCEPTANCE_BUILD_SCHEMA,
+      gitHead: decoded.gitHead,
+      buildId: decoded.buildId,
+      dirty: false,
+      runtime: 'repo-dist',
+      runtimeArtifact,
+    }
+  } catch {
+    throw new VisualAcceptanceBlocked(
+      'loaded image-paste module is not a clean build of the current repository HEAD',
+    )
+  }
+}
+
+async function collectBuildArtifactPaths(
+  distribution: string,
+  directory = distribution,
+  paths: string[] = [],
+): Promise<readonly string[]> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const absolute = join(directory, entry.name)
+    const artifactPath = relative(distribution, absolute).split(sep).join('/')
+    if (artifactPath === 'build-provenance.json') continue
+    if (entry.isSymbolicLink()) throw new Error('distribution contains a symbolic link')
+    if (entry.isDirectory()) {
+      await collectBuildArtifactPaths(distribution, absolute, paths)
+      continue
+    }
+    if (!entry.isFile() || !isSafeBuildArtifactPath(artifactPath)) {
+      throw new Error('distribution contains an unsafe artifact')
+    }
+    paths.push(artifactPath)
+    if (paths.length > MAX_BUILD_ARTIFACTS) {
+      throw new Error('distribution contains too many artifacts')
+    }
+  }
+  return paths
+}
+
 function samePath(left: string, right: string): boolean {
   return relative(left, right) === ''
+}
+
+function pathWithin(root: string, candidate: string): boolean {
+  const path = relative(root, candidate)
+  return path !== '' && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+}
+
+function isSafeBuildArtifactPath(value: string): boolean {
+  return (
+    value.length >= 1 &&
+    value.length <= 512 &&
+    !value.includes('\\') &&
+    !hasBuildArtifactControlCharacter(value) &&
+    value.split('/').every((part): boolean => part !== '' && part !== '.' && part !== '..')
+  )
+}
+
+function hasBuildArtifactControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 32 || code === 127) return true
+  }
+  return false
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value)
+  return (
+    keys.length === expected.length && expected.every((key): boolean => Object.hasOwn(value, key))
+  )
 }
 
 function ownedDirectory(workspaceRoot: string): string {
@@ -822,6 +1140,8 @@ export async function runSimulatedVisualAcceptance(
   const result: VisualAcceptanceEvidence = {
     schemaVersion: SCHEMA_VERSION,
     featureId: FEATURE_ID,
+    runId: randomUUID(),
+    execution: 'test-double',
     evidenceKind: 'simulated',
     status: 'simulated',
     acceptancePassed: false,
@@ -860,27 +1180,21 @@ export class MountedVisualAcceptanceService {
 
   public async run(options: MountedVisualAcceptanceOptions): Promise<VisualAcceptanceEvidence> {
     const startedAt = isoNow()
-    if (!options.live) {
-      return {
-        schemaVersion: SCHEMA_VERSION,
-        featureId: FEATURE_ID,
-        evidenceKind: 'none',
-        status: 'planned',
-        acceptancePassed: false,
-        platform: platformEvidence(),
-        checks: [],
-        cleanup: 'not-needed',
-        startedAt,
-        finishedAt: isoNow(),
-      }
+    const runId = randomUUID()
+    const explicitLive: unknown = options.live
+    if (explicitLive !== true) {
+      return createVisualAcceptancePlan(options.sessionId)
     }
     if (this.#running) {
       return {
         schemaVersion: SCHEMA_VERSION,
         featureId: FEATURE_ID,
+        runId,
+        execution: 'production',
         evidenceKind: 'live',
         status: 'blocked',
         acceptancePassed: false,
+        session: { requestedId: options.sessionId },
         platform: platformEvidence(),
         checks: [
           { id: 'exclusive-run', status: 'blocked', actual: 'another live acceptance is active' },
@@ -893,7 +1207,7 @@ export class MountedVisualAcceptanceService {
     }
     this.#running = true
     try {
-      return await this.#runLive(options, startedAt)
+      return await this.#runLive(options, startedAt, runId)
     } finally {
       this.#running = false
     }
@@ -902,6 +1216,7 @@ export class MountedVisualAcceptanceService {
   async #runLive(
     options: MountedVisualAcceptanceOptions,
     startedAt: string,
+    runId: string,
   ): Promise<VisualAcceptanceEvidence> {
     const checks: VisualAcceptanceCheck[] = []
     let status: VisualAcceptanceStatus = 'pass'
@@ -916,6 +1231,7 @@ export class MountedVisualAcceptanceService {
     let agent: Agent | undefined
     let route: { readonly provider: string; readonly model: string } | undefined
     let git: GitIdentity | undefined
+    let build: VisualAcceptanceBuildEvidence | undefined
     let response: VisualAcceptanceEvidence['response'] | undefined
     let turn: number | undefined
     let baselineSequence: number | undefined
@@ -934,8 +1250,10 @@ export class MountedVisualAcceptanceService {
       platform = await inspectVisualAcceptancePlatform()
       recordCheck(checks, 'target-platform', 'pass', platform.target)
       canonicalWorkspace = await realpath(this.#workspaceRoot)
-      git = requireCleanGit(canonicalWorkspace)
+      git = inspectCleanVisualAcceptanceGit(canonicalWorkspace)
       recordCheck(checks, 'git-clean', 'pass', git.head)
+      build = await inspectVisualAcceptanceBuild(canonicalWorkspace, git)
+      recordCheck(checks, 'plugin-build-provenance', 'pass', build.gitHead)
 
       const id = DshSessionId(requestedSessionId)
       agent = this.#agents.get(id)
@@ -973,7 +1291,6 @@ export class MountedVisualAcceptanceService {
             'same top-level session with exclusive maintenance ownership',
           )
 
-          const runId = randomUUID()
           const generatedNonce = freshNonce(liveAgent, [
             requestedSessionId,
             liveAgent.options.provider ?? '',
@@ -1221,10 +1538,10 @@ export class MountedVisualAcceptanceService {
           recordCheck(checks, 'cleanup', 'fail', 'owned acceptance root retained')
         }
       }
-      if (git !== undefined && canonicalWorkspace !== undefined && cleanup === 'pass') {
+      if (git !== undefined && canonicalWorkspace !== undefined) {
         try {
-          const after = requireCleanGit(canonicalWorkspace)
-          if (after.head === git.head) {
+          const after = inspectCleanVisualAcceptanceGit(canonicalWorkspace)
+          if (sameVisualAcceptanceGit(git, after)) {
             recordCheck(checks, 'git-clean-after', 'pass', after.head)
           } else {
             status = 'fail'
@@ -1242,9 +1559,16 @@ export class MountedVisualAcceptanceService {
     const result: VisualAcceptanceEvidence = {
       schemaVersion: SCHEMA_VERSION,
       featureId: FEATURE_ID,
+      runId,
+      execution: 'production',
       evidenceKind: 'live',
       status,
-      acceptancePassed: status === 'pass' && response?.matched === true && cleanup === 'pass',
+      acceptancePassed:
+        status === 'pass' &&
+        response?.matched === true &&
+        cleanup === 'pass' &&
+        git !== undefined &&
+        build !== undefined,
       ...(nonce === undefined ? {} : { nonceSha256: sha256(nonce) }),
       session: {
         requestedId: requestedSessionId,
@@ -1256,6 +1580,7 @@ export class MountedVisualAcceptanceService {
         ? {}
         : { image: imageEvidence(png, validation) }),
       ...(git === undefined ? {} : { git: { clean: true, head: git.head } }),
+      ...(build === undefined ? {} : { build }),
       platform,
       ...(response === undefined ? {} : { response }),
       checks,

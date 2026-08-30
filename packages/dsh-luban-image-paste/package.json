@@ -29,7 +29,7 @@
     "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
-    "build": "tsdown",
+    "build": "node scripts/build.mjs",
     "clean": "node ../../scripts/clean-package.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root ../.. packages/dsh-luban-image-paste/tests"

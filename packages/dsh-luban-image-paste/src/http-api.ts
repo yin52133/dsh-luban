@@ -2,11 +2,35 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AuthService, SessionId } from '@luban/core'
 import { LubanError, asSessionId, isLubanError, modulePrefix } from '@luban/core'
 import { normalizeDeclaredMime } from './image-format.js'
+import {
+  downgradeVisualAcceptanceEvidence,
+  MountedVisualAcceptanceService,
+  type MountedVisualAcceptanceOptions,
+  type VisualAcceptanceEvidence,
+} from './live-visual-acceptance.js'
 import type { FileImageIngestService } from './service.js'
 import type { ImageSource, InjectStyle, StoredImage } from './types.js'
 
 const PREFIX = modulePrefix('image-paste')
 const MAX_JSON_BYTES = 64 * 1024
+type ProductionVisualAcceptanceRun = (
+  this: MountedVisualAcceptanceService,
+  options: MountedVisualAcceptanceOptions,
+) => Promise<VisualAcceptanceEvidence>
+
+function captureProductionVisualAcceptanceRun(): ProductionVisualAcceptanceRun {
+  const candidate = Object.getOwnPropertyDescriptor(MountedVisualAcceptanceService.prototype, 'run')
+    ?.value as unknown
+  if (typeof candidate !== 'function') {
+    throw new Error('Mounted visual acceptance production runner is unavailable')
+  }
+  return candidate as ProductionVisualAcceptanceRun
+}
+const productionVisualAcceptanceRun = captureProductionVisualAcceptanceRun()
+
+export interface MountedVisualAcceptanceRunner {
+  run(options: MountedVisualAcceptanceOptions): Promise<VisualAcceptanceEvidence>
+}
 
 function record(value: unknown, label = 'request body'): Readonly<Record<string, unknown>> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -153,10 +177,24 @@ function imageJson(image: StoredImage): Readonly<Record<string, unknown>> {
 export class ImagePasteHttpApi {
   readonly #service: FileImageIngestService
   readonly #auth: AuthService
+  readonly #visualAcceptance: MountedVisualAcceptanceRunner | undefined
+  readonly #productionVisualAcceptance: MountedVisualAcceptanceService | undefined
 
-  public constructor(service: FileImageIngestService, auth: AuthService) {
+  public constructor(
+    service: FileImageIngestService,
+    auth: AuthService,
+    visualAcceptance?: MountedVisualAcceptanceRunner,
+  ) {
     this.#service = service
     this.#auth = auth
+    this.#visualAcceptance = visualAcceptance
+    this.#productionVisualAcceptance =
+      visualAcceptance instanceof MountedVisualAcceptanceService &&
+      Object.getPrototypeOf(visualAcceptance) === MountedVisualAcceptanceService.prototype &&
+      MountedVisualAcceptanceService.prototype.run === productionVisualAcceptanceRun &&
+      visualAcceptance.run === productionVisualAcceptanceRun
+        ? visualAcceptance
+        : undefined
   }
 
   public readonly handler = async (
@@ -204,6 +242,48 @@ export class ImagePasteHttpApi {
         sendJson(response, 200, {
           report: await this.#service.cleanup(body.dryRun === true),
         })
+        return
+      }
+      if (method === 'POST' && path === '/visual-acceptance') {
+        if (this.#visualAcceptance === undefined) {
+          throw new LubanError('E_UNAVAILABLE', 'Mounted visual acceptance is unavailable')
+        }
+        const body = record(await jsonBody(request))
+        if (
+          Object.keys(body).some(
+            (key): boolean => !['live', 'sessionId', 'timeoutMs'].includes(key),
+          ) ||
+          body.live !== true
+        ) {
+          throw new LubanError(
+            'E_INVALID_INPUT',
+            'visual acceptance requires an explicit live=true request',
+          )
+        }
+        if (
+          body.timeoutMs !== undefined &&
+          (typeof body.timeoutMs !== 'number' ||
+            !Number.isSafeInteger(body.timeoutMs) ||
+            body.timeoutMs < 10_000 ||
+            body.timeoutMs > 10 * 60_000)
+        ) {
+          throw new LubanError('E_INVALID_INPUT', 'timeoutMs is outside the allowed live range')
+        }
+        const requestedSession = sessionId(body.sessionId)
+        const options = {
+          live: true,
+          sessionId: requestedSession,
+          ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
+        } satisfies MountedVisualAcceptanceOptions
+        const observed =
+          this.#productionVisualAcceptance === undefined
+            ? await this.#visualAcceptance.run(options)
+            : await productionVisualAcceptanceRun.call(this.#productionVisualAcceptance, options)
+        const evidence =
+          this.#productionVisualAcceptance === undefined
+            ? downgradeVisualAcceptanceEvidence(observed)
+            : observed
+        sendJson(response, 200, { evidence })
         return
       }
 

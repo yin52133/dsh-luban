@@ -123,11 +123,30 @@ hashes, never the nonce or provider credential. It waits for the exact queued
 message's turn and removes only its owned fixture after that turn settles. A
 timeout or uncertain queue state retains the fixture and fails closed.
 
-`luban-img-visual-acceptance` is intentionally plan/blocked-only: a standalone
-process cannot safely reconstruct the mounted DSH model/tool composition.
-Injected simulations always remain `simulated` and cannot satisfy the live
-acceptance. M06-F003 therefore remains blocked until a real mounted visual
-provider session returns a production pass.
+`luban-img-visual-acceptance` defaults to a plan and cannot call a provider
+unless `--live` is explicit. Live mode calls the authenticated endpoint on the
+already-mounted production plugin; it requires `LUBAN_SESSION_COOKIE`,
+`LUBAN_CSRF_TOKEN`, and `--session <idle-top-level-session>`. Each run creates a
+new evidence file and refuses to overwrite an existing path. The authenticated
+endpoint is restricted to a literal IPv4 or IPv6 loopback host so operator
+credentials are never forwarded to a remote `--base-url`. A live evidence path
+is confined to the repository's ignored `.luban/acceptance` directory; existing
+symlink/junction parents and existing files are rejected. The CLI rechecks the
+same clean HEAD after writing and invalidates the new evidence if that check
+fails:
+
+```console
+luban-img-visual-acceptance
+luban-img-visual-acceptance --live --session <session-id>
+```
+
+Production acceptance also requires the loaded module to be a hash-matching
+artifact from this repository's clean current-HEAD build. Provenance v3 embeds
+both the Git HEAD and a random per-build ID into the loaded module, so an old
+Host process is rejected even after a same-HEAD rebuild replaces `dist` on
+disk. Source execution, external installations, dirty/stale builds, and
+injected transports always remain blocked or `simulated` and cannot satisfy
+live acceptance.
 
 ## Compatibility
 
