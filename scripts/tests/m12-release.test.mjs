@@ -1315,6 +1315,20 @@ describe('M12 manual market boundary', () => {
       prepareMarketEntry({ root: credentialed, package: 'dsh-luban-sample', category: 'dev' }),
     ).rejects.toThrow(/credential-free/)
 
+    const nonDefaultPort = await marketFixture({
+      repository: {
+        url: 'https://github.com:8443/yin52133/dsh-luban.git',
+        directory: 'packages/dsh-luban-sample',
+      },
+    })
+    await expect(
+      prepareMarketEntry({
+        root: nonDefaultPort,
+        package: 'dsh-luban-sample',
+        category: 'dev',
+      }),
+    ).rejects.toThrow(/credential-free/)
+
     const wrongDirectory = await marketFixture({
       repository: {
         url: 'https://github.com/yin52133/dsh-luban.git',

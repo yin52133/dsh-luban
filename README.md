@@ -62,6 +62,9 @@ uv run --project tools/browser-bridge --locked python -m unittest discover -s to
   覆盖完整口径的直接证据；`blocked` 表示明确验收因环境、设备、授权或外部依赖暂时无法继续。
   `done` 只表示设计验收已有直接证据，不等同于已经发布。
 - npm 发布、GitHub Release、市场 PR 与 topic 修改均是独立的外部操作，未经明确授权不会执行。
+- 市场交接使用 `scripts/release/prepare-market-handoff.mjs`：默认仅预览；`--write` 只会基于 clean
+  `mainline` 在 `.luban/market-handoffs/` create-once 生成绑定 SHA/版本/上游 schema 的本地
+  审核物。产物中的 PR/topic 命令均为未执行计划，不能替代维护者明确批准。
 
 ## 许可
 

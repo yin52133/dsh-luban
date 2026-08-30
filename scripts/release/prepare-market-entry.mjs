@@ -75,6 +75,7 @@ function repositoryUrl(repository) {
   if (
     url.protocol !== 'https:' ||
     url.hostname.toLowerCase() !== 'github.com' ||
+    url.port !== '' ||
     url.username !== '' ||
     url.password !== '' ||
     url.search !== '' ||
@@ -183,9 +184,23 @@ export async function prepareMarketEntry(options = {}) {
     descriptionZh,
   })
   const content = stringifyMarketRecord(entry)
+  const sourceIdentity = {
+    owner: identity.owner,
+    repository: identity.repository,
+    subdirectory,
+    branch,
+    version: selected.manifest.version,
+  }
 
   if (options.approve !== true) {
-    return { dryRun: true, package: selected.manifest.name, filename, entry, content }
+    return {
+      dryRun: true,
+      package: selected.manifest.name,
+      filename,
+      entry,
+      content,
+      sourceIdentity,
+    }
   }
   if (typeof options.approvedBy !== 'string' || options.approvedBy.trim() === '') {
     throw new Error('--approved-by is required with --approve')
