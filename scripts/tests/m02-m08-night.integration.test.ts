@@ -13,12 +13,15 @@ import {
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { describe, expect, it } from 'vitest'
 import type {
+  AccountId,
+  AccountSessionRegistry,
   AuthService,
   Clock,
+  SessionId,
   TelemetryAggregator,
   TelemetrySnapshot,
 } from '../../packages/core/src/index.js'
-import { asSessionId } from '../../packages/core/src/index.js'
+import { asAccountId, asSessionId, LubanError } from '../../packages/core/src/index.js'
 import contextPlugin from '../../packages/dsh-luban-context/src/index.js'
 import type { Config as ContextConfig } from '../../packages/dsh-luban-context/src/config.js'
 import { DefaultAgentClaimService } from '../../packages/dsh-luban-taskboard/src/claim-service.js'
@@ -64,15 +67,44 @@ const NIGHT_CONTEXT = [
   'Recent progress remains verbatim.',
 ] as const
 
+const ACCOUNT = asAccountId('night-integration-user')
+
 class FixedClock implements Clock {
   public now(): number {
     return new Date(2026, 7, 30, 1, 0, 0).getTime()
   }
 }
 
-function authentication(): AuthService {
+function memoryAccountSessions(): AccountSessionRegistry {
+  const owners = new Map<SessionId, AccountId>()
   return {
-    middleware: () => () => Promise.resolve({ allowed: true, status: 200, user: 'tester' }),
+    bind(accountId, sessionId): Promise<void> {
+      const current = owners.get(sessionId)
+      if (current !== undefined && current !== accountId) {
+        throw new LubanError(
+          'E_ACCOUNT_SCOPE_MISMATCH',
+          `Session ${sessionId} already belongs to another account`,
+        )
+      }
+      owners.set(sessionId, accountId)
+      return Promise.resolve()
+    },
+    ownerOf(sessionId): Promise<AccountId | null> {
+      return Promise.resolve(owners.get(sessionId) ?? null)
+    },
+  }
+}
+
+function authentication(accountSessions: AccountSessionRegistry): AuthService {
+  return {
+    middleware: () => () =>
+      Promise.resolve({
+        allowed: true,
+        status: 200,
+        user: 'tester',
+        account: { accountId: ACCOUNT, username: 'tester', role: 'operator' },
+      }),
+    accountSessions,
   } as unknown as AuthService
 }
 
@@ -217,6 +249,7 @@ describe('M02 night task to M08 cadence integration', (): void => {
     const directory = await mkdtemp(join(tmpdir(), 'luban-night-context-integration-'))
     const context = new Context()
     const clock = new FixedClock()
+    const accountSessions = memoryAccountSessions()
     let sampledSessionId: ReturnType<typeof asSessionId> | undefined
     const telemetry: TelemetryAggregator = {
       register: () => (): void => undefined,
@@ -252,7 +285,7 @@ describe('M02 night task to M08 cadence integration', (): void => {
     const authFiber = context.plugin({
       name: 'night-context-integration-auth',
       apply(ctx: Context): void {
-        ctx.provide('lubanAuth', authentication())
+        ctx.provide('lubanAuth', authentication(accountSessions))
       },
     })
     const telemetryFiber = context.plugin({
@@ -273,6 +306,7 @@ describe('M02 night task to M08 cadence integration', (): void => {
         )
         const claims = new DefaultAgentClaimService(store, 'ubuntu', true)
         await store.create({
+          accountId: ACCOUNT,
           title: 'Compact a long unattended task',
           description: 'Exercise the M02 to M08 cadence contract.',
           status: 'todo',
@@ -288,6 +322,7 @@ describe('M02 night task to M08 cadence integration', (): void => {
           executor: new DshAgentNightExecutor(harness.registry, NIGHT_CONFIG, clock),
           config: NIGHT_CONFIG,
           hostScope: 'ubuntu',
+          accountSessions,
           clock,
         })
 
@@ -306,7 +341,7 @@ describe('M02 night task to M08 cadence integration', (): void => {
           expect(String(sessionId)).toMatch(/^luban-night-/u)
           expect(sampledSessionId).toBe(asSessionId(sessionId))
           expect(agent.session.surface.nodes).toHaveLength(2)
-          const audits = await context.lubanCompaction.audit(asSessionId(sessionId))
+          const audits = await context.lubanCompaction.audit(asSessionId(sessionId), ACCOUNT)
           expect(audits).toHaveLength(1)
           const [audit] = audits
           expect(audit).toMatchObject({
@@ -317,18 +352,19 @@ describe('M02 night task to M08 cadence integration', (): void => {
           const replay = (
             await Promise.all(
               (audit?.archiveFiles ?? []).map(async (path): Promise<string> =>
-                context.lubanCompaction.replayFile(asSessionId(sessionId), path),
+                context.lubanCompaction.replayFile(asSessionId(sessionId), path, ACCOUNT),
               ),
             )
           ).join('\n')
           for (const source of NIGHT_CONTEXT) expect(replay).toContain(source)
           expect(compactionEvents).toEqual([
             expect.objectContaining({
+              accountId: ACCOUNT,
               sessionId,
               strategy: 'summarize+virtualfile',
             }),
           ])
-          const [completed] = await store.query({ statuses: ['review'] })
+          const [completed] = await store.query({ accountId: ACCOUNT, statuses: ['review'] })
           expect(completed).toMatchObject({ autoDone: true, outputs: [expect.any(Object)] })
           expect(scheduler.status()).toMatchObject({ quotaUsed: 1, circuit: 'ok' })
         } finally {
