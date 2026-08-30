@@ -85,7 +85,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   if (resolved.taskboardAutoRun) {
     ctx.inject(
       ['lubanTaskStore', 'lubanAgentClaim', 'lubanNightScheduler'],
-      (taskContext): (() => void) => {
+      async (taskContext): Promise<() => void> => {
         const store = taskContext.get('lubanTaskStore')
         const claims = taskContext.get('lubanAgentClaim')
         const scheduler = taskContext.get('lubanNightScheduler')
@@ -101,7 +101,10 @@ export function apply(ctx: Context, config: Config = {}): void {
               automation.executeNightTask(task, sessionId),
           },
         })
-        const unbind = automation.bind(store)
+        const unbind = await automation.bind(store, (error: unknown): void => {
+          const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+          logger.error(`browser task execution failed: ${detail}`)
+        })
         return (): void => {
           unbind()
           unregister()

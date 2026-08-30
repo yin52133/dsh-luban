@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   AgentClaimService,
   ClaimCompletionOptions,
   ClaimFilter,
@@ -9,6 +10,7 @@ import type {
   TaskId,
   TaskOutput,
   TaskProgress,
+  TaskStore,
 } from 'dsh-luban-core'
 import { asAccountId, asActorId, asSessionId, asTaskId } from 'dsh-luban-core'
 import { LubanError } from 'dsh-luban-core'
@@ -19,6 +21,64 @@ import type { BrowserJobRequest, BrowserJobSnapshot, BrowserQueue } from '../src
 const ACCOUNT = asAccountId('alice')
 
 describe('BrowserTaskboardAutomation', () => {
+  it('recovers persisted browser claims per account and deduplicates a concurrent transition', async () => {
+    const alice = task(['browser', 'auto-ok', 'browser-template:datasheet'])
+    const bob = task(
+      ['browser', 'auto-ok', 'browser-template:datasheet'],
+      'lease-bob',
+      1,
+      asAccountId('bob'),
+    )
+    if (alice.claim === undefined || alice.claim === null) {
+      throw new Error('Alice browser task claim is required')
+    }
+    const aliceActor = alice.claim.actor
+    const { queue, enqueue, requests } = fakeQueueForAccounts()
+    const claims = fakeClaims()
+    let listener: ((event: Parameters<Parameters<TaskStore['subscribe']>[0]>[0]) => void) | undefined
+    const query = vi.fn((): Promise<readonly Task[]> => {
+      listener?.({
+        type: 'transitioned',
+        task: alice,
+        from: 'todo',
+        to: 'doing',
+        actor: aliceActor,
+      })
+      return Promise.resolve([alice, bob])
+    })
+    const store = fakeStore(query, (value): (() => void) => {
+      listener = value
+      return (): void => {
+        listener = undefined
+      }
+    })
+    const onError = vi.fn()
+    const automation = new BrowserTaskboardAutomation(queue, claims.service)
+
+    const unbind = await automation.bind(store, onError)
+    await vi.waitFor((): void => {
+      expect(enqueue).toHaveBeenCalledTimes(2)
+    })
+
+    expect(query).toHaveBeenCalledWith({ statuses: ['doing'], tags: ['browser'] })
+    expect(requests.map((request) => request.accountId)).toEqual([ACCOUNT, asAccountId('bob')])
+    expect(onError).not.toHaveBeenCalled()
+    unbind()
+  })
+
+  it('surfaces recovery query failures and removes the event listener', async () => {
+    const failure = new Error('task ledger unavailable')
+    const unsubscribe = vi.fn()
+    const store = fakeStore(
+      vi.fn(() => Promise.reject(failure)),
+      (): (() => void) => unsubscribe,
+    )
+    const automation = new BrowserTaskboardAutomation(fakeQueue().queue, fakeClaims().service)
+
+    await expect(automation.bind(store, vi.fn())).rejects.toBe(failure)
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
   it('requires all safety tags and writes a successful artifact through claims', async () => {
     const { queue, enqueue } = fakeQueue()
     const claims = fakeClaims()
@@ -208,10 +268,15 @@ describe('BrowserTaskboardAutomation', () => {
   })
 })
 
-function task(tags: readonly string[], leaseId = 'lease-1', version = 1): Task {
+function task(
+  tags: readonly string[],
+  leaseId = 'lease-1',
+  version = 1,
+  accountId = ACCOUNT,
+): Task {
   return {
     id: asTaskId('T-1'),
-    accountId: ACCOUNT,
+    accountId,
     title: 'Research part',
     description: 'Find the datasheet',
     status: 'doing',
@@ -228,6 +293,20 @@ function task(tags: readonly string[], leaseId = 'lease-1', version = 1): Task {
     outputs: [],
     createdAt: 1,
     updatedAt: 1,
+  }
+}
+
+function fakeStore(
+  query: TaskStore['query'],
+  subscribe: TaskStore['subscribe'],
+): TaskStore {
+  return {
+    create: vi.fn(() => Promise.reject(new Error('not implemented'))),
+    update: vi.fn(() => Promise.reject(new Error('not implemented'))),
+    transition: vi.fn(() => Promise.reject(new Error('not implemented'))),
+    get: vi.fn(() => Promise.resolve(null)),
+    query,
+    subscribe,
   }
 }
 
@@ -295,6 +374,42 @@ function fakeQueue(resultStatus: 'ok' | 'failed' = 'ok'): {
       get: vi.fn(() => completed),
       list: vi.fn(() => [completed]),
       wait: vi.fn(() => Promise.resolve(completed)),
+      subscribe: vi.fn(() => (): void => undefined),
+      subscribeAll: vi.fn(() => (): void => undefined),
+    },
+  }
+}
+
+function fakeQueueForAccounts(): {
+  readonly queue: BrowserQueue
+  readonly enqueue: ReturnType<typeof vi.fn>
+  readonly requests: readonly BrowserJobRequest[]
+} {
+  const requests: BrowserJobRequest[] = []
+  const enqueue = vi.fn((request: BrowserJobRequest): BrowserJobSnapshot => {
+    requests.push(request)
+    return {
+      id: `R-${String(request.accountId)}`,
+      accountId: request.accountId,
+      status: 'queued',
+      task: request.task,
+      automatic: true,
+      createdAt: 1,
+      progressStep: 0,
+      screenshots: [],
+    }
+  })
+  return {
+    enqueue,
+    requests,
+    queue: {
+      enqueue,
+      cancel: vi.fn(() => Promise.resolve(false)),
+      get: vi.fn(() => null),
+      list: vi.fn(() => []),
+      wait: vi.fn((id: string, accountId: AccountId): Promise<BrowserJobSnapshot> =>
+        Promise.resolve({ ...completedJob(id), id, accountId }),
+      ),
       subscribe: vi.fn(() => (): void => undefined),
       subscribeAll: vi.fn(() => (): void => undefined),
     },

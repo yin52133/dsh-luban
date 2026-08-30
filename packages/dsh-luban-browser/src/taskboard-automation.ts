@@ -41,11 +41,31 @@ export class BrowserTaskboardAutomation {
     this.#claims = claims
   }
 
-  public bind(store: TaskStore): () => void {
-    return store.subscribe((event): void => {
+  public async bind(store: TaskStore, onError: (error: unknown) => void): Promise<() => void> {
+    let active = true
+    const execute = (task: Task): void => {
+      void this.executeClaimedTask(task).catch((error: unknown): void => {
+        if (active) onError(error)
+      })
+    }
+    const unsubscribe = store.subscribe((event): void => {
       if (event.type !== 'transitioned' || event.to !== 'doing') return
-      void this.executeClaimedTask(event.task).catch((): undefined => undefined)
+      execute(event.task)
     })
+
+    try {
+      const interrupted = await store.query({ statuses: ['doing'], tags: ['browser'] })
+      for (const task of interrupted) execute(task)
+    } catch (error: unknown) {
+      active = false
+      unsubscribe()
+      throw error
+    }
+
+    return (): void => {
+      active = false
+      unsubscribe()
+    }
   }
 
   public async executeClaimedTask(task: Task): Promise<void> {
