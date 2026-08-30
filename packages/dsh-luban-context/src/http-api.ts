@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService } from '@luban/core'
-import { LubanError, asSessionId, isLubanError, modulePrefix } from '@luban/core'
+import type { AuthService } from 'dsh-luban-core'
+import { LubanError, asSessionId, isLubanError, modulePrefix } from 'dsh-luban-core'
 import type { CompactionEngineWithReplay } from './engine.js'
 
 const PREFIX = modulePrefix('context')

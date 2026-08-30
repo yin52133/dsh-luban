@@ -1,5 +1,5 @@
-import type { ExecResult } from '@luban/core'
-import { LubanError } from '@luban/core'
+import type { ExecResult } from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import { assertAllowedPath, type Config } from './config.js'
 import type {
   CommandRunner,

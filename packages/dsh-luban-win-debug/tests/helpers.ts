@@ -1,4 +1,4 @@
-import type { ExecResult } from '@luban/core'
+import type { ExecResult } from 'dsh-luban-core'
 import { vi } from 'vitest'
 import { parseConfig, type Config } from '../src/config.js'
 import { BoundedAsyncQueue } from '../src/queue.js'

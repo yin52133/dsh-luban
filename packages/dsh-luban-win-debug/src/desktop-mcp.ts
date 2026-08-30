@@ -1,5 +1,5 @@
 import type { ToolDefinition, ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { LubanError } from '@luban/core'
+import { LubanError } from 'dsh-luban-core'
 import type { Config } from './config.js'
 import {
   NodeStdioMcpClient,

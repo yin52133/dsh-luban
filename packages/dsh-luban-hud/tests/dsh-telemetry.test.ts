@@ -7,7 +7,7 @@ import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TokenMeter, type ContextPressureProjection } from '@deepseek-ai/dsh-token-meter'
-import { asSessionId, type TelemetrySnapshot } from '@luban/core'
+import { asSessionId, type TelemetrySnapshot } from 'dsh-luban-core'
 import { describe, expect, it } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import {

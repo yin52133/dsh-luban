@@ -6,7 +6,14 @@ import { basename, join, resolve } from 'node:path'
 const root = resolve(import.meta.dirname, '..')
 const packagesDirectory = join(root, 'packages')
 const findings = []
-const allowedRuntimeDependencies = new Set(['@luban/core', 'argon2', 'serialport', 'sharp', 'yaml'])
+const corePackageName = 'dsh-luban-core'
+const allowedRuntimeDependencies = new Set([
+  corePackageName,
+  'argon2',
+  'serialport',
+  'sharp',
+  'yaml',
+])
 
 async function sourceFiles(directory) {
   const files = []
@@ -22,6 +29,16 @@ for (const entry of await readdir(packagesDirectory, { withFileTypes: true })) {
   if (!entry.isDirectory()) continue
   const directory = join(packagesDirectory, entry.name)
   const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))
+  if (entry.name === 'core') {
+    if (manifest.name !== corePackageName) {
+      findings.push(`core: package name must be ${corePackageName}`)
+    }
+    continue
+  }
+  if (manifest.name === corePackageName) {
+    findings.push(`${corePackageName}: must use the packages/core directory`)
+    continue
+  }
   if (!String(manifest.name).startsWith('dsh-luban-')) continue
 
   const suffix = String(manifest.name).slice('dsh-luban-'.length)
@@ -52,7 +69,7 @@ for (const entry of await readdir(packagesDirectory, { withFileTypes: true })) {
     const source = await readFile(file, 'utf8')
     if (/['"`]\/luban\//u.test(source))
       findings.push(`${manifest.name}: legacy /luban/ route in ${file}`)
-    const implementationImport = /from\s+['"]dsh-luban-(?!core)[^'"]+['"]/u.exec(source)
+    const implementationImport = /from\s+['"]dsh-luban-(?!core['"])[^'"]+['"]/u.exec(source)
     if (implementationImport !== null) {
       findings.push(
         `${manifest.name}: cross-plugin implementation import ${implementationImport[0]}`,

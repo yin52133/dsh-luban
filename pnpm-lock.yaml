@@ -97,12 +97,12 @@ importers:
 
   packages/dsh-luban-auth:
     dependencies:
-      '@luban/core':
-        specifier: workspace:^
-        version: link:../core
       argon2:
         specifier: ^0.45.1
         version: 0.45.1
+      dsh-luban-core:
+        specifier: workspace:^
+        version: link:../core
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
@@ -123,7 +123,7 @@ importers:
       '@deepseek-ai/dsh-host-webserver':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
 
@@ -144,7 +144,7 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: '>=0.1.1-rc.1'
         version: 0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc)
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
 
@@ -174,7 +174,7 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: '>=0.1.1-rc.1'
         version: 0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc)
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
       react:
@@ -207,7 +207,7 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: '>=0.1.1-rc.2'
         version: 0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc)
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
       react:
@@ -222,7 +222,7 @@ importers:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
         version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
 
@@ -255,7 +255,7 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: '>=0.1.1-rc.1'
         version: 0.1.1-rc.2(119bc70f73f8eddebfaa6b47561adeb3)
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
       react:
@@ -279,7 +279,7 @@ importers:
       '@deepseek-ai/dsh-host-webserver':
         specifier: '>=0.1.1-rc.1'
         version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
       react:
@@ -312,7 +312,7 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: '>=0.1.1-rc.1'
         version: 0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc)
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
       react:
@@ -348,7 +348,7 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: '>=0.1.1-rc.1'
         version: 0.1.1-rc.2(119bc70f73f8eddebfaa6b47561adeb3)
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
       react:
@@ -384,7 +384,7 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: '>=0.1.1-rc.2'
         version: 0.1.1-rc.2(119bc70f73f8eddebfaa6b47561adeb3)
-      '@luban/core':
+      dsh-luban-core:
         specifier: workspace:^
         version: link:../core
       react:

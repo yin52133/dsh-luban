@@ -10,8 +10,8 @@ import type {
   KeepaliveEvent,
   ManagedSession,
   SessionSpec,
-} from '@luban/core'
-import { asHostId, asTaskId } from '@luban/core'
+} from 'dsh-luban-core'
+import { asHostId, asTaskId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KeepaliveAlertSink } from '../src/alerts.js'
 import { KeepaliveLedgerStore } from '../src/ledger.js'

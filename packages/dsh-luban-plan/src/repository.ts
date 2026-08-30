@@ -23,7 +23,7 @@ import type {
   PlanStatus,
   SessionId,
   TaskId,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import {
   AtomicJsonStore,
   LubanError,
@@ -31,7 +31,7 @@ import {
   asPlanId,
   asSessionId,
   asTaskId,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import { renderPlanDocument } from './template.js'
 
 export interface StoredPlan extends Plan {

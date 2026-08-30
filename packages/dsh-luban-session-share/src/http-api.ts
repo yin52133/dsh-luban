@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService, SessionId } from '@luban/core'
+import type { AuthService, SessionId } from 'dsh-luban-core'
 import {
   LubanError,
   asActorId,
@@ -8,7 +8,7 @@ import {
   asTaskId,
   isLubanError,
   modulePrefix,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import type { SharedSessionRegistry } from './registry.js'
 import type {
   AccountRole,

@@ -1,5 +1,5 @@
 import { createServer, type Server, type Socket } from 'node:net'
-import type { ChannelDataEvent, ChannelHandle } from '@luban/core'
+import type { ChannelDataEvent, ChannelHandle } from 'dsh-luban-core'
 import { describe, expect, it } from 'vitest'
 import { NodeSocketConnector, TcpChannelAdapter } from '../src/channels.js'
 

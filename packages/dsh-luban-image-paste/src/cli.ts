@@ -3,7 +3,7 @@
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { LubanError } from '@luban/core'
+import { LubanError } from 'dsh-luban-core'
 import { SystemClipboardAdapter } from './clipboard.js'
 import type { ClipboardAdapter } from './types.js'
 

@@ -1,4 +1,4 @@
-import type { Clock } from '@luban/core'
+import type { Clock } from 'dsh-luban-core'
 
 export const AUTH_COOKIE_NAME = 'luban_session'
 export const CSRF_COOKIE_NAME = 'luban_csrf'

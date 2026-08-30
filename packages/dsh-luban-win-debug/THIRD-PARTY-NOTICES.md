@@ -2,7 +2,7 @@
 
 `dsh-luban-win-debug` bundles no third-party source code, executables, native
 bindings, UI assets, firmware, or command templates copied from another
-project. `@luban/core` is part of this MIT-licensed repository. DSH, Cordis,
+project. `dsh-luban-core` is part of this MIT-licensed repository. DSH, Cordis,
 React, and their licenses are supplied by the host profile as peer dependencies.
 
 The following are optional integrations. `serialport` is declared as an optional

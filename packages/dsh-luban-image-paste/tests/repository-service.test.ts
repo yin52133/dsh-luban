@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { asSessionId } from '@luban/core'
+import { asSessionId } from 'dsh-luban-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AttachmentRepository } from '../src/repository.js'
 import { FileImageIngestService } from '../src/service.js'

@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
-import type { AuthService } from '@luban/core'
-import { asSessionId } from '@luban/core'
+import type { AuthService } from 'dsh-luban-core'
+import { asSessionId } from 'dsh-luban-core'
 import type { CompactionEngineWithReplay } from '../src/engine.js'
 import { ContextHttpApi } from '../src/http-api.js'
 

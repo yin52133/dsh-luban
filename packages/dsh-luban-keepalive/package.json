@@ -43,7 +43,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@luban/core": "workspace:^"
+    "dsh-luban-core": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"

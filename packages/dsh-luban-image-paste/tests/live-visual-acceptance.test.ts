@@ -6,7 +6,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { asSessionId } from '@luban/core'
+import { asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { imagePrompt } from '../src/dsh-injection.js'
 import {

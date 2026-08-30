@@ -1,4 +1,4 @@
-import type { TaskStore, TelemetrySnapshot } from '@luban/core'
+import type { TaskStore, TelemetrySnapshot } from 'dsh-luban-core'
 import type { TelemetryAdvisory } from './types.js'
 
 const ACTIVE_STATUSES = ['backlog', 'todo', 'doing', 'review'] as const

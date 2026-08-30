@@ -14,7 +14,7 @@ export default defineConfig({
     neverBundle: [
       '@deepseek-ai/cordis',
       '@deepseek-ai/dsh-host-webserver',
-      '@luban/core',
+      'dsh-luban-core',
       'argon2',
     ],
   },

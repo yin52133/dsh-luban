@@ -9,7 +9,7 @@ import type {
   BrowserSession,
   BrowserTaskSpec,
   BrowserTemplate,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import { AsyncQueue } from './async-queue.js'
 import type { ResolvedConfig } from './config.js'
 import { isUnrestrictedDomainPattern } from './domain-policy.js'

@@ -15,13 +15,13 @@ import type {
   SessionId,
   Task,
   TaskOutput,
-} from '@luban/core'
-import { LubanError, asActorId, asHostId, asSessionId, systemClock } from '@luban/core'
+} from 'dsh-luban-core'
+import { LubanError, asActorId, asHostId, asSessionId, systemClock } from 'dsh-luban-core'
 import type { NightConfig } from './config.js'
 import type { DefaultAgentClaimService } from './claim-service.js'
 import type { JsonTaskStore } from './task-store.js'
 
-export type { NightTaskExecutor, NightTaskExecutorRoute } from '@luban/core'
+export type { NightTaskExecutor, NightTaskExecutorRoute } from 'dsh-luban-core'
 
 interface DisposableNightTaskExecutor extends NightTaskExecutor {
   dispose?(): Promise<void>

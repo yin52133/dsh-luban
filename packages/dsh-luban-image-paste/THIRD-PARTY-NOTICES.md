@@ -6,4 +6,4 @@ This package interoperates with the following peer/runtime projects and does not
 - React — MIT License.
 - sharp (optional image-processing peer) — Apache License 2.0; see the installed package for its notices and bundled native-library licenses.
 
-`@luban/core` is part of the same dsh-luban repository and is licensed under MIT.
+`dsh-luban-core` is part of the same dsh-luban repository and is licensed under MIT.

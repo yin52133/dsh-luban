@@ -1,5 +1,12 @@
-import type { Checkpoint, Clock, JsonCodec, ManagedSession, SessionSpec, TaskId } from '@luban/core'
-import { asHostId, asTaskId, AtomicJsonStore, LubanError, systemClock } from '@luban/core'
+import type {
+  Checkpoint,
+  Clock,
+  JsonCodec,
+  ManagedSession,
+  SessionSpec,
+  TaskId,
+} from 'dsh-luban-core'
+import { asHostId, asTaskId, AtomicJsonStore, LubanError, systemClock } from 'dsh-luban-core'
 import { managedSessionId } from './session-id.js'
 
 export interface KeepaliveRecord {

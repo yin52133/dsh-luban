@@ -4,8 +4,8 @@ import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId as DshSessionId } from '@deepseek-ai/dsh-session'
-import type { SessionId } from '@luban/core'
-import { LubanError } from '@luban/core'
+import type { SessionId } from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import type {
   ImageInjectionOptions,
   InjectStyle,

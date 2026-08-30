@@ -4,7 +4,7 @@ import type {
   BuildJobInput,
   ResourceReport,
   ServerModeService,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import type { BuildTemplateConfig } from './config.js'
 import type { BuildQueue, BuildQueueEvent } from './queue.js'
 import type { UserSystemdInstaller } from './systemd.js'

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
-import type { HostScope } from '@luban/core'
+import type { HostScope } from 'dsh-luban-core'
 
 export interface NightConfig {
   readonly enabled: boolean

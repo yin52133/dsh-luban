@@ -1,6 +1,11 @@
 import { createHash, randomBytes as systemRandomBytes, timingSafeEqual } from 'node:crypto'
 import { argon2id, hash as argonHash, verify as argonVerify } from 'argon2'
-import { AtomicJsonStore, type AuthEvent, type IssuedSession, type VerifyResult } from '@luban/core'
+import {
+  AtomicJsonStore,
+  type AuthEvent,
+  type IssuedSession,
+  type VerifyResult,
+} from 'dsh-luban-core'
 import { authStateCodec, initialAuthState } from './state.js'
 import type {
   AccountRecord,

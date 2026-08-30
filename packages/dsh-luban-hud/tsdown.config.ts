@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsdown'
 
-const sharedExternals = [/^@deepseek-ai\//u, /^@luban\//u, /^react(?:\/|$)/u]
+const sharedExternals = [/^@deepseek-ai\//u, /^dsh-luban-core$/u, /^react(?:\/|$)/u]
 
 export default defineConfig([
   {

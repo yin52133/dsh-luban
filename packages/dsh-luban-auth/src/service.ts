@@ -8,7 +8,7 @@ import type {
   AuthService,
   IssuedSession,
   VerifyResult,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import type { AuthManager } from './auth-manager.js'
 import {
   AUTH_COOKIE_NAME,

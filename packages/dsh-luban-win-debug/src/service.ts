@@ -9,8 +9,8 @@ import type {
   SnippetFile,
   SnippetRange,
   WinDebugService,
-} from '@luban/core'
-import { LubanError } from '@luban/core'
+} from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import { AndroidChannelAdapter, AndroidService } from './android.js'
 import {
   createGdbChannel,
@@ -54,7 +54,7 @@ export interface WinDebugDependencies {
   readonly desktopMcp?: DesktopMcpClient
 }
 
-/** L3 assembly implementing every channel through the one @luban/core contract. */
+/** L3 assembly implementing every channel through the one dsh-luban-core contract. */
 export class DefaultWinDebugService implements WinDebugService {
   readonly #hub: ChannelHub
   readonly #templates: CommandTemplateRegistry

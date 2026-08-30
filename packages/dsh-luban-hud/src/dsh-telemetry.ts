@@ -6,8 +6,8 @@ import {
   type Session,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
-import type { Clock, SessionId, TelemetryProvider, TelemetrySnapshot } from '@luban/core'
-import { systemClock } from '@luban/core'
+import type { Clock, SessionId, TelemetryProvider, TelemetrySnapshot } from 'dsh-luban-core'
+import { systemClock } from 'dsh-luban-core'
 import type { MonotonicClock, SlidingRateWindow } from './rate-window.js'
 import { systemMonotonicClock } from './rate-window.js'
 

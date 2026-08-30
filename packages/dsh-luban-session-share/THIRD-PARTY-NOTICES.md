@@ -5,4 +5,4 @@ This package interoperates with the following peer/runtime projects and does not
 - DeepSeek DSH packages (`@deepseek-ai/*`) — see each installed package for its license and notices.
 - React — MIT License.
 
-`@luban/core` is part of the same dsh-luban repository and is licensed under MIT.
+`dsh-luban-core` is part of the same dsh-luban repository and is licensed under MIT.

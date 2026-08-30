@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { LubanError } from '@luban/core'
+import { LubanError } from 'dsh-luban-core'
 import { describe, expect, it } from 'vitest'
 import {
   SystemClipboardAdapter,

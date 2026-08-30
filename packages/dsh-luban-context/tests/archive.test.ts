@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { CompactionAuditRecord } from '@luban/core'
-import { asSessionId } from '@luban/core'
+import type { CompactionAuditRecord } from 'dsh-luban-core'
+import { asSessionId } from 'dsh-luban-core'
 import { ContextArchiveRepository } from '../src/archive.js'
 import { parseConfig } from '../src/config.js'
 

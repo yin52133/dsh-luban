@@ -13,8 +13,8 @@ import type {
   SessionId,
   Task,
   TaskId,
-} from '@luban/core'
-import { LubanError, asSessionId } from '@luban/core'
+} from 'dsh-luban-core'
+import { LubanError, asSessionId } from 'dsh-luban-core'
 import type { SharedSessionRegistry } from './registry.js'
 import type { SessionInputSink } from './types.js'
 

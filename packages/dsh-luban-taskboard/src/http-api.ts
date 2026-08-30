@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Actor, AuthService, TaskEvent, TaskPatch, TaskStatus } from '@luban/core'
+import type { Actor, AuthService, TaskEvent, TaskPatch, TaskStatus } from 'dsh-luban-core'
 import {
   LubanError,
   asActorId,
@@ -8,7 +8,7 @@ import {
   asTaskId,
   isLubanError,
   modulePrefix,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import type { DefaultAgentClaimService } from './claim-service.js'
 import type { DefaultNightScheduler } from './night-scheduler.js'
 import type { ImportTask, JsonTaskStore } from './task-store.js'

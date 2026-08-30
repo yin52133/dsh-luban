@@ -1,6 +1,6 @@
 import { appendFile, chmod, mkdir, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Clock } from '@luban/core'
+import type { Clock } from 'dsh-luban-core'
 import type { AuditRecord, AuditSink } from './types.js'
 
 const DAY_MS = 24 * 60 * 60 * 1_000

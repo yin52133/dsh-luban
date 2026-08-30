@@ -11,8 +11,8 @@ import type {
   ContextSegment,
   SessionRef,
   TelemetrySnapshot,
-} from '@luban/core'
-import { asSessionId } from '@luban/core'
+} from 'dsh-luban-core'
+import { asSessionId } from 'dsh-luban-core'
 import { ContextArchiveRepository } from '../src/archive.js'
 import type { Config } from '../src/config.js'
 import { DefaultCompactionEngine, type CompactionWorkspace } from '../src/engine.js'

@@ -1,4 +1,4 @@
-import type { Plan, PlanGuard, PlanGuardResult } from '@luban/core'
+import type { Plan, PlanGuard, PlanGuardResult } from 'dsh-luban-core'
 
 const TOOL_CATEGORIES: Readonly<Record<string, readonly RegExp[]>> = Object.freeze({
   bash: [/shell/u, /bash/u, /command/u, /exec/u, /terminal/u, /^run_/u],

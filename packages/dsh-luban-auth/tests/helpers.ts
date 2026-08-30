@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Clock } from '@luban/core'
+import type { Clock } from 'dsh-luban-core'
 import { AuthManager } from '../src/auth-manager.js'
 import type { AuditRecord, AuditSink, PasswordHasher } from '../src/types.js'
 

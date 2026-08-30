@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import type { AuthService } from '@luban/core'
+import type { AuthService } from 'dsh-luban-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ImagePasteHttpApi } from '../src/http-api.js'
 import type {

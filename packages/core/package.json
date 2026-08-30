@@ -1,5 +1,5 @@
 {
-  "name": "@luban/core",
+  "name": "dsh-luban-core",
   "version": "0.1.0",
   "description": "Shared contracts, services, and platform abstraction layer for dsh-luban plugins",
   "type": "module",

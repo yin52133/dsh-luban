@@ -11,8 +11,8 @@ import type {
   SessionId,
   TaskStore,
   Unsubscribe,
-} from '@luban/core'
-import { LubanError } from '@luban/core'
+} from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import { ApprovalPlanGuard } from './guard.js'
 import type { StoredPlan } from './repository.js'
 import type { PlanRepository } from './repository.js'

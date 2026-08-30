@@ -7,7 +7,7 @@ import type {
   NightScheduler,
   TaskOutput,
   TaskStore,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import { BridgeProcess } from './bridge-process.js'
 import { BrowserService } from './browser-service.js'
 import { resolveConfig, type Config } from './config.js'

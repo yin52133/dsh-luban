@@ -21,8 +21,8 @@ import type {
   ContextSegment,
   JsonCodec,
   SessionId,
-} from '@luban/core'
-import { AtomicJsonStore, LubanError, asSessionId, redactSecrets } from '@luban/core'
+} from 'dsh-luban-core'
+import { AtomicJsonStore, LubanError, asSessionId, redactSecrets } from 'dsh-luban-core'
 
 export interface ArchiveIndexEntry {
   readonly startSeq: number

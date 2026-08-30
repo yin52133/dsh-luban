@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
-import type { ChannelEndpoint } from '@luban/core'
-import { LubanError, redactSecrets } from '@luban/core'
+import type { ChannelEndpoint } from 'dsh-luban-core'
+import { LubanError, redactSecrets } from 'dsh-luban-core'
 import { assertAllowedPath, type Config } from './config.js'
 import type { SnippetStore } from './snippet-store.js'
 import type {

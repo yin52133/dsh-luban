@@ -6,7 +6,7 @@ import type {
   NightTaskExecutorRoute,
   Task,
   TaskStore,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import * as plugin from '../src/index.js'
 

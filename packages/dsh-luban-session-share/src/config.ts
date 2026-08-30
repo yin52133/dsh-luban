@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { asHostId, type HostId } from '@luban/core'
+import { asHostId, type HostId } from 'dsh-luban-core'
 
 export interface PeerConfig {
   readonly name: string

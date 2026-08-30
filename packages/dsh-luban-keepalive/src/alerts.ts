@@ -1,4 +1,4 @@
-import type { HealthReport, TaskStore } from '@luban/core'
+import type { HealthReport, TaskStore } from 'dsh-luban-core'
 
 export interface KeepaliveAlertSink {
   report(report: HealthReport): Promise<void>

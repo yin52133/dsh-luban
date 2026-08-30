@@ -5,8 +5,8 @@ import type {
   ChannelHandle,
   ExecResult,
   OpenOptions,
-} from '@luban/core'
-import { LubanError } from '@luban/core'
+} from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import { parseCommandWords } from './command-runner.js'
 import type { Config } from './config.js'
 import { BoundedAsyncQueue } from './queue.js'

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService, BrowserTaskSpec, BrowserTemplate } from '@luban/core'
+import type { AuthService, BrowserTaskSpec, BrowserTemplate } from 'dsh-luban-core'
 import { BrowserError } from './errors.js'
 import { authRequest } from './security.js'
 import type {

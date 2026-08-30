@@ -1,4 +1,4 @@
-import { LubanError } from '@luban/core'
+import { LubanError } from 'dsh-luban-core'
 import {
   hostTaskDefinition,
   matchesWindowsTaskXml,

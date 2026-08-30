@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService, SessionId } from '@luban/core'
-import { LubanError, asSessionId, isLubanError, modulePrefix } from '@luban/core'
+import type { AuthService, SessionId } from 'dsh-luban-core'
+import { LubanError, asSessionId, isLubanError, modulePrefix } from 'dsh-luban-core'
 import { normalizeDeclaredMime } from './image-format.js'
 import {
   downgradeVisualAcceptanceEvidence,

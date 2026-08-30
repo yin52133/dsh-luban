@@ -2,8 +2,8 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import type { ArtifactRef } from '@luban/core'
-import { LubanError } from '@luban/core'
+import type { ArtifactRef } from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import { canonicalExistingWithin } from './path-boundary.js'
 
 function inside(root: string, candidate: string): boolean {

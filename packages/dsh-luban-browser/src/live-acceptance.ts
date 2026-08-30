@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } fro
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { BrowserEvent, BrowserProfile, BrowserResult, BrowserSession } from '@luban/core'
+import type { BrowserEvent, BrowserProfile, BrowserResult, BrowserSession } from 'dsh-luban-core'
 import { stringify } from 'yaml'
 import { BridgeProcess } from './bridge-process.js'
 import { BrowserService } from './browser-service.js'

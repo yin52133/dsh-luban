@@ -8,8 +8,8 @@ import { CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest'
-import type { Clock, SessionRef, TelemetryAggregator, TelemetrySnapshot } from '@luban/core'
-import { asSessionId } from '@luban/core'
+import type { Clock, SessionRef, TelemetryAggregator, TelemetrySnapshot } from 'dsh-luban-core'
+import { asSessionId } from 'dsh-luban-core'
 import {
   DshCompactionContextFactory,
   DshCompactionCoordinator,

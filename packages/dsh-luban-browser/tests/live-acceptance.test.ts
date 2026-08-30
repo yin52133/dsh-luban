@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { BrowserEvent, BrowserProfile, BrowserSession } from '@luban/core'
+import type { BrowserEvent, BrowserProfile, BrowserSession } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   aggregateLiveBrowserEvidence,

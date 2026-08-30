@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { BuildJob, BuildJobInput, ResourceReport, Unsubscribe } from '@luban/core'
-import { LubanError } from '@luban/core'
+import type { BuildJob, BuildJobInput, ResourceReport, Unsubscribe } from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import type { BuildAlertSink } from './alerts.js'
 import type { ArtifactManager } from './artifacts.js'
 import type { BuildTemplateConfig } from './config.js'

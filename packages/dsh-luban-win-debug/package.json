@@ -44,7 +44,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@luban/core": "workspace:^"
+    "dsh-luban-core": "workspace:^"
   },
   "optionalDependencies": {
     "serialport": "^13.0.0"

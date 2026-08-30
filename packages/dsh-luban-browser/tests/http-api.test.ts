@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { AuthService, BrowserTemplate } from '@luban/core'
+import type { AuthService, BrowserTemplate } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BrowserHttpApi } from '../src/http-api.js'
 import type { BrowserJobRequest, BrowserJobSnapshot, BrowserQueue } from '../src/types.js'

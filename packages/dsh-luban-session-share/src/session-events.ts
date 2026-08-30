@@ -1,5 +1,5 @@
-import type { SessionEvent, SessionId } from '@luban/core'
-import { redactSecrets } from '@luban/core'
+import type { SessionEvent, SessionId } from 'dsh-luban-core'
+import { redactSecrets } from 'dsh-luban-core'
 import type { SessionStreamEnvelope, SessionView } from './types.js'
 
 type SessionEventInput =

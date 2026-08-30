@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import type { ChannelEndpoint, SnippetFile } from '@luban/core'
-import { LubanError, redactSecrets } from '@luban/core'
+import type { ChannelEndpoint, SnippetFile } from 'dsh-luban-core'
+import { LubanError, redactSecrets } from 'dsh-luban-core'
 import type { Config } from './config.js'
 
 function boundedContent(content: string, maxLines: number, maxBytes: number): string {

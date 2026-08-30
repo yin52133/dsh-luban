@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
+  CORE_PACKAGE_NAME,
   discoverPackages,
   isPublishable,
   loadPolicy,
@@ -25,6 +26,10 @@ const PLUGIN_README_SECTIONS = [
 
 const SEMVER =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+
+function isPluginPackage(name) {
+  return name.startsWith('dsh-luban-') && name !== CORE_PACKAGE_NAME
+}
 
 function hasString(value) {
   return typeof value === 'string' && value.trim() !== ''
@@ -129,7 +134,7 @@ function validateManifest(manifest, rootVersion, policy, label, issues) {
     issues.push(`${label}: exports["./package.json"] is required`)
   validateFiles(manifest, policy, label, issues)
 
-  if (String(manifest.name).startsWith('dsh-luban-')) {
+  if (isPluginPackage(String(manifest.name))) {
     if (manifest.dsh?.bundle?.patch !== './cordis.patch.yml')
       issues.push(`${label}: dsh.bundle.patch must be ./cordis.patch.yml`)
     if (manifest.exports?.['./cordis.patch.yml'] !== './cordis.patch.yml')
@@ -150,7 +155,7 @@ function validateManifest(manifest, rootVersion, policy, label, issues) {
 }
 
 function validatePackageReadme(manifest, readme, label, issues) {
-  if (String(manifest.name).startsWith('dsh-luban-')) {
+  if (isPluginPackage(String(manifest.name))) {
     for (const [section, pattern] of PLUGIN_README_SECTIONS) {
       if (!pattern.test(readme)) issues.push(`${label}: README is missing ${section} section`)
     }
@@ -177,6 +182,12 @@ export async function validateRepository(root = REPOSITORY_ROOT, packageSelectio
   )
   for (const { directory, manifest } of packages) {
     const label = String(manifest.name ?? directory)
+    const directoryName = directory.split(/[\\/]/u).at(-1)
+    if (directoryName === 'core' && manifest.name !== CORE_PACKAGE_NAME) {
+      issues.push(`core: package name must be ${CORE_PACKAGE_NAME}`)
+    } else if (manifest.name === CORE_PACKAGE_NAME && directoryName !== 'core') {
+      issues.push(`${label}: ${CORE_PACKAGE_NAME} must use the packages/core directory`)
+    }
     validateManifest(manifest, rootVersion, policy, label, issues)
     try {
       validatePackageReadme(

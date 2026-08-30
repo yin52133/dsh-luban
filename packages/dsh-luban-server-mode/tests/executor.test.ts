@@ -9,7 +9,7 @@ import type {
   KeepaliveService,
   ManagedSession,
   SessionSpec,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runWorker } from '../src/build-worker.js'
 import { ManagedBuildExecutor } from '../src/executor.js'

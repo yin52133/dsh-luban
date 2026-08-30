@@ -1,5 +1,5 @@
-import type { Unsubscribe } from '@luban/core'
-import { redactSecrets } from '@luban/core'
+import type { Unsubscribe } from 'dsh-luban-core'
+import { redactSecrets } from 'dsh-luban-core'
 import type { HudKeepaliveAlert, HudKeepaliveStatus, KeepaliveHealthPayload } from './types.js'
 
 const CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu

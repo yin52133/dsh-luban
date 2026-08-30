@@ -5,7 +5,7 @@ import type {
   TaskEvent,
   TaskOutput,
   TaskStore,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import { BrowserError } from './errors.js'
 import type { BrowserQueue } from './types.js'
 

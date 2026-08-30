@@ -1,4 +1,4 @@
-import type { BuildJob, ResourceReport, TaskStore } from '@luban/core'
+import type { BuildJob, ResourceReport, TaskStore } from 'dsh-luban-core'
 
 export interface BuildAlertSink {
   guardExceeded(report: ResourceReport): Promise<void>

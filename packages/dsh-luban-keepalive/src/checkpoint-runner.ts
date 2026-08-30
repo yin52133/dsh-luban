@@ -1,5 +1,5 @@
-import type { Checkpoint, KeepaliveService, TaskId } from '@luban/core'
-import { LubanError } from '@luban/core'
+import type { Checkpoint, KeepaliveService, TaskId } from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 
 const MAX_STEPS = 256
 const MAX_ARTIFACTS = 4_096

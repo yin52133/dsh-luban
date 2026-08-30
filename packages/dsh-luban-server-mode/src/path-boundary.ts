@@ -1,7 +1,7 @@
 import { lstatSync, realpathSync } from 'node:fs'
 import { lstat, realpath } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
-import { LubanError } from '@luban/core'
+import { LubanError } from 'dsh-luban-core'
 
 function errorCode(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null

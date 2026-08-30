@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { LubanError } from '@luban/core'
+import { LubanError } from 'dsh-luban-core'
 
 export interface CommandResult {
   readonly exitCode: number

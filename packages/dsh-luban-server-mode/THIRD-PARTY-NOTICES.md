@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This package depends at runtime on `@luban/core` and integrates with peer packages from DSH
+This package depends at runtime on `dsh-luban-core` and integrates with peer packages from DSH
 (`@deepseek-ai/cordis`, host webserver, client runtime/settings/slots, and React). Those packages
 retain their own copyright and license notices.
 

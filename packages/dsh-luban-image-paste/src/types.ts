@@ -1,4 +1,4 @@
-import type { IngestedImage, SessionId } from '@luban/core'
+import type { IngestedImage, SessionId } from 'dsh-luban-core'
 
 export type ImageSource = IngestedImage['source']
 export type ImageMime = 'image/png' | 'image/jpeg' | 'image/webp'

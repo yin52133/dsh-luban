@@ -1,4 +1,4 @@
-import type { TelemetrySnapshot } from '@luban/core'
+import type { TelemetrySnapshot } from 'dsh-luban-core'
 import type { HudKeepaliveStatus, TelemetryAdvisory } from './types.js'
 
 const TERMINAL_CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu

@@ -10,8 +10,8 @@ import type {
   SessionRef,
   TelemetrySnapshot,
   Unsubscribe,
-} from '@luban/core'
-import { LubanError } from '@luban/core'
+} from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import type { ArchiveIndexEntry, ContextArchiveRepository } from './archive.js'
 import type { Config } from './config.js'
 import { VirtualFileStrategy } from './strategies.js'

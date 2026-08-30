@@ -9,7 +9,7 @@ import type {
   SharedSession,
   TaskId,
   TakeoverResult,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import type { PeerConfig } from './config.js'
 
 export type AccountRole = 'admin' | 'operator' | 'observer' | 'unknown'

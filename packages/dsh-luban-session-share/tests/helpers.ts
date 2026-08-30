@@ -1,5 +1,5 @@
-import type { Actor, Clock, HostId, SessionId } from '@luban/core'
-import { asActorId, asHostId, asSessionId } from '@luban/core'
+import type { Actor, Clock, HostId, SessionId } from 'dsh-luban-core'
+import { asActorId, asHostId, asSessionId } from 'dsh-luban-core'
 
 export class MutableClock implements Clock {
   public value = Date.UTC(2026, 7, 30, 2, 0, 0)

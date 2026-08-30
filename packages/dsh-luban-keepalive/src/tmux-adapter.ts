@@ -1,6 +1,6 @@
 import { hostname } from 'node:os'
-import type { Clock, KeepaliveAdapter, ManagedSession, SessionSpec } from '@luban/core'
-import { asHostId, systemClock } from '@luban/core'
+import type { Clock, KeepaliveAdapter, ManagedSession, SessionSpec } from 'dsh-luban-core'
+import { asHostId, systemClock } from 'dsh-luban-core'
 import type { CommandRunner } from './command-runner.js'
 import { assertSuccess } from './command-runner.js'
 import { managedSessionId, posixCommand } from './session-id.js'

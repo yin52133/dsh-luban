@@ -9,9 +9,9 @@ import type {
   TaskId,
   TaskOutput,
   TaskProgress,
-} from '@luban/core'
-import { asActorId, asSessionId, asTaskId } from '@luban/core'
-import { LubanError } from '@luban/core'
+} from 'dsh-luban-core'
+import { asActorId, asSessionId, asTaskId } from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { BrowserTaskboardAutomation } from '../src/taskboard-automation.js'
 import type { BrowserJobRequest, BrowserJobSnapshot, BrowserQueue } from '../src/types.js'

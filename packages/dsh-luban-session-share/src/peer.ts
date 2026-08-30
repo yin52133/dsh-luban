@@ -1,5 +1,12 @@
-import type { Actor, SessionEvent, SessionId, SessionRole, TakeoverResult } from '@luban/core'
-import { LubanError, asActorId, asHostId, asSessionId, asTaskId, redactSecrets } from '@luban/core'
+import type { Actor, SessionEvent, SessionId, SessionRole, TakeoverResult } from 'dsh-luban-core'
+import {
+  LubanError,
+  asActorId,
+  asHostId,
+  asSessionId,
+  asTaskId,
+  redactSecrets,
+} from 'dsh-luban-core'
 import type { PeerConfig } from './config.js'
 import type {
   PeerNetwork,

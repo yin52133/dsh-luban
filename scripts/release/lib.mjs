@@ -8,6 +8,7 @@ import { gunzipSync } from 'node:zlib'
 export const RELEASE_DIR = dirname(fileURLToPath(import.meta.url))
 export const REPOSITORY_ROOT = resolve(RELEASE_DIR, '..', '..')
 export const POLICY_PATH = join(RELEASE_DIR, 'policy.json')
+export const CORE_PACKAGE_NAME = 'dsh-luban-core'
 
 export async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf8'))
@@ -39,9 +40,13 @@ export async function discoverPackages(root = REPOSITORY_ROOT) {
       if (error?.code !== 'ENOENT') throw error
     }
   }
-  return packages.sort((left, right) =>
-    String(left.manifest.name).localeCompare(String(right.manifest.name)),
-  )
+  return packages.sort((left, right) => {
+    const leftName = String(left.manifest.name)
+    const rightName = String(right.manifest.name)
+    if (leftName === CORE_PACKAGE_NAME) return rightName === CORE_PACKAGE_NAME ? 0 : -1
+    if (rightName === CORE_PACKAGE_NAME) return 1
+    return leftName.localeCompare(rightName)
+  })
 }
 
 export function pathIsWithin(root, target) {

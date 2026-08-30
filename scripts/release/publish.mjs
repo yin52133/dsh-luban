@@ -77,6 +77,7 @@ export async function verifyArtifactManifest(root, artifacts, expectedPackages) 
     if (packedIssues.length > 0) throw new Error(packedIssues.join('\n'))
   }
   if (new Set(names).size !== names.length) throw new Error('Artifact package names must be unique')
+  let orderedPackages = release.packages
   if (expectedPackages !== undefined) {
     const expected = [...expectedPackages].sort()
     const actual = [...names].sort()
@@ -85,8 +86,10 @@ export async function verifyArtifactManifest(root, artifacts, expectedPackages) 
         `Artifact packages do not match the validated repository: expected ${expected.join(', ')}, got ${actual.join(', ')}`,
       )
     }
+    const recordsByName = new Map(release.packages.map((record) => [record.name, record]))
+    orderedPackages = expectedPackages.map((name) => recordsByName.get(name))
   }
-  return release
+  return { ...release, packages: orderedPackages }
 }
 
 function assertPublishAuthority(rootVersion) {

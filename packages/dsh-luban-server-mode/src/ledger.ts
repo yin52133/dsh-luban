@@ -1,5 +1,5 @@
-import type { ArtifactRef, BuildJob, BuildJobStatus, JsonCodec } from '@luban/core'
-import { AtomicJsonStore, LubanError } from '@luban/core'
+import type { ArtifactRef, BuildJob, BuildJobStatus, JsonCodec } from 'dsh-luban-core'
+import { AtomicJsonStore, LubanError } from 'dsh-luban-core'
 
 export interface BuildRecord {
   readonly job: BuildJob

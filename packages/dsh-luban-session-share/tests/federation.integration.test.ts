@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { Actor, AuthService, SessionId, TakeoverResult } from '@luban/core'
+import type { Actor, AuthService, SessionId, TakeoverResult } from 'dsh-luban-core'
 import { describe, expect, it } from 'vitest'
 import type { PeerConfig } from '../src/config.js'
 import { SessionShareHttpApi } from '../src/http-api.js'

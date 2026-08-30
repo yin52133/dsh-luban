@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { AuthService } from '@luban/core'
+import type { AuthService } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { SessionShareHttpApi } from '../src/http-api.js'
 import { SharedSessionRegistry } from '../src/registry.js'

@@ -6,8 +6,8 @@ import type {
   TelemetryProvider,
   TelemetrySnapshot,
   Unsubscribe,
-} from '@luban/core'
-import { redactSecrets, systemClock } from '@luban/core'
+} from 'dsh-luban-core'
+import { redactSecrets, systemClock } from 'dsh-luban-core'
 import type { HudThresholds } from './config.js'
 import { systemMonotonicClock, type MonotonicClock } from './rate-window.js'
 import type {

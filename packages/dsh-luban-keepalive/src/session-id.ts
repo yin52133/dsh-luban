@@ -1,4 +1,4 @@
-import { LubanError } from '@luban/core'
+import { LubanError } from 'dsh-luban-core'
 
 const MANAGED_ID = /^luban-[a-z0-9][a-z0-9_.-]{0,57}$/u
 

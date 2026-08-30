@@ -1,5 +1,5 @@
-import type { TelemetryProvider, TelemetrySnapshot } from '@luban/core'
-import { asSessionId } from '@luban/core'
+import type { TelemetryProvider, TelemetrySnapshot } from 'dsh-luban-core'
+import { asSessionId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import { parseConfig } from '../src/config.js'

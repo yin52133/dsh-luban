@@ -10,8 +10,8 @@ import type {
   TaskId,
   TaskOutput,
   TaskProgress,
-} from '@luban/core'
-import { LubanError } from '@luban/core'
+} from 'dsh-luban-core'
+import { LubanError } from 'dsh-luban-core'
 import type {
   AtomicNightClaimResult,
   JsonTaskStore,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { TelemetryProvider } from '@luban/core'
+import type { TelemetryProvider } from 'dsh-luban-core'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

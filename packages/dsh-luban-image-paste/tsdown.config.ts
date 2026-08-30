@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsdown'
 
-const sharedExternals = [/^@deepseek-ai\//u, /^@luban\//u, /^react(?:\/|$)/u, /^sharp$/u]
+const sharedExternals = [/^@deepseek-ai\//u, /^dsh-luban-core$/u, /^react(?:\/|$)/u, /^sharp$/u]
 const buildHead = process.env.LUBAN_IMAGE_BUILD_HEAD
 const buildId = process.env.LUBAN_IMAGE_BUILD_ID
 if (

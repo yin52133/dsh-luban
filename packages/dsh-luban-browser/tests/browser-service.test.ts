@@ -7,7 +7,7 @@ import type {
   BrowserResult,
   BrowserSession,
   BrowserTaskSpec,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BrowserService } from '../src/browser-service.js'
 import { resolveConfig } from '../src/config.js'

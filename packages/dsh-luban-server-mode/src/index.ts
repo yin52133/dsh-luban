@@ -1,8 +1,8 @@
 import { dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { AuthService, KeepaliveService, ServerModeService, TaskStore } from '@luban/core'
-import { modulePrefix } from '@luban/core'
+import type { AuthService, KeepaliveService, ServerModeService, TaskStore } from 'dsh-luban-core'
+import { modulePrefix } from 'dsh-luban-core'
 import { TaskboardBuildAlertSink } from './alerts.js'
 import { ArtifactLinkSigner, ArtifactManager } from './artifacts.js'
 import {

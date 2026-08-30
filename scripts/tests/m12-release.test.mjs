@@ -976,6 +976,22 @@ describe('M12 release policy', () => {
 
   it('validates a complete synthetic repository', async () => {
     const root = await temporaryRoot()
+    const coreManifest = {
+      name: 'dsh-luban-core',
+      version: '1.0.0',
+      description: 'Shared contracts',
+      type: 'module',
+      main: './dist/index.js',
+      types: './dist/index.d.ts',
+      license: 'MIT',
+      repository: { type: 'git', url: 'https://example.invalid/repository.git' },
+      engines: { node: '^22.19.0 || >=24.0.0', dsh: '>=0.1.1-rc.1' },
+      exports: {
+        '.': { types: './dist/index.d.ts', default: './dist/index.js' },
+        './package.json': './package.json',
+      },
+      files: ['dist/', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
+    }
     const manifest = {
       name: 'dsh-luban-sample',
       version: '1.0.0',
@@ -995,6 +1011,7 @@ describe('M12 release policy', () => {
       dsh: { bundle: { patch: './cordis.patch.yml' } },
     }
     await json(join(root, 'package.json'), { name: 'fixture', version: '1.0.0', private: true })
+    await json(join(root, 'packages/core/package.json'), coreManifest)
     await json(join(root, 'packages/sample/package.json'), manifest)
     await writeFile(
       join(root, 'README.md'),
@@ -1005,11 +1022,24 @@ describe('M12 release policy', () => {
       '# Changelog\n\n## [Unreleased]\n\nNone.\n\n## [1.0.0] - 2026-01-01\n\nInitial.\n',
     )
     await writeFile(
+      join(root, 'packages/core/README.md'),
+      '# Core\n\n## Compatibility\n\nDSH 0.1.1-rc.2.\n\n## License\n\nMIT.\n',
+    )
+    await writeFile(
       join(root, 'packages/sample/README.md'),
       '# Sample\n\n## 功能亮点\n\nOne.\n\n## 安装\n\nInstall.\n\n## 配置\n\nNone.\n\n## 演示\n\nDemo.\n\n## 兼容性\n\nDSH 0.1.1-rc.2.\n\n## 平台支持\n\nBoth.\n\n## License 与致谢\n\nMIT.\n',
     )
     const result = await validateRepository(root)
     expect(result.issues).toEqual([])
+    expect(result.packages).toEqual(['dsh-luban-core', 'dsh-luban-sample'])
+
+    await json(join(root, 'packages/core/package.json'), {
+      ...coreManifest,
+      name: ['@luban', 'core'].join('/'),
+    })
+    expect((await validateRepository(root)).issues).toContain(
+      'core: package name must be dsh-luban-core',
+    )
   })
 
   it('verifies immutable artifact hashes before any publish', async () => {
@@ -1017,16 +1047,34 @@ describe('M12 release policy', () => {
     const artifacts = join(root, '.release-artifacts')
     await mkdir(artifacts)
     await json(join(root, 'package.json'), { name: 'fixture', version: '1.0.0', private: true })
-    const payload = packedManifestTarball({ name: 'sample', version: '1.0.0' })
-    await writeFile(join(artifacts, 'sample.tgz'), payload)
+    const samplePayload = packedManifestTarball({ name: 'sample', version: '1.0.0' })
+    const corePayload = packedManifestTarball({ name: 'dsh-luban-core', version: '1.0.0' })
+    await writeFile(join(artifacts, 'sample.tgz'), samplePayload)
+    await writeFile(join(artifacts, 'core.tgz'), corePayload)
     await json(join(artifacts, 'release-manifest.json'), {
       schemaVersion: 1,
       version: '1.0.0',
       tag: 'v1.0.0',
-      packages: [{ name: 'sample', version: '1.0.0', file: 'sample.tgz', sha256: sha256(payload) }],
+      packages: [
+        {
+          name: 'sample',
+          version: '1.0.0',
+          file: 'sample.tgz',
+          sha256: sha256(samplePayload),
+        },
+        {
+          name: 'dsh-luban-core',
+          version: '1.0.0',
+          file: 'core.tgz',
+          sha256: sha256(corePayload),
+        },
+      ],
     })
-    await expect(verifyArtifactManifest(root, artifacts, ['sample'])).resolves.toMatchObject({
+    await expect(
+      verifyArtifactManifest(root, artifacts, ['dsh-luban-core', 'sample']),
+    ).resolves.toMatchObject({
       tag: 'v1.0.0',
+      packages: [{ name: 'dsh-luban-core' }, { name: 'sample' }],
     })
     await expect(verifyArtifactManifest(root, artifacts, ['unexpected'])).rejects.toThrow(
       /do not match/,

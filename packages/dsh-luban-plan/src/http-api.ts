@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Actor, AuthService, PlanSections, PlanStatus } from '@luban/core'
+import type { Actor, AuthService, PlanSections, PlanStatus } from 'dsh-luban-core'
 import {
   LubanError,
   asActorId,
@@ -8,7 +8,7 @@ import {
   asTaskId,
   isLubanError,
   modulePrefix,
-} from '@luban/core'
+} from 'dsh-luban-core'
 import type { PlanFeedbackEvent, PlanServiceWithFeedback } from './service.js'
 import { bundledTemplate } from './template.js'
 
