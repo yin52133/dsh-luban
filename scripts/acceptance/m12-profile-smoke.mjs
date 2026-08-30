@@ -15,10 +15,39 @@ import { safeChildPath } from '../path-boundary.mjs'
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, '..', '..')
-export const M12_PROFILE_PLAN_SCHEMA = 'dsh-luban/m12-profile-smoke-plan/v1'
-export const M12_PROFILE_EVIDENCE_SCHEMA = 'dsh-luban/m12-profile-smoke/v2'
-export const M12_PROFILE_DUAL_SCHEMA = 'dsh-luban/m12-profile-smoke-dual/v1'
+export const M12_PROFILE_PLAN_SCHEMA = 'dsh-luban/m12-profile-smoke-plan/v2'
+export const M12_PROFILE_EVIDENCE_SCHEMA = 'dsh-luban/m12-profile-smoke/v3'
+export const M12_PROFILE_DUAL_SCHEMA = 'dsh-luban/m12-profile-smoke-dual/v2'
 export const M12_PROFILE_DSH_VERSION = '0.1.1-rc.2'
+export const M12_PROFILE_CHECK_IDS = Object.freeze([
+  'runtime-platform-attested',
+  'git-before-clean',
+  'git-expected-sha',
+  'git-after-clean',
+  'git-head-unchanged',
+  'actual-dsh-version-attested',
+  'local-dsh-version-command',
+  'local-dsh-version',
+  'canonical-fixture-hash',
+  'generated-plugin-build',
+  'generated-plugin-types',
+  'isolated-profile-created',
+  'profile-plugin-install-offline',
+  'profile-bundle-once',
+  'profile-config-dump',
+  'profile-config-row-once',
+  'profile-config-package',
+  'host-mounted',
+  'client-http-and-lazy-cjs',
+  'host-hot-disabled',
+  'host-hot-reenabled',
+  'host-disposed-before-restart',
+  'first-process-stopped-within-timeout',
+  'host-client-restart',
+  'host-disposed-before-final-stop',
+  'second-process-stopped-within-timeout',
+  'host-lifecycle-sequence',
+])
 const PACKAGE_NAME = 'dsh-luban-acceptance'
 const PLUGIN_ID = 'luban-acceptance'
 const CLIENT_MARKER = '__LUBAN_M12_CLIENT_LIFECYCLE__'
@@ -33,6 +62,7 @@ const TEMPORARY_OWNER_SEGMENTS = ['node_modules', '.cache', 'dsh-luban-acceptanc
 const TEMPORARY_PREFIX = 'm12-profile-'
 const SHA_PATTERN = /^[a-f0-9]{64}$/u
 const GIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
+const WORKFLOW_RUN_ID_PATTERN = /^[1-9][0-9]{0,31}$/u
 
 class SmokeBlockedError extends Error {
   constructor(message) {
@@ -133,6 +163,36 @@ function sanitizeError(error) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function createWorkflowAttestation(options, required = false) {
+  const supplied = [
+    options.expectedGitSha,
+    options.workflowRunId,
+    options.workflowRunAttempt,
+  ].filter((value) => value !== undefined).length
+  if (supplied === 0 && !required) return undefined
+  if (supplied !== 3) {
+    throw new TypeError(
+      'expectedGitSha, workflowRunId, and workflowRunAttempt must be provided together',
+    )
+  }
+  if (typeof options.expectedGitSha !== 'string' || typeof options.workflowRunId !== 'string') {
+    throw new TypeError('expectedGitSha and workflowRunId must be strings')
+  }
+  const expectedGitSha = options.expectedGitSha
+  const runId = options.workflowRunId
+  const runAttempt = Number(options.workflowRunAttempt)
+  if (!GIT_SHA_PATTERN.test(expectedGitSha)) {
+    throw new TypeError('expectedGitSha must be a full lowercase Git commit SHA')
+  }
+  if (!WORKFLOW_RUN_ID_PATTERN.test(runId)) {
+    throw new TypeError('workflowRunId must be a positive GitHub workflow run identifier')
+  }
+  if (!Number.isSafeInteger(runAttempt) || runAttempt <= 0) {
+    throw new TypeError('workflowRunAttempt must be a positive integer')
+  }
+  return Object.freeze({ expectedGitSha, runId, runAttempt })
 }
 
 function canonicalValue(value) {
@@ -808,6 +868,7 @@ export function createProfileSmokePlan(options = {}) {
   const platform = options.platform ?? process.platform
   const profile = platformProfile(platform)
   const runId = options.runId ?? randomUUID()
+  const workflow = createWorkflowAttestation(options, options.live === true)
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/u.test(runId)) {
     throw new TypeError('runId must be a bounded identifier')
   }
@@ -819,6 +880,7 @@ export function createProfileSmokePlan(options = {}) {
     platform,
     profile,
     requestedMode: options.live === true ? 'live' : 'plan',
+    ...(workflow === undefined ? {} : { workflow }),
     dshVersion: M12_PROFILE_DSH_VERSION,
     taskSha256: M12_PROFILE_TASK_SHA256,
     fixtureSha256: M12_PROFILE_FIXTURE_SHA256,
@@ -879,6 +941,17 @@ async function runAttestedExecution(plan, dependencies, executionMode) {
       throw new SmokeBlockedError(
         'Live profile smoke requires a clean source tree before execution',
       )
+    }
+    const expectedGitMatches = before.sha === plan.workflow.expectedGitSha
+    attestationChecks.push(
+      normalizedCheck(
+        'git-expected-sha',
+        expectedGitMatches ? 'pass' : 'blocked',
+        expectedGitMatches ? before.sha : 'mismatch',
+      ),
+    )
+    if (!expectedGitMatches) {
+      throw new SmokeBlockedError('Live profile smoke Git HEAD does not match expectedGitSha')
     }
     execution = await dependencies.executeLive(plan)
     if (execution === null || typeof execution !== 'object' || Array.isArray(execution)) {
@@ -976,6 +1049,7 @@ function normalizeExecution(plan, execution, executionMode, platform, git, attes
     evidenceKind,
     platform,
     profile: plan.profile,
+    workflow: plan.workflow,
     git,
     taskSha256: M12_PROFILE_TASK_SHA256,
     fixtureSha256: M12_PROFILE_FIXTURE_SHA256,
@@ -1043,6 +1117,20 @@ function validTimestamp(value) {
   return !Number.isNaN(date.valueOf()) && date.toISOString() === value
 }
 
+function assertWorkflowAttestation(value, label = 'Profile evidence') {
+  if (
+    !hasExactKeys(value, ['expectedGitSha', 'runAttempt', 'runId']) ||
+    typeof value.expectedGitSha !== 'string' ||
+    !GIT_SHA_PATTERN.test(value.expectedGitSha) ||
+    typeof value.runId !== 'string' ||
+    !WORKFLOW_RUN_ID_PATTERN.test(value.runId) ||
+    !Number.isSafeInteger(value.runAttempt) ||
+    value.runAttempt <= 0
+  ) {
+    throw new Error(`${label} workflow attestation is invalid`)
+  }
+}
+
 function assertAggregatableGitState(value, label) {
   if (
     !hasExactKeys(value, ['clean', 'sha']) ||
@@ -1101,6 +1189,7 @@ function assertAggregatableEvidence(value) {
     'startedAt',
     'status',
     'taskSha256',
+    'workflow',
   ]
   if (
     !hasExactKeys(value, expectedKeys) ||
@@ -1123,6 +1212,7 @@ function assertAggregatableEvidence(value) {
   ) {
     throw new Error('Profile evidence is not an aggregatable production live pass')
   }
+  assertWorkflowAttestation(value.workflow)
   assertAggregatablePlatform(value.platform)
   if (
     (value.platform.target === 'windows' && value.profile !== 'win-debug') ||
@@ -1135,6 +1225,9 @@ function assertAggregatableEvidence(value) {
   }
   assertAggregatableGitState(value.git.before, 'Before-run')
   assertAggregatableGitState(value.git.after, 'After-run')
+  if (value.git.before.sha !== value.workflow.expectedGitSha) {
+    throw new Error('Profile evidence Git SHA does not match its workflow attestation')
+  }
   if (value.git.before.sha !== value.git.after.sha) {
     throw new Error('Profile evidence Git HEAD changed during execution')
   }
@@ -1145,62 +1238,101 @@ function assertAggregatableEvidence(value) {
   ) {
     throw new Error('Profile evidence does not attest the required local DSH version')
   }
-  if (
-    !Array.isArray(value.checks) ||
-    value.checks.length === 0 ||
-    value.checks.some(
-      (check) =>
-        !hasExactKeys(check, ['actual', 'id', 'status']) ||
-        typeof check.id !== 'string' ||
-        check.id.length === 0 ||
-        check.id.length > 128 ||
-        check.status !== 'pass' ||
-        typeof check.actual !== 'string' ||
-        check.actual.length > 2_000,
-    )
-  ) {
-    throw new Error('Profile evidence contains invalid or failing checks')
+  if (!Array.isArray(value.checks) || value.checks.length !== M12_PROFILE_CHECK_IDS.length) {
+    throw new Error('Profile evidence does not contain the exact canonical check set')
+  }
+  for (const [index, expectedId] of M12_PROFILE_CHECK_IDS.entries()) {
+    const check = value.checks[index]
+    if (
+      !hasExactKeys(check, ['actual', 'id', 'status']) ||
+      check.id !== expectedId ||
+      check.status !== 'pass' ||
+      typeof check.actual !== 'string' ||
+      check.actual.length > 2_000
+    ) {
+      throw new Error('Profile evidence does not contain the exact canonical check set')
+    }
   }
 }
 
-export function aggregateM12ProfileSmokeEvidence(evidence, now = () => new Date()) {
-  if (!Array.isArray(evidence) || evidence.length !== 2) {
+function parseEvidenceInput(serialized) {
+  if (
+    typeof serialized !== 'string' ||
+    Buffer.byteLength(serialized, 'utf8') > EVIDENCE_INPUT_LIMIT
+  ) {
+    throw new Error('Profile smoke evidence input is invalid or too large')
+  }
+  let evidence
+  try {
+    evidence = JSON.parse(serialized)
+  } catch {
+    throw new Error('Profile smoke evidence is not valid JSON')
+  }
+  return Object.freeze({ evidence, evidenceSha256: sha256(serialized) })
+}
+
+export function aggregateM12ProfileSmokeEvidence(
+  serializedEvidence,
+  expectedWorkflow,
+  now = () => new Date(),
+) {
+  if (!Array.isArray(serializedEvidence) || serializedEvidence.length !== 2) {
     throw new Error('Exactly one Windows and one Ubuntu profile evidence file are required')
   }
-  for (const item of evidence) assertAggregatableEvidence(item)
-  const windows = evidence.find((item) => item.platform.target === 'windows')
-  const ubuntu = evidence.find((item) => item.platform.target === 'ubuntu')
+  assertWorkflowAttestation(expectedWorkflow, 'Expected')
+  const inputs = serializedEvidence.map((item) => parseEvidenceInput(item))
+  for (const item of inputs) {
+    assertAggregatableEvidence(item.evidence)
+    if (
+      item.evidence.workflow.expectedGitSha !== expectedWorkflow.expectedGitSha ||
+      item.evidence.workflow.runId !== expectedWorkflow.runId ||
+      item.evidence.workflow.runAttempt !== expectedWorkflow.runAttempt
+    ) {
+      throw new Error('Profile evidence does not belong to the expected workflow run attempt')
+    }
+  }
+  const windows = inputs.find((item) => item.evidence.platform.target === 'windows')
+  const ubuntu = inputs.find((item) => item.evidence.platform.target === 'ubuntu')
   if (windows === undefined || ubuntu === undefined) {
     throw new Error('Profile evidence must contain one Windows run and one Ubuntu run')
   }
   if (
-    windows.git.before.sha !== ubuntu.git.before.sha ||
-    windows.taskSha256 !== ubuntu.taskSha256 ||
-    windows.fixtureSha256 !== ubuntu.fixtureSha256 ||
-    windows.dsh.actualVersion !== ubuntu.dsh.actualVersion
+    windows.evidence.git.before.sha !== expectedWorkflow.expectedGitSha ||
+    ubuntu.evidence.git.before.sha !== expectedWorkflow.expectedGitSha ||
+    windows.evidence.git.before.sha !== ubuntu.evidence.git.before.sha ||
+    windows.evidence.taskSha256 !== ubuntu.evidence.taskSha256 ||
+    windows.evidence.fixtureSha256 !== ubuntu.evidence.fixtureSha256 ||
+    windows.evidence.dsh.actualVersion !== ubuntu.evidence.dsh.actualVersion
   ) {
     throw new Error(
-      'Windows and Ubuntu evidence do not describe the same source, task, and fixture',
+      'Windows and Ubuntu evidence do not describe the expected source, task, and fixture',
     )
+  }
+  if (windows.evidence.runId === ubuntu.evidence.runId) {
+    throw new Error('Windows and Ubuntu evidence must use distinct one-time run identifiers')
   }
   return Object.freeze({
     schemaVersion: M12_PROFILE_DUAL_SCHEMA,
     featureId: 'M12-F001',
     status: 'pass',
     acceptancePassed: true,
-    gitSha: windows.git.before.sha,
-    taskSha256: windows.taskSha256,
-    fixtureSha256: windows.fixtureSha256,
-    dshVersion: windows.dsh.actualVersion,
+    gitSha: windows.evidence.git.before.sha,
+    taskSha256: windows.evidence.taskSha256,
+    fixtureSha256: windows.evidence.fixtureSha256,
+    dshVersion: windows.evidence.dsh.actualVersion,
+    workflow: Object.freeze({
+      runId: expectedWorkflow.runId,
+      runAttempt: expectedWorkflow.runAttempt,
+    }),
     generatedAt: now().toISOString(),
     inputs: Object.freeze({
       windows: Object.freeze({
-        runId: windows.runId,
-        evidenceSha256: sha256(m12CanonicalJson(windows)),
+        runId: windows.evidence.runId,
+        evidenceSha256: windows.evidenceSha256,
       }),
       ubuntu: Object.freeze({
-        runId: ubuntu.runId,
-        evidenceSha256: sha256(m12CanonicalJson(ubuntu)),
+        runId: ubuntu.evidence.runId,
+        evidenceSha256: ubuntu.evidenceSha256,
       }),
     }),
   })
@@ -1216,16 +1348,12 @@ async function readEvidence(path) {
   if (Buffer.byteLength(raw, 'utf8') > EVIDENCE_INPUT_LIMIT) {
     throw new Error('Profile smoke evidence is too large')
   }
-  try {
-    return JSON.parse(raw)
-  } catch {
-    throw new Error('Profile smoke evidence is not valid JSON')
-  }
+  return raw
 }
 
 function nextArgument(argv, index, option) {
   const value = argv[index + 1]
-  if (value === undefined || value.startsWith('--')) throw new Error(`${option} requires a path`)
+  if (value === undefined || value.startsWith('--')) throw new Error(`${option} requires a value`)
   return value
 }
 
@@ -1249,6 +1377,24 @@ function parseArguments(argv) {
       if (options.ubuntu !== undefined) throw new Error('--ubuntu may only be provided once')
       options.ubuntu = nextArgument(argv, index, '--ubuntu')
       index += 1
+    } else if (argument === '--expected-git-sha') {
+      if (options.expectedGitSha !== undefined) {
+        throw new Error('--expected-git-sha may only be provided once')
+      }
+      options.expectedGitSha = nextArgument(argv, index, '--expected-git-sha')
+      index += 1
+    } else if (argument === '--workflow-run-id') {
+      if (options.workflowRunId !== undefined) {
+        throw new Error('--workflow-run-id may only be provided once')
+      }
+      options.workflowRunId = nextArgument(argv, index, '--workflow-run-id')
+      index += 1
+    } else if (argument === '--workflow-run-attempt') {
+      if (options.workflowRunAttempt !== undefined) {
+        throw new Error('--workflow-run-attempt may only be provided once')
+      }
+      options.workflowRunAttempt = nextArgument(argv, index, '--workflow-run-attempt')
+      index += 1
     } else if (argument === '--help') options.help = true
     else throw new Error(`Unknown option: ${argument}`)
   }
@@ -1265,18 +1411,21 @@ function parseArguments(argv) {
 export async function runM12ProfileSmokeCli(argv, log = (value) => console.log(value)) {
   const options = parseArguments(argv)
   if (options.help === true) {
-    log('Usage: node scripts/acceptance/m12-profile-smoke.mjs [--live] [--output <new-json-path>]')
     log(
-      '       node scripts/acceptance/m12-profile-smoke.mjs aggregate --windows <json> --ubuntu <json> --output <new-json-path>',
+      'Usage: node scripts/acceptance/m12-profile-smoke.mjs [--live --expected-git-sha <sha> --workflow-run-id <id> --workflow-run-attempt <n>] [--output <new-json-path>]',
+    )
+    log(
+      '       node scripts/acceptance/m12-profile-smoke.mjs aggregate --windows <json> --ubuntu <json> --expected-git-sha <sha> --workflow-run-id <id> --workflow-run-attempt <n> --output <new-json-path>',
     )
     return 0
   }
   if (options.command === 'aggregate') {
+    const expectedWorkflow = createWorkflowAttestation(options, true)
     const evidence = await Promise.all([
       readEvidence(options.windows),
       readEvidence(options.ubuntu),
     ])
-    const result = aggregateM12ProfileSmokeEvidence(evidence)
+    const result = aggregateM12ProfileSmokeEvidence(evidence, expectedWorkflow)
     const written = await writeM12ProfileResult(options.output, result)
     log(JSON.stringify({ ...result, artifact: written }, null, 2))
     return 0

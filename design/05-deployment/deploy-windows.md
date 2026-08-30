@@ -9,6 +9,7 @@
 | v0.3 | 2026-08-30 | Codex | 落地默认预览且拒绝覆盖的 win-debug 生成脚本 |
 | v0.4 | 2026-08-30 | Codex | 同步 A 档 lock v2、安装授权门禁与 profile smoke |
 | v0.5 | 2026-08-30 | Codex | 同步 A 档 lock v3、精确原生构建许可与安装后验收链 |
+| v0.6 | 2026-08-30 | Codex | 将 profile smoke 证据绑定到 CI commit、run identity 与 attempt |
 
 ## 1. 目标形态
 
@@ -76,12 +77,18 @@ DSH `0.1.1-rc.2` 执行：
 ```powershell
 node scripts/acceptance/m12-profile-smoke.mjs
 node scripts/acceptance/m12-profile-smoke.mjs --live `
+  --expected-git-sha "$env:GITHUB_SHA" `
+  --workflow-run-id "$env:GITHUB_RUN_ID" `
+  --workflow-run-attempt "$env:GITHUB_RUN_ATTEMPT" `
   --output "$env:TEMP\m12-win-debug.json"
 ```
 
 live runner 在隔离 `DSH_HOME` 中安装临时 host/client fixture，验证唯一挂载、lazy-CJS client、
-热停/热启、重启和清理。runner 存在不代表 Windows/Ubuntu 双端已验收；两端必须各自产出
-真实 live pass 证据。
+热停/热启、重启和清理。可聚合证据必须从 CI 注入 `GITHUB_SHA`、`GITHUB_RUN_ID` 与
+`GITHUB_RUN_ATTEMPT`；手工虚构这些值不构成可信 workflow 证据。聚合器要求双端同一 SHA/run/
+attempt、不同一次性 smoke run ID、完整有序 canonical check 集合，并记录原始输入 SHA-256；
+旧 attempt 与重复输入 fail closed。runner 存在不代表 Windows/Ubuntu 双端已验收；两端必须各自
+产出真实 live pass 证据。
 
 ## 3. 配置分层
 

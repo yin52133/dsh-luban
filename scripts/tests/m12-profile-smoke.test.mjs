@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   M12_PROFILE_DSH_VERSION,
+  M12_PROFILE_CHECK_IDS,
   M12_PROFILE_DUAL_SCHEMA,
   M12_PROFILE_EVIDENCE_SCHEMA,
   M12_PROFILE_FIXTURE_SHA256,
@@ -23,6 +25,12 @@ import {
 const directories = new Set()
 const GIT_SHA = 'a'.repeat(40)
 const DRIFTED_GIT_SHA = 'b'.repeat(40)
+const WORKFLOW = Object.freeze({ expectedGitSha: GIT_SHA, runId: '987654321', runAttempt: 2 })
+const WORKFLOW_OPTIONS = Object.freeze({
+  expectedGitSha: GIT_SHA,
+  workflowRunId: WORKFLOW.runId,
+  workflowRunAttempt: WORKFLOW.runAttempt,
+})
 
 const WINDOWS_PLATFORM = Object.freeze({
   target: 'windows',
@@ -49,6 +57,7 @@ function liveEvidence(target, overrides = {}) {
     evidenceKind: 'live',
     platform,
     profile,
+    workflow: WORKFLOW,
     git: {
       before: { sha: GIT_SHA, clean: true },
       after: { sha: GIT_SHA, clean: true },
@@ -61,12 +70,20 @@ function liveEvidence(target, overrides = {}) {
     },
     status: 'pass',
     acceptancePassed: true,
-    checks: [{ id: 'canonical-check', status: 'pass', actual: 'ok' }],
+    checks: M12_PROFILE_CHECK_IDS.map((id) => ({ id, status: 'pass', actual: 'ok' })),
     cleanup: 'pass',
     startedAt: '2026-08-30T01:00:00.000Z',
     finishedAt: '2026-08-30T01:01:00.000Z',
     ...overrides,
   }
+}
+
+function serializeEvidence(evidence) {
+  return `${JSON.stringify(evidence, null, 2)}\n`
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 async function temporaryRoot() {
@@ -116,7 +133,7 @@ describe('M12 real profile smoke runner', () => {
       cleanup: 'pass',
     }))
     const result = await runM12ProfileSmoke(
-      { live: true, platform: 'linux', runId: 'fake-run' },
+      { live: true, platform: 'linux', runId: 'fake-run', ...WORKFLOW_OPTIONS },
       {
         inspectPlatform: async () => UBUNTU_PLATFORM,
         inspectGit: async () => ({ sha: GIT_SHA, clean: true }),
@@ -137,6 +154,36 @@ describe('M12 real profile smoke runner', () => {
     })
   })
 
+  it('requires an explicit workflow identity and blocks execution on expected SHA drift', async () => {
+    await expect(
+      runM12ProfileSmoke({ live: true, platform: 'linux', runId: 'unbound-run' }),
+    ).rejects.toThrow(/must be provided together/u)
+
+    const executeLive = vi.fn()
+    const result = await runM12ProfileSmoke(
+      {
+        live: true,
+        platform: 'linux',
+        runId: 'sha-drift-run',
+        ...WORKFLOW_OPTIONS,
+        expectedGitSha: DRIFTED_GIT_SHA,
+      },
+      {
+        inspectPlatform: async () => UBUNTU_PLATFORM,
+        inspectGit: async () => ({ sha: GIT_SHA, clean: true }),
+        executeLive,
+      },
+    )
+
+    expect(executeLive).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ status: 'blocked', acceptancePassed: false })
+    expect(result.checks).toContainEqual({
+      id: 'git-expected-sha',
+      status: 'blocked',
+      actual: 'mismatch',
+    })
+  })
+
   it('fails closed on a dirty tree before execution', async () => {
     const executeLive = vi.fn()
     const inspectGit = vi
@@ -144,7 +191,7 @@ describe('M12 real profile smoke runner', () => {
       .mockResolvedValueOnce({ sha: GIT_SHA, clean: false })
       .mockResolvedValueOnce({ sha: GIT_SHA, clean: false })
     const result = await runM12ProfileSmoke(
-      { live: true, platform: 'win32', runId: 'dirty-run' },
+      { live: true, platform: 'win32', runId: 'dirty-run', ...WORKFLOW_OPTIONS },
       {
         inspectPlatform: async () => WINDOWS_PLATFORM,
         inspectGit,
@@ -172,7 +219,7 @@ describe('M12 real profile smoke runner', () => {
       .mockResolvedValueOnce({ sha: GIT_SHA, clean: true })
       .mockResolvedValueOnce({ sha: DRIFTED_GIT_SHA, clean: true })
     const result = await runM12ProfileSmoke(
-      { live: true, platform: 'win32', runId: 'head-drift-run' },
+      { live: true, platform: 'win32', runId: 'head-drift-run', ...WORKFLOW_OPTIONS },
       {
         inspectPlatform: async () => WINDOWS_PLATFORM,
         inspectGit,
@@ -208,7 +255,7 @@ describe('M12 real profile smoke runner', () => {
       .mockResolvedValueOnce({ sha: GIT_SHA, clean: true })
       .mockResolvedValueOnce({ sha: GIT_SHA, clean: false })
     const result = await runM12ProfileSmoke(
-      { live: true, platform: 'linux', runId: 'after-dirty-run' },
+      { live: true, platform: 'linux', runId: 'after-dirty-run', ...WORKFLOW_OPTIONS },
       {
         inspectPlatform: async () => UBUNTU_PLATFORM,
         inspectGit,
@@ -265,6 +312,7 @@ describe('M12 real profile smoke runner', () => {
         live: true,
         platform: 'win32',
         runId: 'blocked-run',
+        ...WORKFLOW_OPTIONS,
       },
       {
         inspectPlatform: async () => WINDOWS_PLATFORM,
@@ -357,11 +405,18 @@ describe('M12 real profile smoke runner', () => {
   it('aggregates exactly one same-source Windows and Ubuntu live pass without copying logs', () => {
     const secretLikeDiagnostic = 'never-copy-this-secret-value'
     const windows = liveEvidence('windows', {
-      checks: [{ id: 'canonical-check', status: 'pass', actual: secretLikeDiagnostic }],
+      checks: M12_PROFILE_CHECK_IDS.map((id) => ({
+        id,
+        status: 'pass',
+        actual: id === 'host-mounted' ? secretLikeDiagnostic : 'ok',
+      })),
     })
     const ubuntu = liveEvidence('ubuntu')
+    const windowsInput = serializeEvidence(windows)
+    const ubuntuInput = serializeEvidence(ubuntu)
     const aggregate = aggregateM12ProfileSmokeEvidence(
-      [windows, ubuntu],
+      [windowsInput, ubuntuInput],
+      WORKFLOW,
       () => new Date('2026-08-30T02:00:00.000Z'),
     )
 
@@ -373,10 +428,11 @@ describe('M12 real profile smoke runner', () => {
       taskSha256: M12_PROFILE_TASK_SHA256,
       fixtureSha256: M12_PROFILE_FIXTURE_SHA256,
       dshVersion: M12_PROFILE_DSH_VERSION,
+      workflow: { runId: WORKFLOW.runId, runAttempt: WORKFLOW.runAttempt },
       generatedAt: '2026-08-30T02:00:00.000Z',
       inputs: {
-        windows: { runId: 'windows-run' },
-        ubuntu: { runId: 'ubuntu-run' },
+        windows: { runId: 'windows-run', evidenceSha256: sha256(windowsInput) },
+        ubuntu: { runId: 'ubuntu-run', evidenceSha256: sha256(ubuntuInput) },
       },
     })
     expect(JSON.stringify(aggregate)).not.toContain(secretLikeDiagnostic)
@@ -385,10 +441,13 @@ describe('M12 real profile smoke runner', () => {
   it('rejects canonical hash drift and fake or simulated evidence', () => {
     const ubuntu = liveEvidence('ubuntu')
     expect(() =>
-      aggregateM12ProfileSmokeEvidence([
-        liveEvidence('windows', { fixtureSha256: 'c'.repeat(64) }),
-        ubuntu,
-      ]),
+      aggregateM12ProfileSmokeEvidence(
+        [
+          serializeEvidence(liveEvidence('windows', { fixtureSha256: 'c'.repeat(64) })),
+          serializeEvidence(ubuntu),
+        ],
+        WORKFLOW,
+      ),
     ).toThrow(/not an aggregatable|same source/u)
 
     const fake = liveEvidence('windows', {
@@ -397,7 +456,64 @@ describe('M12 real profile smoke runner', () => {
       status: 'simulated',
       acceptancePassed: false,
     })
-    expect(() => aggregateM12ProfileSmokeEvidence([fake, ubuntu])).toThrow(/production live pass/u)
+    expect(() =>
+      aggregateM12ProfileSmokeEvidence(
+        [serializeEvidence(fake), serializeEvidence(ubuntu)],
+        WORKFLOW,
+      ),
+    ).toThrow(/production live pass/u)
+  })
+
+  it('requires the exact canonical checks in their deterministic order', () => {
+    const ubuntuInput = serializeEvidence(liveEvidence('ubuntu'))
+    const missingCheck = liveEvidence('windows', {
+      checks: M12_PROFILE_CHECK_IDS.slice(1).map((id) => ({ id, status: 'pass', actual: 'ok' })),
+    })
+    const reorderedChecks = liveEvidence('windows', {
+      checks: [...liveEvidence('windows').checks].reverse(),
+    })
+    const extraCheck = liveEvidence('windows', {
+      checks: [
+        ...liveEvidence('windows').checks,
+        { id: 'forged-extra-check', status: 'pass', actual: 'ok' },
+      ],
+    })
+
+    for (const evidence of [missingCheck, reorderedChecks, extraCheck]) {
+      expect(() =>
+        aggregateM12ProfileSmokeEvidence([serializeEvidence(evidence), ubuntuInput], WORKFLOW),
+      ).toThrow(/exact canonical check set/u)
+    }
+  })
+
+  it('rejects SHA drift, prior workflow attempts, and replayed host run identifiers', () => {
+    const ubuntu = liveEvidence('ubuntu')
+    const priorAttempt = liveEvidence('windows', {
+      workflow: { ...WORKFLOW, runAttempt: WORKFLOW.runAttempt - 1 },
+    })
+    expect(() =>
+      aggregateM12ProfileSmokeEvidence(
+        [serializeEvidence(priorAttempt), serializeEvidence(ubuntu)],
+        WORKFLOW,
+      ),
+    ).toThrow(/expected workflow run attempt/u)
+
+    expect(() =>
+      aggregateM12ProfileSmokeEvidence(
+        [serializeEvidence(liveEvidence('windows')), serializeEvidence(ubuntu)],
+        { ...WORKFLOW, expectedGitSha: DRIFTED_GIT_SHA },
+      ),
+    ).toThrow(/expected workflow run attempt/u)
+
+    expect(() =>
+      aggregateM12ProfileSmokeEvidence(
+        [
+          serializeEvidence(liveEvidence('windows', { runId: 'replayed-run' })),
+          serializeEvidence(liveEvidence('ubuntu', { runId: 'replayed-run' })),
+        ],
+        WORKFLOW,
+      ),
+    ).toThrow(/distinct one-time run identifiers/u)
   })
 
   it('writes a new dual-host aggregate through the CLI and refuses overwrite', async () => {
@@ -405,8 +521,8 @@ describe('M12 real profile smoke runner', () => {
     const windowsPath = join(root, 'windows.json')
     const ubuntuPath = join(root, 'ubuntu.json')
     const outputPath = join(root, 'aggregate.json')
-    await writeFile(windowsPath, JSON.stringify(liveEvidence('windows')), 'utf8')
-    await writeFile(ubuntuPath, JSON.stringify(liveEvidence('ubuntu')), 'utf8')
+    await writeFile(windowsPath, serializeEvidence(liveEvidence('windows')), 'utf8')
+    await writeFile(ubuntuPath, serializeEvidence(liveEvidence('ubuntu')), 'utf8')
     const log = vi.fn()
     const argv = [
       'aggregate',
@@ -414,6 +530,12 @@ describe('M12 real profile smoke runner', () => {
       windowsPath,
       '--ubuntu',
       ubuntuPath,
+      '--expected-git-sha',
+      WORKFLOW.expectedGitSha,
+      '--workflow-run-id',
+      WORKFLOW.runId,
+      '--workflow-run-attempt',
+      String(WORKFLOW.runAttempt),
       '--output',
       outputPath,
     ]
@@ -435,9 +557,20 @@ describe('M12 real profile smoke runner', () => {
       'm12-profile-smoke-Windows',
       'm12-profile-smoke-Linux',
       'm12-profile-smoke-dual',
+      '--expected-git-sha ${{ github.sha }}',
+      '--workflow-run-id ${{ github.run_id }}',
+      '--workflow-run-attempt ${{ github.run_attempt }}',
+      'm12-profile-smoke-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}',
+      'm12-profile-smoke-Windows-${{ github.run_id }}-${{ github.run_attempt }}',
+      'm12-profile-smoke-Linux-${{ github.run_id }}-${{ github.run_attempt }}',
     ]) {
       expect(workflow).toContain(required)
     }
+    expect(workflow.match(/--expected-git-sha \$\{\{ github\.sha \}\}/gu)).toHaveLength(2)
+    expect(workflow.match(/--workflow-run-id \$\{\{ github\.run_id \}\}/gu)).toHaveLength(2)
+    expect(workflow.match(/--workflow-run-attempt \$\{\{ github\.run_attempt \}\}/gu)).toHaveLength(
+      2,
+    )
     expect(workflow).not.toContain('continue-on-error')
   })
 })

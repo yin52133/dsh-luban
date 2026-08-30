@@ -42,11 +42,17 @@ out-of-tree Luban and A-class bundles are added with `dsh plugin`.
    ```sh
    node scripts/acceptance/m12-profile-smoke.mjs
    node scripts/acceptance/m12-profile-smoke.mjs --live \
+     --expected-git-sha "$GITHUB_SHA" \
+     --workflow-run-id "$GITHUB_RUN_ID" \
+     --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
      --output /tmp/m12-ubuntu-server.json
    ```
 
    A live pass covers the temporary host/client fixture on this Linux host only.
-   It does not prove Windows acceptance or install the three A-class packages.
+   Aggregatable CI evidence must bind the expected commit, workflow run, and run
+   attempt shown above; the aggregate also requires the exact canonical checks
+   and records the raw input digest. It does not prove Windows acceptance or
+   install the three A-class packages.
 
 5. Validate without booting: `dsh --profile ubuntu-server --dump-config`.
 

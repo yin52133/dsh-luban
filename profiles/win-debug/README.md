@@ -42,12 +42,17 @@ out-of-tree Luban and A-class bundles are added with `dsh plugin`.
    ```powershell
    node scripts/acceptance/m12-profile-smoke.mjs
    node scripts/acceptance/m12-profile-smoke.mjs --live `
+     --expected-git-sha "$env:GITHUB_SHA" `
+     --workflow-run-id "$env:GITHUB_RUN_ID" `
+     --workflow-run-attempt "$env:GITHUB_RUN_ATTEMPT" `
      --output "$env:TEMP\m12-win-debug.json"
    ```
 
    A live pass covers the temporary host/client fixture on this Windows host
-   only. It does not prove Ubuntu acceptance or install the three A-class
-   packages.
+   only. Aggregatable CI evidence must bind the expected commit, workflow run,
+   and run attempt shown above; the aggregate also requires the exact canonical
+   checks and records the raw input digest. It does not prove Ubuntu acceptance
+   or install the three A-class packages.
 
 5. Validate without booting: `dsh --profile win-debug --dump-config`.
 
