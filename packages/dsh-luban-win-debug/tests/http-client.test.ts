@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AccountId, AuthService, SessionId } from 'dsh-luban-core'
-import { asAccountId, asSessionId } from 'dsh-luban-core'
+import { asAccountId, asSessionId, LubanError } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply as applyClient, WinDebugSection } from '../src/client/index.js'
 import { eventVisibleToAccount, WinDebugHttpApi } from '../src/http-api.js'
@@ -14,6 +14,7 @@ import { DefaultWinDebugService } from '../src/service.js'
 import type { SessionInjection, WinDebugEvent } from '../src/types.js'
 import {
   FakeCommandRunner,
+  FakeDesktopMcpClient,
   FakeManagedProcessRunner,
   FakeSerialProvider,
   flush,
@@ -121,11 +122,13 @@ function requestHeaders(accountId: AccountId, json = false): Readonly<Record<str
 async function fixture(
   allowed = true,
   includeAccount = true,
+  desktopMcpEnabled = false,
 ): Promise<{
   readonly url: string
   readonly service: DefaultWinDebugService
   readonly serial: FakeSerialProvider
   readonly commands: FakeCommandRunner
+  readonly desktopMcp: FakeDesktopMcpClient
   readonly auth: AuthService
   readonly injected: SessionId[]
   readonly root: string
@@ -134,6 +137,7 @@ async function fixture(
   directories.push(root)
   const serial = new FakeSerialProvider()
   const commands = new FakeCommandRunner()
+  const desktopMcp = new FakeDesktopMcpClient()
   const authService = auth(allowed, includeAccount)
   const injected: SessionId[] = []
   const sessionInjection: SessionInjection = {
@@ -142,12 +146,26 @@ async function fixture(
       return Promise.resolve()
     },
   }
-  const service = new DefaultWinDebugService(testConfig(root), {
+  const config = testConfig(
+    root,
+    desktopMcpEnabled
+      ? {
+          desktopMcp: Object.freeze({
+            enabled: true,
+            command: join(root, 'windows-mcp.exe'),
+            args: Object.freeze(['--stdio']),
+            tools: Object.freeze(['desktop.capture']),
+          }),
+        }
+      : {},
+  )
+  const service = new DefaultWinDebugService(config, {
     commands,
     processes: new FakeManagedProcessRunner(),
     adapters: [new SerialChannelAdapter(serial)],
     sessionInjection,
     accountSessions: authService.accountSessions,
+    desktopMcp,
   })
   const api = new WinDebugHttpApi(service, authService)
   const server = createServer((request, response): void => {
@@ -170,6 +188,7 @@ async function fixture(
     service,
     serial,
     commands,
+    desktopMcp,
     auth: authService,
     injected,
     root,
@@ -187,6 +206,146 @@ describe('authenticated Windows debug API', (): void => {
     const { url } = await fixture(true, false)
     const response = await fetch(`${url}/luban-win-debug/endpoints`)
     expect(response.status).toBe(401)
+  })
+
+  it('scopes desktop MCP status and lifecycle control to its account owner', async (): Promise<void> => {
+    const { url, desktopMcp } = await fixture(true, true, true)
+    const startUrl = `${url}/luban-win-debug/desktop-mcp/start`
+    const stopUrl = `${url}/luban-win-debug/desktop-mcp/stop`
+    const statusUrl = `${url}/luban-win-debug/desktop-mcp`
+
+    const aliceStart = await fetch(startUrl, {
+      method: 'POST',
+      headers: requestHeaders(ALICE),
+    })
+    expect(aliceStart.status).toBe(202)
+    desktopMcp.recentOutput = [{ type: 'stderr', text: 'alice-output', at: 1 }]
+
+    const aliceStatus = await fetch(statusUrl, { headers: requestHeaders(ALICE) }).then(
+      async (response) =>
+        response.json() as Promise<{
+          readonly status: Readonly<Record<string, unknown>>
+        }>,
+    )
+    expect(aliceStatus.status).toMatchObject({
+      state: 'running',
+      recentOutput: [{ text: 'alice-output' }],
+    })
+    const bobStatus = await fetch(statusUrl, { headers: requestHeaders(BOB) }).then(
+      async (response) =>
+        response.json() as Promise<{
+          readonly status: Readonly<Record<string, unknown>>
+        }>,
+    )
+    expect(bobStatus.status).toMatchObject({ state: 'running' })
+    expect(bobStatus.status).not.toHaveProperty('recentOutput')
+    const bobRootStatus = await fetch(`${url}/luban-win-debug/status`, {
+      headers: requestHeaders(BOB),
+    }).then(
+      async (response) =>
+        response.json() as Promise<{
+          readonly desktopMcp: Readonly<Record<string, unknown>>
+        }>,
+    )
+    expect(bobRootStatus.desktopMcp).not.toHaveProperty('recentOutput')
+
+    for (const endpoint of [startUrl, stopUrl]) {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: requestHeaders(BOB),
+      })
+      expect(response.status).toBe(403)
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'E_ACCOUNT_SCOPE_MISMATCH' },
+      })
+    }
+
+    expect(
+      (
+        await fetch(stopUrl, {
+          method: 'POST',
+          headers: requestHeaders(ALICE),
+        })
+      ).status,
+    ).toBe(200)
+    expect(
+      (
+        await fetch(startUrl, {
+          method: 'POST',
+          headers: requestHeaders(BOB),
+        })
+      ).status,
+    ).toBe(202)
+    desktopMcp.recentOutput = [{ type: 'stderr', text: 'bob-output', at: 2 }]
+    const aliceAfterHandoff = await fetch(statusUrl, { headers: requestHeaders(ALICE) }).then(
+      async (response) =>
+        response.json() as Promise<{
+          readonly status: Readonly<Record<string, unknown>>
+        }>,
+    )
+    expect(aliceAfterHandoff.status).not.toHaveProperty('recentOutput')
+  })
+
+  it('returns concrete desktop MCP lifecycle failures and keeps ownership consistent', async (): Promise<void> => {
+    const { url, desktopMcp } = await fixture(true, true, true)
+    const startUrl = `${url}/luban-win-debug/desktop-mcp/start`
+    const stopUrl = `${url}/luban-win-debug/desktop-mcp/stop`
+    vi.spyOn(desktopMcp, 'connect').mockRejectedValueOnce(
+      new LubanError('E_UNAVAILABLE', 'concrete startup failure', { retriable: true }),
+    )
+
+    const failedStart = await fetch(startUrl, {
+      method: 'POST',
+      headers: requestHeaders(ALICE),
+    })
+    expect(failedStart.status).toBe(503)
+    await expect(failedStart.json()).resolves.toMatchObject({
+      error: {
+        code: 'E_UNAVAILABLE',
+        message: 'concrete startup failure',
+        retriable: true,
+      },
+    })
+    expect(
+      (
+        await fetch(startUrl, {
+          method: 'POST',
+          headers: requestHeaders(BOB),
+        })
+      ).status,
+    ).toBe(202)
+
+    vi.spyOn(desktopMcp, 'stop').mockRejectedValueOnce(
+      new LubanError('E_TIMEOUT', 'concrete stop failure', { retriable: true }),
+    )
+    const failedStop = await fetch(stopUrl, {
+      method: 'POST',
+      headers: requestHeaders(BOB),
+    })
+    expect(failedStop.status).toBe(504)
+    await expect(failedStop.json()).resolves.toMatchObject({
+      error: {
+        code: 'E_TIMEOUT',
+        message: 'concrete stop failure',
+        retriable: true,
+      },
+    })
+    const aliceStart = await fetch(startUrl, {
+      method: 'POST',
+      headers: requestHeaders(ALICE),
+    })
+    expect(aliceStart.status).toBe(403)
+    await expect(aliceStart.json()).resolves.toMatchObject({
+      error: { code: 'E_ACCOUNT_SCOPE_MISMATCH' },
+    })
+    expect(
+      (
+        await fetch(stopUrl, {
+          method: 'POST',
+          headers: requestHeaders(BOB),
+        })
+      ).status,
+    ).toBe(200)
   })
 
   it('opens one channel and captures a monitored selection through bounded JSON routes', async (): Promise<void> => {

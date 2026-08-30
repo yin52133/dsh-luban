@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { asAccountId, asSessionId, LubanError } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesktopMcpManager, type DesktopToolRegistry } from '../src/desktop-mcp.js'
 import { DeviceExecutionGate } from '../src/device-gate.js'
@@ -14,6 +15,7 @@ import {
   FakeDesktopMcpClient,
   FakeManagedProcessRunner,
   flush,
+  memoryAccountSessions,
   TEST_ACCOUNT,
   testConfig,
 } from './helpers.js'
@@ -391,7 +393,17 @@ describe('desktop MCP wrapper', (): void => {
       }),
     })
     const client = new FakeDesktopMcpClient()
-    const manager = new DesktopMcpManager(config, client)
+    const sessionId = asSessionId('desktop-session')
+    const otherSessionId = asSessionId('other-desktop-session')
+    const otherAccount = asAccountId('other-account')
+    const manager = new DesktopMcpManager(
+      config,
+      client,
+      memoryAccountSessions([
+        [TEST_ACCOUNT, sessionId],
+        [otherAccount, otherSessionId],
+      ]),
+    )
 
     expect(manager.descriptor()).toEqual({
       transport: 'stdio',
@@ -413,12 +425,13 @@ describe('desktop MCP wrapper', (): void => {
       'desktop.click',
     ])
     expect(client.connects).toHaveLength(0)
-    expect(manager.status().state).toBe('stopped')
+    expect(manager.statusFor(TEST_ACCOUNT).state).toBe('stopped')
     const capture = definitions[0]
     if (capture === undefined) throw new Error('missing registered desktop tool')
     const controller = new AbortController()
     const execution = {
       signal: controller.signal,
+      agent: { id: sessionId },
     } as unknown as ToolRunContext
     await expect(capture.execute({ display: 1 }, execution)).resolves.toEqual({
       content: 'called desktop.capture',
@@ -431,16 +444,133 @@ describe('desktop MCP wrapper', (): void => {
       maxMessageBytes: 64 * 1024,
       signal: controller.signal,
     })
-    expect(manager.status().state).toBe('running')
+    expect(manager.statusFor(TEST_ACCOUNT).state).toBe('running')
     expect(client.calls).toHaveLength(1)
     expect(client.calls[0]).toMatchObject({ tool: 'desktop.capture', args: { display: 1 } })
     expect(client.calls[0]?.signal).toBe(controller.signal)
+    await expect(
+      capture.execute({ display: 2 }, {
+        signal: AbortSignal.timeout(1000),
+        agent: { id: otherSessionId },
+      } as unknown as ToolRunContext),
+    ).rejects.toMatchObject({ code: 'E_ACCOUNT_SCOPE_MISMATCH' })
+    await expect(
+      capture.execute({ display: 3 }, {
+        signal: AbortSignal.timeout(1000),
+        agent: { id: asSessionId('unbound-desktop-session') },
+      } as unknown as ToolRunContext),
+    ).rejects.toMatchObject({ code: 'E_AUTH_REQUIRED' })
     unregisterTools()
     expect(unregisters.every((unregister): boolean => unregister.mock.calls.length === 1)).toBe(
       true,
     )
 
-    await manager.stop()
-    expect(manager.status().state).toBe('stopped')
+    await manager.stop(TEST_ACCOUNT)
+    expect(manager.statusFor(TEST_ACCOUNT).state).toBe('stopped')
+  })
+
+  it('isolates output and lifecycle ownership, then releases it after stop or exit', async (): Promise<void> => {
+    const root = await temporary()
+    const base = testConfig(root)
+    const config = Object.freeze({
+      ...base,
+      desktopMcp: Object.freeze({
+        enabled: true,
+        command: join(root, 'windows-mcp.exe'),
+        args: Object.freeze(['--stdio']),
+        tools: Object.freeze(['desktop.capture']),
+      }),
+    })
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    const client = new FakeDesktopMcpClient()
+    const manager = new DesktopMcpManager(config, client)
+    let finishConnect!: () => void
+    const connectBarrier = new Promise<void>((resolve): void => {
+      finishConnect = resolve
+    })
+    vi.spyOn(client, 'connect').mockImplementationOnce(async (options): Promise<void> => {
+      client.connects.push(options)
+      await connectBarrier
+      client.connected = true
+      client.advertisedTools = options.allowedTools
+    })
+
+    const aliceStart = manager.start(alice)
+    expect(client.connected).toBe(false)
+    expect(() => manager.start(bob)).toThrow('Desktop MCP context belongs to another account')
+    finishConnect()
+    await aliceStart
+    client.recentOutput = [{ type: 'stderr', text: 'alice-output', at: 1 }]
+    expect(manager.statusFor(alice)).toMatchObject({
+      state: 'running',
+      recentOutput: [{ text: 'alice-output' }],
+    })
+    expect(manager.statusFor(bob)).toEqual({
+      enabled: true,
+      state: 'running',
+      commandConfigured: true,
+      tools: ['desktop.capture'],
+    })
+    expect(() => manager.start(bob)).toThrow('Desktop MCP context belongs to another account')
+    await expect(manager.call(bob, 'desktop.capture', {})).rejects.toMatchObject({
+      code: 'E_ACCOUNT_SCOPE_MISMATCH',
+    })
+    expect(() => manager.stop(bob)).toThrow('Desktop MCP context belongs to another account')
+
+    let finishStop!: () => void
+    const stopBarrier = new Promise<void>((resolve): void => {
+      finishStop = resolve
+    })
+    vi.spyOn(client, 'stop').mockImplementationOnce(async (): Promise<void> => {
+      client.connected = false
+      client.advertisedTools = []
+      await stopBarrier
+    })
+    const aliceStop = manager.stop(alice)
+    expect(() => manager.start(bob)).toThrow('Desktop MCP context belongs to another account')
+    finishStop()
+    await aliceStop
+    await expect(manager.start(bob)).resolves.toMatchObject({ state: 'running' })
+    client.recentOutput = [{ type: 'stderr', text: 'bob-output', at: 2 }]
+    expect(manager.statusFor(alice)).not.toHaveProperty('recentOutput')
+    expect(manager.statusFor(bob)).toMatchObject({
+      recentOutput: [{ text: 'bob-output' }],
+    })
+
+    client.connected = false
+    await expect(manager.start(alice)).resolves.toMatchObject({ state: 'running' })
+    expect(client.connects).toHaveLength(3)
+    expect(manager.statusFor(bob)).not.toHaveProperty('recentOutput')
+    await manager.stop(alice)
+  })
+
+  it('preserves startup and stop failures without transferring ownership', async (): Promise<void> => {
+    const root = await temporary()
+    const base = testConfig(root)
+    const config = Object.freeze({
+      ...base,
+      desktopMcp: Object.freeze({
+        enabled: true,
+        command: join(root, 'windows-mcp.exe'),
+        args: Object.freeze(['--stdio']),
+        tools: Object.freeze(['desktop.capture']),
+      }),
+    })
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    const client = new FakeDesktopMcpClient()
+    const manager = new DesktopMcpManager(config, client)
+    const startupFailure = new LubanError('E_UNAVAILABLE', 'concrete startup failure')
+    vi.spyOn(client, 'connect').mockRejectedValueOnce(startupFailure)
+
+    await expect(manager.start(alice)).rejects.toBe(startupFailure)
+    await expect(manager.start(bob)).resolves.toMatchObject({ state: 'running' })
+
+    const stopFailure = new LubanError('E_TIMEOUT', 'concrete stop failure')
+    vi.spyOn(client, 'stop').mockRejectedValueOnce(stopFailure)
+    await expect(manager.stop(bob)).rejects.toBe(stopFailure)
+    expect(() => manager.start(alice)).toThrow('Desktop MCP context belongs to another account')
+    await manager.stop(bob)
   })
 })

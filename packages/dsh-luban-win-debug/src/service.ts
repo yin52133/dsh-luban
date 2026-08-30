@@ -121,7 +121,7 @@ export class DefaultWinDebugService implements WinDebugService {
       snippets,
       preflight,
     })
-    this.#mcp = new DesktopMcpManager(config, dependencies.desktopMcp)
+    this.#mcp = new DesktopMcpManager(config, dependencies.desktopMcp, dependencies.accountSessions)
     this.#injection = dependencies.sessionInjection
     this.#accountSessions = dependencies.accountSessions
     const serialAdapter = adapters.find((adapter): boolean => adapter.kind === 'serial')
@@ -311,8 +311,8 @@ export class DefaultWinDebugService implements WinDebugService {
     return this.#gdb.stop(accountId)
   }
 
-  public desktopMcpStatus(): ReturnType<DesktopMcpManager['status']> {
-    return this.#mcp.status()
+  public desktopMcpStatus(accountId: AccountId): ReturnType<DesktopMcpManager['statusFor']> {
+    return this.#mcp.statusFor(accountId)
   }
 
   public desktopMcpDescriptor(): ReturnType<DesktopMcpManager['descriptor']> {
@@ -323,12 +323,15 @@ export class DefaultWinDebugService implements WinDebugService {
     return this.#mcp.registerTools(registry)
   }
 
-  public desktopMcpStart(signal?: AbortSignal): ReturnType<DesktopMcpManager['start']> {
-    return this.#mcp.start(signal)
+  public desktopMcpStart(
+    accountId: AccountId,
+    signal?: AbortSignal,
+  ): ReturnType<DesktopMcpManager['start']> {
+    return this.#mcp.start(accountId, signal)
   }
 
-  public desktopMcpStop(): ReturnType<DesktopMcpManager['stop']> {
-    return this.#mcp.stop()
+  public desktopMcpStop(accountId: AccountId): ReturnType<DesktopMcpManager['stop']> {
+    return this.#mcp.stop(accountId)
   }
 
   public async dispose(): Promise<void> {
@@ -337,7 +340,7 @@ export class DefaultWinDebugService implements WinDebugService {
     await Promise.allSettled([
       ...(hotplug === undefined ? [] : [hotplug]),
       this.#gdb.forceStop(),
-      this.#mcp.stop(),
+      this.#mcp.forceStop(),
       this.#hub.dispose(),
     ])
   }

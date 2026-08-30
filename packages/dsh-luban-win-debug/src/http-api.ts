@@ -274,7 +274,7 @@ export class WinDebugHttpApi {
           })),
           adapterErrors: this.#service.endpointErrors(),
           gdb: this.#service.gdbStatus(accountId),
-          desktopMcp: this.#service.desktopMcpStatus(),
+          desktopMcp: this.#service.desktopMcpStatus(accountId),
         })
         return
       }
@@ -398,7 +398,7 @@ export class WinDebugHttpApi {
       if (method === 'GET' && path === '/desktop-mcp') {
         const descriptor = this.#service.desktopMcpDescriptor()
         sendJson(response, 200, {
-          status: this.#service.desktopMcpStatus(),
+          status: this.#service.desktopMcpStatus(accountId),
           descriptor:
             descriptor === null
               ? null
@@ -412,13 +412,13 @@ export class WinDebugHttpApi {
       }
       if (method === 'POST' && path === '/desktop-mcp/start') {
         const status = await withDisconnectSignal(response, async (signal) =>
-          this.#service.desktopMcpStart(signal),
+          this.#service.desktopMcpStart(accountId, signal),
         )
         sendJson(response, 202, status)
         return
       }
       if (method === 'POST' && path === '/desktop-mcp/stop') {
-        sendJson(response, 200, await this.#service.desktopMcpStop())
+        sendJson(response, 200, await this.#service.desktopMcpStop(accountId))
         return
       }
 

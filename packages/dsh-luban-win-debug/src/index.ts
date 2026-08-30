@@ -72,7 +72,11 @@ export { NodeCommandRunner, NodeManagedProcessRunner, parseCommandWords } from '
 export { assertAllowedPath, expandPath, parseConfig } from './config.js'
 export type { RemoteEndpointConfig } from './config.js'
 export { DesktopMcpManager } from './desktop-mcp.js'
-export type { DesktopMcpDescriptor, DesktopToolRegistry } from './desktop-mcp.js'
+export type {
+  DesktopMcpAccountStatus,
+  DesktopMcpDescriptor,
+  DesktopToolRegistry,
+} from './desktop-mcp.js'
 export { DeviceExecutionGate } from './device-gate.js'
 export { GdbSessionManager } from './gdb.js'
 export type { GdbOccupancyStatus, GdbSnapshotRequest, GdbStartRequest, GdbStatus } from './gdb.js'
