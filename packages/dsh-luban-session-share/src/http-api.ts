@@ -49,6 +49,11 @@ interface RegistryStreamClient {
   readonly accountId: AccountId
   readonly pending: StreamEnvelope[]
   ready: boolean
+  overflowed: boolean
+}
+
+function pendingEventsOverflowed(client: RegistryStreamClient): boolean {
+  return client.overflowed
 }
 
 function record(value: unknown, label = 'request body'): Readonly<Record<string, unknown>> {
@@ -240,8 +245,13 @@ export class RegistryEventStream {
       if (client.accountId !== accountId) continue
       if (client.ready) this.#write(response, envelope)
       else {
+        if (client.overflowed) continue
+        if (client.pending.length >= this.#limit) {
+          client.pending.length = 0
+          client.overflowed = true
+          continue
+        }
         client.pending.push(envelope)
-        if (client.pending.length > this.#limit) client.pending.shift()
       }
     }
   }
@@ -258,22 +268,23 @@ export class RegistryEventStream {
       (event): boolean => event.accountId === identity.accountId,
     )
     const oldest = visibleEvents[0]?.id ?? this.#sequence
-    const initialSequence = this.#sequence
+    let baselineSequence = this.#sequence
     const baselineRequired =
       !Number.isSafeInteger(requested) || requested < oldest - 1 || requested > this.#sequence
     const client: RegistryStreamClient = {
       accountId: identity.accountId,
       pending: [],
       ready: false,
+      overflowed: false,
     }
     const close = (): void => this.#remove(response)
     this.#clients.set(response, client)
     response.once('close', close)
     try {
-      const pending: readonly StreamEnvelope[] = baselineRequired
+      let pending: readonly StreamEnvelope[] = baselineRequired
         ? [
             {
-              id: initialSequence,
+              id: baselineSequence,
               event: 'baseline',
               accountId: identity.accountId,
               data: {
@@ -283,6 +294,30 @@ export class RegistryEventStream {
             },
           ]
         : visibleEvents.filter((event): boolean => event.id > requested)
+
+      if (client.overflowed) {
+        client.pending.length = 0
+        client.overflowed = false
+        baselineSequence = this.#sequence
+        pending = [
+          {
+            id: baselineSequence,
+            event: 'baseline',
+            accountId: identity.accountId,
+            data: {
+              sessions: await this.#registry.listFor(identity.actor, identity.accountRole),
+              takeovers: this.#registry.takeoversFor(identity.actor),
+            },
+          },
+        ]
+        if (pendingEventsOverflowed(client)) {
+          throw new LubanError(
+            'E_UNAVAILABLE',
+            'Registry changed faster than its baseline could be rebuilt; reconnect the event stream',
+            { retriable: true },
+          )
+        }
+      }
 
       this.#assertAvailable()
       if (this.#clients.get(response) !== client) return
@@ -295,7 +330,7 @@ export class RegistryEventStream {
       response.write('retry: 2000\n\n')
       for (const envelope of pending) this.#write(response, envelope)
       for (const envelope of client.pending) {
-        if (envelope.id > initialSequence) this.#write(response, envelope)
+        if (envelope.id > baselineSequence) this.#write(response, envelope)
       }
       client.pending.length = 0
       client.ready = true

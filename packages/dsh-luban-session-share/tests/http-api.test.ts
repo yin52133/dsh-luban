@@ -526,6 +526,75 @@ describe('SessionShareHttpApi', (): void => {
     }
   })
 
+  it('rebuilds a stale SSE baseline when its pending account events overflow', async (): Promise<void> => {
+    const registry = new SharedSessionRegistry({
+      localHost: host('ubuntu'),
+      takeoverTimeoutMs: 1_000,
+      replayLimit: 2,
+    })
+    const originalList = registry.listFor.bind(registry)
+    let finishFirstList: (() => void) | undefined
+    let firstListStarted: (() => void) | undefined
+    let listCalls = 0
+    const started = new Promise<void>((resolve): void => {
+      firstListStarted = resolve
+    })
+    vi.spyOn(registry, 'listFor').mockImplementation(async (actor, role, filter) => {
+      listCalls += 1
+      const snapshot = await originalList(actor, role, filter)
+      if (listCalls === 1) {
+        firstListStarted?.()
+        await new Promise<void>((resolve): void => {
+          finishFirstList = resolve
+        })
+      }
+      return snapshot
+    })
+    const api = new SessionShareHttpApi(registry, testAuth(), 2)
+    const server = createServer((request, response): void => {
+      void api.handler(request, response)
+    })
+    await new Promise<void>((resolve, reject): void => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address() as AddressInfo
+
+    try {
+      const pending = fetch(`http://127.0.0.1:${String(address.port)}/luban-session-share/events`, {
+        headers: { cookie: 'user=alice; role=admin' },
+      })
+      await started
+      for (const id of ['S-overflow-1', 'S-overflow-2', 'S-overflow-3']) {
+        registry.registerLocal({
+          id: session(id),
+          host: host('ubuntu'),
+          owner: user('alice'),
+          healthy: true,
+          status: 'idle',
+        })
+      }
+      if (finishFirstList === undefined) throw new Error('registry baseline did not start')
+      finishFirstList()
+
+      const stream = await pending
+      if (stream.body === null) throw new Error('registry stream has no body')
+      const reader = stream.body.getReader()
+      const content = await readSseUntil(reader, 'event: baseline')
+      expect(listCalls).toBe(2)
+      expect(content.match(/event: baseline/gu)).toHaveLength(1)
+      for (const id of ['S-overflow-1', 'S-overflow-2', 'S-overflow-3']) {
+        expect(content).toContain(id)
+      }
+      await reader.cancel()
+    } finally {
+      api.dispose()
+      await new Promise<void>((resolve, reject): void => {
+        server.close((error): void => (error === undefined ? resolve() : reject(error)))
+      })
+    }
+  })
+
   it('does not attach a registry stream after disposal during baseline loading', async (): Promise<void> => {
     const registry = new SharedSessionRegistry({
       localHost: host('ubuntu'),
