@@ -22,6 +22,7 @@ import {
 } from '../src/rate-ledger.js'
 import { HUD_RATE_EXPORT_SCHEMA, type RateWindowUtc } from '../src/rate-reconcile.js'
 import { HUD_TELEMETRY_EVENT, type HudSnapshotResponse } from '../src/types.js'
+import { HUD_RUNTIME_ARTIFACT_FIXTURE } from './runtime-artifact-fixture.js'
 
 class MockResponse extends EventEmitter {
   public statusCode = 200
@@ -211,6 +212,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
         processId: 123,
         nodeVersion: 'v24.0.0',
         challengeSha256: challenge,
+        runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
       },
       export: {
         schemaVersion: HUD_RATE_EXPORT_SCHEMA,
@@ -261,7 +263,10 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     )
     expect(JSON.parse(allowed.body)).toMatchObject({
       schemaVersion: HUD_RATE_CAPTURE_SCHEMA,
-      source: { kind: 'mounted-hud-capture' },
+      source: {
+        kind: 'mounted-hud-capture',
+        runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
+      },
     })
     api.dispose()
 

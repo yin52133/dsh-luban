@@ -11,6 +11,14 @@ import { describe, expect, it, vi } from 'vitest'
 import * as plugin from '../src/index.js'
 import { keepaliveIndicator } from '../src/client/index.js'
 import type { HudSnapshotResponse } from '../src/types.js'
+import { HUD_RUNTIME_ARTIFACT_FIXTURE } from './runtime-artifact-fixture.js'
+
+const hudPlugin = {
+  ...plugin,
+  apply(ctx: Context): void {
+    plugin.apply(ctx, {}, HUD_RUNTIME_ARTIFACT_FIXTURE)
+  },
+}
 
 function authentication(): AuthService {
   return {
@@ -106,7 +114,7 @@ describe('HUD Cordis integration', (): void => {
       const meterFiber = context.plugin(TokenMeter)
       disposeMeter = (): Promise<unknown> => meterFiber.dispose()
       await meterFiber
-      const hudFiber = context.plugin(plugin)
+      const hudFiber = context.plugin(hudPlugin)
       await hudFiber
       try {
         const official = context.sessionProjections.snapshot(session).values.contextPressure
@@ -196,7 +204,7 @@ describe('HUD Cordis integration', (): void => {
 
     try {
       await Promise.all([webFiber, agentsFiber, authFiber])
-      const hudFiber = context.plugin(plugin)
+      const hudFiber = context.plugin(hudPlugin)
       await hudFiber
       const taskStoreFiber = context.plugin({
         name: 'luban-hud-test-task-store',

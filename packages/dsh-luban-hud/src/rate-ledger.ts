@@ -11,11 +11,16 @@ import {
   type ReconciledTokenUsage,
 } from './rate-reconcile.js'
 import { systemMonotonicClock, type MonotonicClock } from './rate-window.js'
+import {
+  parseHudRuntimeArtifactIdentity,
+  type HudRuntimeArtifactIdentity,
+} from './runtime-artifact.js'
 
-export const HUD_RATE_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v1' as const
+export const HUD_RATE_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v2' as const
 
 const DEFAULT_MAX_CAPTURE_RECORDS = 10_000
 const FIVE_MINUTES_MS = 300_000
+const CAPTURE_RETENTION_MS = 15 * 60_000
 const MAX_CLOCK_DRIFT_MS = 1_000
 const CHALLENGE = /^[A-Za-z0-9][A-Za-z0-9_-]{31,127}$/u
 const RATE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
@@ -40,12 +45,14 @@ export interface HudRateCapture {
     readonly processId: number
     readonly nodeVersion: string
     readonly challengeSha256: string
+    readonly runtimeArtifact: HudRuntimeArtifactIdentity
   }
   readonly export: HudRateExport
   readonly captures: readonly HudRateCaptureMetadata[]
 }
 
 export interface HudRateLedgerOptions {
+  readonly runtimeArtifact: HudRuntimeArtifactIdentity
   readonly clock?: Clock
   readonly monotonicClock?: MonotonicClock
   readonly maxRecords?: number
@@ -180,6 +187,7 @@ function coverageError(message: string): LubanError {
 
 /** Bounded, metadata-only ledger produced from mounted durable assistant events. */
 export class HudRateLedger {
+  readonly #runtimeArtifact: HudRuntimeArtifactIdentity
   readonly #clock: Clock
   readonly #monotonicClock: MonotonicClock
   readonly #maxRecords: number
@@ -190,7 +198,8 @@ export class HudRateLedger {
   #lastMonotonicClock: number | null
   #coverageInvalid = false
 
-  public constructor(options: HudRateLedgerOptions = {}) {
+  public constructor(options: HudRateLedgerOptions) {
+    this.#runtimeArtifact = parseHudRuntimeArtifactIdentity(options.runtimeArtifact)
     this.#clock = options.clock ?? systemClock
     this.#monotonicClock = options.monotonicClock ?? systemMonotonicClock
     this.#maxRecords = options.maxRecords ?? DEFAULT_MAX_CAPTURE_RECORDS
@@ -317,6 +326,7 @@ export class HudRateLedger {
         processId: process.pid,
         nodeVersion: process.version,
         challengeSha256: sha256(challenge),
+        runtimeArtifact: this.#runtimeArtifact,
       }),
       export: Object.freeze({
         schemaVersion: HUD_RATE_EXPORT_SCHEMA,
@@ -359,7 +369,7 @@ export class HudRateLedger {
   }
 
   #prune(now: number): void {
-    const cutoff = now - FIVE_MINUTES_MS
+    const cutoff = now - CAPTURE_RETENTION_MS
     if (this.#coverageStart !== null) {
       this.#coverageStart = Math.max(this.#coverageStart, cutoff)
     }

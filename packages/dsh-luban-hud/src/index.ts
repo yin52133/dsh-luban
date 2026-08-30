@@ -17,6 +17,7 @@ import { HudHttpApi } from './http-api.js'
 import { HudKeepaliveHealthStore } from './keepalive-health.js'
 import { HudRateLedger } from './rate-ledger.js'
 import { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
+import { inspectHudRuntimeArtifact, type HudRuntimeArtifactIdentity } from './runtime-artifact.js'
 import type { KeepaliveHealthPayload } from './types.js'
 
 declare module '@deepseek-ai/cordis' {
@@ -63,6 +64,13 @@ export type { HudRateCapture, HudRateCaptureMetadata, HudRateLedgerOptions } fro
 export { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
 export type { MonotonicClock } from './rate-window.js'
 export {
+  HUD_RUNTIME_ARTIFACT_SCHEMA,
+  hudRuntimeArtifactBundleSha256,
+  inspectHudRuntimeArtifact,
+  parseHudRuntimeArtifactIdentity,
+} from './runtime-artifact.js'
+export type { HudRuntimeArtifactFile, HudRuntimeArtifactIdentity } from './runtime-artifact.js'
+export {
   HUD_RATE_EXPORT_SCHEMA,
   PROVIDER_RATE_EXPORT_SCHEMA,
   RATE_RECONCILIATION_SCHEMA,
@@ -105,12 +113,17 @@ function diagnostic(error: unknown): string {
 }
 
 /** Mount rc2 telemetry providers, authenticated API/SSE, and the shared aggregator service. */
-export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
+export function apply(
+  ctx: Context,
+  input: Partial<HudConfig> = {},
+  runtimeArtifact: HudRuntimeArtifactIdentity = inspectHudRuntimeArtifact(new URL(import.meta.url)),
+): void {
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth')
   if (auth === undefined) throw new LubanError('E_UNAVAILABLE', 'lubanAuth is required')
   const window = new SlidingRateWindow(systemMonotonicClock)
   const rateLedger = new HudRateLedger({
+    runtimeArtifact,
     clock: systemClock,
     monotonicClock: systemMonotonicClock,
   })

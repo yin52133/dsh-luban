@@ -3,6 +3,7 @@ import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-ses
 import { describe, expect, it } from 'vitest'
 import { HUD_RATE_CAPTURE_SCHEMA, HudRateLedger } from '../src/rate-ledger.js'
 import { HUD_RATE_EXPORT_SCHEMA } from '../src/rate-reconcile.js'
+import { HUD_RUNTIME_ARTIFACT_FIXTURE } from './runtime-artifact-fixture.js'
 
 const START = Date.parse('2026-08-30T12:00:00.000Z')
 const NOW = Date.parse('2026-08-30T12:05:00.000Z')
@@ -34,6 +35,7 @@ class ManualLedgerClock {
 
 function ledger(clock: ManualLedgerClock, maxRecords?: number): HudRateLedger {
   return new HudRateLedger({
+    runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
     clock: clock.epoch,
     monotonicClock: clock.elapsed,
     ...(maxRecords === undefined ? {} : { maxRecords }),
@@ -125,6 +127,7 @@ describe('mounted HUD rate ledger', (): void => {
         coverageStartUtc: FIVE_MINUTE_WINDOW.startUtc,
         processId: process.pid,
         nodeVersion: process.version,
+        runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
       },
       export: {
         schemaVersion: HUD_RATE_EXPORT_SCHEMA,
@@ -194,6 +197,25 @@ describe('mounted HUD rate ledger', (): void => {
     }).toThrow('conflicting message identity')
   })
 
+  it('retains a complete five-minute window for one minute after it ends', (): void => {
+    const clock = new ManualLedgerClock(START)
+    const rateLedger = ledger(clock)
+    rateLedger.observe(
+      session(),
+      assistantEvent({ seq: 0, time: START, usage: { inputTokens: 10, outputTokens: 5 } }),
+    )
+    clock.advance(360_000)
+
+    const capture = rateLedger.capture(FIVE_MINUTE_WINDOW, CHALLENGE)
+    expect(capture).toMatchObject({
+      source: {
+        coverageStartUtc: FIVE_MINUTE_WINDOW.startUtc,
+        runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
+      },
+    })
+    expect(capture.export.records).toHaveLength(1)
+  })
+
   it('fails reconciliation closed when durable usage is absent or malformed', (): void => {
     const clock = new ManualLedgerClock(Date.parse(ONE_MINUTE_WINDOW.startUtc))
     const rateLedger = ledger(clock)
@@ -237,7 +259,7 @@ describe('mounted HUD rate ledger', (): void => {
       session(),
       assistantEvent({ seq: 0, time: START, usage: { inputTokens: 1, outputTokens: 1 } }),
     )
-    retentionClock.advance(360_000)
+    retentionClock.advance(900_001)
     expect((): void => {
       retentionLedger.capture(FIVE_MINUTE_WINDOW, CHALLENGE)
     }).toThrow('outside complete mounted coverage')
@@ -312,6 +334,7 @@ describe('mounted HUD rate ledger', (): void => {
     }).toThrow('contains no assistant requests')
 
     const invalidClock = new HudRateLedger({
+      runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
       clock: { now: (): number => Number.NaN },
       monotonicClock: { now: (): number => 0 },
     })
@@ -319,6 +342,7 @@ describe('mounted HUD rate ledger', (): void => {
       invalidClock.capture(FIVE_MINUTE_WINDOW, CHALLENGE)
     }).toThrow('coverage is unavailable')
     const outOfRangeClock = new HudRateLedger({
+      runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
       clock: { now: (): number => Number.MAX_SAFE_INTEGER },
       monotonicClock: { now: (): number => 0 },
     })

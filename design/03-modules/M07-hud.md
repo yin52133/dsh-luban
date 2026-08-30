@@ -13,6 +13,8 @@
 | v0.5 | 2026-08-30 | Codex | 补齐 ReactDOM 可见性与 loopback CLI 热刷新验证 |
 | v0.6 | 2026-08-30 | Codex | 对齐 rc2 SessionProjection context pressure 官方口径 |
 | v0.7 | 2026-08-30 | Codex | 增加挂载式速率 ledger、认证窗口导出与 challenge 绑定 |
+| v0.8 | 2026-08-30 | Codex | live runner 绑定挂载 HUD，并显式保留 provider adapter 阻塞边界 |
+| v0.9 | 2026-08-30 | Codex | 延长有界采集保留期，并增加挂载进程运行制品诊断闭包 |
 
 ## 1. 概述与目标
 
@@ -111,9 +113,16 @@ export interface TelemetrySnapshot {
 - `refreshSec` 下限 1 秒；Provider 并发采样有 timeout，历史保留上限 1440 分钟，SSE replay 固定 256 条。
 - Provider 任意异常仅以固定公共文案进入 API，内部日志先脱敏；非法/溢出 token usage 保持 `unknown/partial`，不伪装为 0。
 - REST/SSE 全部经 M01 认证；对外 SSE 只使用已登记的 `luban.telemetry.snapshot` 事件名和共享递增 ID。
-- 速率 ledger 只保留最近五分钟、最多 10000 条 assistant 元数据；不记录会话正文、replay state
-  原文或其稳定指纹。认证导出只接受精确 1min/5min UTC 半开窗口与有界 challenge，响应仅携带
+- 速率 ledger 为精确 1min/5min 指标保留最近十五分钟、最多 10000 条 assistant 元数据，使五分钟
+  窗口结束后的 provider 文件读取与请求延迟仍有安全余量；不记录会话正文、replay state 原文或其稳定
+  指纹。认证导出只接受精确 1min/5min UTC 半开窗口与有界 challenge，响应仅携带
   challenge SHA-256；启动、保留期/容量淘汰或 wall/monotonic 时钟漂移导致覆盖不完整时 fail closed。
+- M07 live runner 先从仓库外安全读取 provider export 并锁定其精确窗口，随后生成 fresh challenge，
+  只通过无凭据 loopback HTTP 调用挂载的 `/luban-hud/rate-capture`。认证 Cookie 仅从
+  `LUBAN_SESSION_COOKIE` 环境变量读取；HUD URL 只接受数值 IPv4/IPv6 回环地址，argv/evidence 不记录
+  Cookie、URL、原始 challenge 或输入路径。
+  请求禁用 redirect，设 10 秒 deadline 和 10 MiB 响应上限；wrapper schema/kind、challenge hash、
+  coverage watermark、内部 HUD origin/window 及 credential-like 字段均严格校验。
 - M03 健康异常作为 `HudSnapshotResponse.keepalive` 可选扩展字段加入；旧响应/旧客户端仍可工作。
   健康 detail 去控制字符、凭据脱敏、单条限长，异常集合上限 256；卸载后不再接受事件或推送。
 - M02 后置加载时通过可选 Cordis injection 自动接通。critical 告警只含比例元数据，不含 workspace、
@@ -140,6 +149,18 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
   usage 标为 `unknownTokens=1` 使后续对账 fail closed。稳定 message ID 会跨 fork 全局去重，同 ID
   内容冲突、启动覆盖缺口、五分钟/容量 eviction watermark 与时钟不连续均拒绝导出。真实
   Cordis/WebServer 集成测试证明端点来自实际挂载实例，并会拒绝挂载初期尚不完整的窗口。
+- `scripts/acceptance/m07-rate-reconcile.mjs` 的 mounted 模式先验证独立 provider 文件，再用其精确
+  1min/5min 窗口调用挂载 capture；Git provenance 同时绑定 runner、reconciler、ledger、collector、
+  HTTP route、Cordis mount、package/build 配置与 runtime-artifact helper 源码；端点还自报启动时读取的
+  `dist/index.js` 相对 JS 引用闭包，runner 独立读取当前本地闭包并逐文件核对 SHA-256/字节数。该一致性
+  检查仅用于诊断：ignored `dist` 尚未与 fresh HEAD build/受信 attestation 关联，端点 PID 也尚未绑定
+  loopback listener 与受信启动身份，因此不得把自报摘要解释为“实际已加载代码”的证明。
+  旧 `--hud-export` 双文件模式保持 operator-attested，并以
+  `E_RATE_TRUSTED_CAPTURE_REQUIRED` 阻塞；mounted HUD 对账成功也不会直接验收，而以
+  `E_RATE_ENDPOINT_ATTESTATION_REQUIRED` 阻塞；除此之外 provider 文件仍由 operator 提供，也需要可信
+  request-ID adapter。test-double 永远只产出
+  simulated evidence，所有路径均保持 `acceptancePassed=false`。runner 的 URL/Cookie/challenge、schema、
+  runtime artifact、coverage、timeout、response-size、参数互斥与秘密不落 evidence 均有定向测试。
 - `DefaultTelemetryAggregator` 并发采样、按 Provider 注册顺序做字段级 first-wins 合并；generation 防止注册/卸载竞态提交陈旧结果。
 - `snapshotFor(sessionId)` 对指定 live agent 重新采样，不读取或替换全局 HUD 缓存，也不向订阅者发布；
   M08 因而不会把 initiator/running/newest 的全局选择结果误用于另一个刚进入 idle 的会话。
@@ -152,13 +173,17 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 - 真实 ReactDOM/jsdom 覆盖 partial provider、warn/danger/critical 展示和页面隐藏时 SSE
   close/reopen；loopback CLI 验证 provider 热刷新。真实 rc2 `SessionProjectionRegistry + TokenMeter + Session`
   在初始、surface 追加和 compaction 后与 HUD 的 used/max/ratio 精确一致（满足 ±5% 口径），Cordis mount
-  另覆盖 projection 服务动态发现与卸载回退。本地 Prettier、严格类型、ESLint、构建及 33 项 M07 测试通过。
+  另覆盖 projection 服务动态发现与卸载回退。本地 Prettier、严格类型、ESLint、构建、HUD 包全量测试及
+  acceptance runner 定向测试通过。
 
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu DSH profile 核对 workspace/model/reasoning 切换、Web 常驻 HUD、CLI 首行与页面隐藏重连。
 - HUD 侧已能自产挂载实例的窗口 ledger，但当前 rc2 公共事件只稳定提供 DSH message ID，尚无独立
   provider adapter 把真实账单 request ID 与该身份可信关联；仍需补该适配器并用真实 Provider/账单
-  流水完成双端对账。该缺口存在前，M07-F004 保持 `doing`，不得将 mounted capture 单独视为通过。
+  流水完成双端对账。live runner 目前只能形成
+  `mounted-hud-diagnostic-with-operator-provider-export` 诊断证据：仍需 fresh deterministic build 或受信
+  artifact attestation，并把监听 PID/启动身份与端点绑定，随后再补 provider adapter 与真实流水。
+  这些本地可信边界未完成前，M07-F004 保持 `doing`，不得将 mounted capture 单独视为通过。
 - 真实长会话可继续抽查 M08 的会话定向采样与压缩质量。
 - 仍需在真实掉线长任务中核对 M03 巡检到 HUD/Taskboard 的端到端可见时延。

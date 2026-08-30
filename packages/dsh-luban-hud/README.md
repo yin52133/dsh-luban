@@ -91,6 +91,34 @@ luban-hud
 
 On POSIX shells, use `export` instead of `set`. `LUBAN_URL` defaults to the authentication sidecar at `http://127.0.0.1:42600`. Credentials are accepted only through the environment, never command-line arguments. Use `luban-hud --json` for the full envelope and source/failure diagnostics.
 
+Run a mounted rate reconciliation only after saving a real provider billing export outside the
+repository. The runner reads and validates that file first, takes its exact one- or five-minute UTC
+window, then requests the authenticated mounted ledger with a fresh challenge:
+
+```powershell
+$env:LUBAN_SESSION_COOKIE = 'luban_session=REDACTED'
+node scripts/acceptance/m07-rate-reconcile.mjs --live --confirm-real-provider-export --hud-url http://127.0.0.1:42600 --provider-export C:\evidence\provider-rate.json --output C:\evidence\m07-rate-evidence.json
+```
+
+`--hud-url` accepts only credential-free HTTP on a literal numeric IPv4/IPv6 loopback address and resolves only
+`/luban-hud/rate-capture`; it cannot be combined with `--hud-export`. Redirects, incomplete
+coverage, challenge/schema/window drift, credential-like response fields, requests over 10 seconds,
+and responses over 10 MiB fail closed. The Cookie is read only from `LUBAN_SESSION_COOKIE` and the
+URL, raw challenge, Cookie, and input paths are omitted from evidence. Source provenance binds the
+runner, reconciler, event collector, mounted ledger, HTTP route, Cordis mount, package/build inputs,
+and runtime-artifact helper to tracked HEAD. The capture also self-reports the `dist/index.js`
+relative JavaScript references read at mount time; the runner independently hashes the current local
+closure and requires an exact package version, path, byte-count, and SHA-256 match. This is diagnostic,
+not loaded-code attestation: ignored `dist` is not yet tied to a fresh HEAD build or trusted artifact,
+and the reported PID is not yet bound to the loopback listener and a trusted launch identity.
+
+The legacy two-file `--hud-export` flow remains operator-attested and ends with
+`E_RATE_TRUSTED_CAPTURE_REQUIRED`. A successful mounted-HUD comparison still ends in blocked
+`E_RATE_ENDPOINT_ATTESTATION_REQUIRED`: trusted build/listener-process attestation is still missing,
+and the provider JSON remains operator-supplied until a trusted adapter correlates provider request
+IDs with durable DSH message IDs. Neither path sets
+`acceptancePassed=true`, and injected test doubles always produce simulated evidence.
+
 ## Compatibility
 
 | Component                     | Published floor        | Tested baseline         |
