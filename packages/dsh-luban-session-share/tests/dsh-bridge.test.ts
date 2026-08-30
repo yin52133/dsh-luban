@@ -337,7 +337,7 @@ describe('rc2 DSH bridge', (): void => {
     await expect(stream.next()).resolves.toMatchObject({
       value: {
         event: 'session',
-        data: { type: 'output', text: 'hello token=[REDACTED]', at: 458 },
+        data: { type: 'output', text: 'hello token=secret-value', at: 458 },
       },
     })
 

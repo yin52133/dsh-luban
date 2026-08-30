@@ -1,5 +1,4 @@
 import type { SessionEvent, SessionId } from 'dsh-luban-core'
-import { redactSecrets } from 'dsh-luban-core'
 import type { SessionStreamEnvelope, SessionView } from './types.js'
 
 type SessionEventInput =
@@ -36,7 +35,7 @@ export class SessionEventLog {
         ? {
             type: 'output',
             seq: ++buffer.sequence,
-            text: redactSecrets(input.text),
+            text: input.text,
             at: input.at,
           }
         : { type: 'status', seq: ++buffer.sequence, status: input.status, at: input.at }

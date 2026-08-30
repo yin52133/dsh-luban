@@ -354,7 +354,7 @@ describe('SharedSessionRegistry', (): void => {
     })
   })
 
-  it('redacts event output and selects replay or baseline based on the bounded gap', async (): Promise<void> => {
+  it('preserves owner event output and selects replay or baseline based on the bounded gap', async (): Promise<void> => {
     const registry = new SharedSessionRegistry({
       localHost: host('ubuntu'),
       takeoverTimeoutMs: 1_000,
@@ -368,7 +368,7 @@ describe('SharedSessionRegistry', (): void => {
       status: 'idle',
     })
     const secret = registry.publishOutput(session('S-events'), 'token=super-secret')
-    expect(secret).toMatchObject({ type: 'output', text: 'token=[REDACTED]' })
+    expect(secret).toMatchObject({ type: 'output', text: 'token=super-secret' })
 
     const controller = new AbortController()
     const replay = registry
@@ -376,7 +376,7 @@ describe('SharedSessionRegistry', (): void => {
       [Symbol.asyncIterator]()
     await expect(replay.next()).resolves.toMatchObject({
       done: false,
-      value: { event: 'session', data: { text: 'token=[REDACTED]' } },
+      value: { event: 'session', data: { text: 'token=super-secret' } },
     })
     controller.abort()
     await replay.return?.()

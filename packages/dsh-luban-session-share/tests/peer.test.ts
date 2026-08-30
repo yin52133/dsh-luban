@@ -89,7 +89,7 @@ describe('HttpPeerNetwork', (): void => {
     expect(requests).toEqual(['https://ubuntu.example.test:42600/luban-auth/session'])
   })
 
-  it('parses peer SSE while redacting a second time at the trust boundary', async (): Promise<void> => {
+  it('parses peer SSE without rewriting owner-visible output', async (): Promise<void> => {
     const fetchStub: typeof fetch = (): Promise<Response> =>
       Promise.resolve(
         new Response(
@@ -108,7 +108,7 @@ describe('HttpPeerNetwork', (): void => {
       [Symbol.asyncIterator]()
     await expect(iterator.next()).resolves.toMatchObject({
       done: false,
-      value: { id: 4, event: 'session', data: { text: 'token=[REDACTED]' } },
+      value: { id: 4, event: 'session', data: { text: 'token=secret-value' } },
     })
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
   })

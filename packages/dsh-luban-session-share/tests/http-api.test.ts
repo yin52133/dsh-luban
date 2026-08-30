@@ -268,8 +268,7 @@ describe('SessionShareHttpApi', (): void => {
       const reader = stream.body.getReader()
       const baseline = new TextDecoder().decode((await reader.read()).value)
       expect(baseline).toContain('event: baseline')
-      expect(baseline).toContain('password=[REDACTED]')
-      expect(baseline).not.toContain('hunter2')
+      expect(baseline).toContain('password=hunter2')
       await reader.cancel()
 
       const replay = await fetch(`${base}/sessions/S-http/events`, {
@@ -282,7 +281,7 @@ describe('SessionShareHttpApi', (): void => {
       const replayReader = replay.body.getReader()
       const replayed = new TextDecoder().decode((await replayReader.read()).value)
       expect(replayed).toContain('event: session')
-      expect(replayed).toContain('password=[REDACTED]')
+      expect(replayed).toContain('password=hunter2')
       await replayReader.cancel()
 
       const registryStream = await fetch(`${base}/events`, {

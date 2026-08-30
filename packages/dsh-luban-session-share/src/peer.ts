@@ -1,13 +1,5 @@
 import type { Actor, SessionEvent, SessionId, SessionRole, TakeoverResult } from 'dsh-luban-core'
-import {
-  LubanError,
-  asAccountId,
-  asActorId,
-  asHostId,
-  asSessionId,
-  asTaskId,
-  redactSecrets,
-} from 'dsh-luban-core'
+import { LubanError, asAccountId, asActorId, asHostId, asSessionId, asTaskId } from 'dsh-luban-core'
 import type { PeerConfig } from './config.js'
 import type {
   PeerNetwork,
@@ -135,7 +127,7 @@ function decodeSessionEvent(value: unknown): SessionEvent {
   const seq = integer(row.seq, 'session event sequence')
   const at = integer(row.at, 'session event timestamp')
   if (row.type === 'output') {
-    return { type: 'output', seq, text: redactSecrets(string(row.text, 'session output')), at }
+    return { type: 'output', seq, text: string(row.text, 'session output'), at }
   }
   if (row.type === 'status') {
     return { type: 'status', seq, status: string(row.status, 'session status'), at }
