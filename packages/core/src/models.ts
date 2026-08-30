@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   Actor,
   ActorId,
   EpochMs,
@@ -32,6 +33,8 @@ export interface TaskClaim {
 }
 
 export interface Task {
+  /** Optional only while decoding ledgers written before M01-F008. */
+  readonly accountId?: AccountId
   readonly id: TaskId
   readonly title: string
   readonly description: string
@@ -52,6 +55,7 @@ export interface Task {
 }
 
 export interface UserRecord {
+  readonly id?: AccountId
   readonly username: string
   readonly passwordHash: string
   readonly role: 'admin' | 'operator' | 'observer'
@@ -62,6 +66,7 @@ export interface UserRecord {
 
 export interface SessionToken {
   readonly id: string
+  readonly accountId?: AccountId
   readonly user: string
   readonly issuedAt: EpochMs
   readonly expiresAt: EpochMs
@@ -69,6 +74,7 @@ export interface SessionToken {
 }
 
 export interface ManagedSession {
+  readonly accountId?: AccountId
   readonly id: string
   readonly host: HostId
   readonly kind: 'tmux' | 'service'
@@ -78,6 +84,7 @@ export interface ManagedSession {
 }
 
 export interface Checkpoint {
+  readonly accountId?: AccountId
   readonly taskId: TaskId
   readonly stepList: readonly string[]
   readonly currentStep: number
@@ -103,6 +110,7 @@ export interface PlanDecisionRecord {
 }
 
 export interface Plan {
+  readonly accountId?: AccountId
   readonly id: PlanId
   readonly taskId?: TaskId
   readonly sessionId?: SessionId
@@ -116,6 +124,7 @@ export interface Plan {
 export type SessionRole = 'owner' | 'operator' | 'observer'
 
 export interface SharedSession {
+  readonly accountId?: AccountId
   readonly id: SessionId
   readonly host: HostId
   readonly ownerTaskId?: TaskId
@@ -125,6 +134,7 @@ export interface SharedSession {
 }
 
 export interface IngestedImage {
+  readonly accountId?: AccountId
   readonly relPath: string
   readonly absPath: string
   readonly sha256: string
@@ -136,6 +146,7 @@ export interface IngestedImage {
 export type KnownOr<T> = T | 'unknown'
 
 export interface TelemetrySnapshot {
+  readonly accountId?: AccountId
   readonly context: {
     readonly used: KnownOr<number>
     readonly max: KnownOr<number>
@@ -194,6 +205,7 @@ export type CompactionSurfaceSnapshots =
     }
 
 export interface CompactionAuditRecord {
+  readonly accountId?: AccountId
   readonly sessionId: SessionId
   readonly at: EpochMs
   readonly strategyId: string
@@ -213,6 +225,7 @@ export interface ArtifactRef {
 }
 
 export interface BuildJob {
+  readonly accountId?: AccountId
   readonly id: string
   readonly templateId: string
   readonly params: Readonly<Record<string, string>>
@@ -233,6 +246,7 @@ export interface ResourceReport {
 export type ChannelKind = 'serial' | 'adb' | 'fastboot' | 'gdb' | 'ssh' | 'telnet' | 'tcp-serial'
 
 export interface ChannelEndpoint {
+  readonly accountId?: AccountId
   readonly kind: ChannelKind
   readonly id: string
   readonly label: string
@@ -240,6 +254,7 @@ export interface ChannelEndpoint {
 }
 
 export interface SnippetFile {
+  readonly accountId?: AccountId
   readonly path: string
   readonly content: string
   readonly timeFrom: EpochMs
@@ -248,6 +263,7 @@ export interface SnippetFile {
 }
 
 export interface BrowserTaskSpec {
+  readonly accountId?: AccountId
   readonly templateId?: string
   readonly goal: string
   readonly startUrl?: string
@@ -259,6 +275,7 @@ export interface BrowserTaskSpec {
 }
 
 export interface BrowserResult {
+  readonly accountId?: AccountId
   readonly runId: string
   readonly status: 'ok' | 'failed' | 'timeout'
   readonly screenshots: readonly string[]

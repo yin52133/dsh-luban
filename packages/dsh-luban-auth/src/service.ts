@@ -1,14 +1,18 @@
 import type { IncomingMessage } from 'node:http'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {
+  AccountId,
+  AccountSessionRegistry,
   AuthEvent,
   AuthMiddleware,
   AuthMiddlewareDecision,
   AuthMiddlewareRequest,
   AuthService,
   IssuedSession,
+  SessionId,
   VerifyResult,
 } from 'dsh-luban-core'
+import { asAccountId, asActorId } from 'dsh-luban-core'
 import type { AuthManager } from './auth-manager.js'
 import {
   AUTH_COOKIE_NAME,
@@ -28,10 +32,17 @@ declare module '@deepseek-ai/cordis' {
 /** Cordis L2 service shared by the sidecar and other Luban plugins. */
 export class LubanAuthService extends Service implements AuthService {
   private readonly manager: AuthManager
+  public readonly accountSessions: AccountSessionRegistry
 
   public constructor(ctx: Context, manager: AuthManager) {
     super(ctx, 'lubanAuth')
     this.manager = manager
+    this.accountSessions = Object.freeze({
+      bind: (accountId: AccountId, sessionId: SessionId): Promise<void> =>
+        this.manager.bindDshSession(accountId, sessionId),
+      ownerOf: (sessionId: SessionId): ReturnType<AuthManager['dshSessionOwner']> =>
+        this.manager.dshSessionOwner(sessionId),
+    })
   }
 
   public verify(user: string, password: string, sourceIp: string): Promise<VerifyResult> {
@@ -65,7 +76,17 @@ export class LubanAuthService extends Service implements AuthService {
       const token = readCookie(request.cookie, AUTH_COOKIE_NAME)
       const authenticated = await this.manager.authenticateToken(token)
       if (authenticated !== null) {
-        return { allowed: true, status: 200, user: authenticated.session.user }
+        const { session } = authenticated
+        return {
+          allowed: true,
+          status: 200,
+          user: session.user,
+          account: {
+            accountId: session.accountId,
+            username: session.user,
+            role: session.role,
+          },
+        }
       }
       if (
         (request.method === 'GET' || request.method === 'HEAD') &&
@@ -92,7 +113,8 @@ export class LubanAuthService extends Service implements AuthService {
       ok: true,
       actor: {
         kind: 'user',
-        id: session.user,
+        id: asActorId(session.user),
+        accountId: asAccountId(session.user),
         displayName: session.user,
         username: session.user,
         role: session.role,

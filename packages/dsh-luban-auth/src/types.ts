@@ -1,4 +1,4 @@
-import type { Clock } from 'dsh-luban-core'
+import type { AccountId, ActorId, Clock } from 'dsh-luban-core'
 
 export const AUTH_COOKIE_NAME = 'luban_session'
 export const CSRF_COOKIE_NAME = 'luban_csrf'
@@ -31,11 +31,14 @@ export interface AuthState {
   readonly version: 1
   readonly users: Readonly<Record<string, AccountRecord>>
   readonly sessions: Readonly<Record<string, PersistentSession>>
+  /** DSH context/session ownership introduced by M01-F008. */
+  readonly sessionOwners: Readonly<Record<string, string>>
 }
 
 export interface AuthenticatedActor {
   readonly kind: 'user'
-  readonly id: string
+  readonly id: ActorId
+  readonly accountId: AccountId
   readonly displayName: string
   readonly username: string
   readonly role: AuthRole
@@ -43,6 +46,7 @@ export interface AuthenticatedActor {
 
 export interface AuthenticatedSession {
   readonly id: string
+  readonly accountId: AccountId
   readonly user: string
   readonly role: AuthRole
   readonly issuedAt: number

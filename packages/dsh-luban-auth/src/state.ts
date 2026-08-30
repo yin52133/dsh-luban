@@ -7,6 +7,7 @@ export const initialAuthState = (): AuthState => ({
   version: 1,
   users: {},
   sessions: {},
+  sessionOwners: {},
 })
 
 export const authStateCodec: JsonCodec<AuthState> = {
@@ -15,8 +16,11 @@ export const authStateCodec: JsonCodec<AuthState> = {
     if (root.version !== 1) throw new TypeError('luban-auth: unsupported auth state version')
     const usersValue = expectRecord(root.users, 'auth users')
     const sessionsValue = expectRecord(root.sessions, 'auth sessions')
+    const ownersValue =
+      root.sessionOwners === undefined ? {} : expectRecord(root.sessionOwners, 'session owners')
     const users: Record<string, AccountRecord> = {}
     const sessions: Record<string, PersistentSession> = {}
+    const sessionOwners: Record<string, string> = {}
 
     for (const [key, user] of Object.entries(usersValue)) {
       const record = decodeAccount(user)
@@ -29,7 +33,11 @@ export const authStateCodec: JsonCodec<AuthState> = {
       if (key !== record.id) throw new TypeError('luban-auth: session key does not match id')
       sessions[key] = record
     }
-    return { version: 1, users, sessions }
+    for (const [sessionId, account] of Object.entries(ownersValue)) {
+      if (sessionId === '') throw new TypeError('luban-auth: owned session id must not be empty')
+      sessionOwners[sessionId] = expectString(account, `sessionOwners.${sessionId}`)
+    }
+    return { version: 1, users, sessions, sessionOwners }
   },
   encode(value: AuthState): unknown {
     return value

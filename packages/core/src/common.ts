@@ -6,12 +6,21 @@ export type SessionId = Brand<string, 'SessionId'>
 export type PlanId = Brand<string, 'PlanId'>
 export type HostId = Brand<string, 'HostId'>
 export type ActorId = Brand<string, 'ActorId'>
+export type AccountId = Brand<string, 'AccountId'>
 export type PackageName = Brand<string, 'PackageName'>
 
 export interface Actor {
   readonly kind: 'user' | 'agent'
   readonly id: ActorId
+  /** Account that owns this actor's user-visible data and DSH context. */
+  readonly accountId?: AccountId
   readonly displayName?: string
+}
+
+export interface AccountContext {
+  readonly accountId: AccountId
+  readonly username: string
+  readonly role: 'admin' | 'operator' | 'observer'
 }
 
 export type Unsubscribe = () => void
@@ -44,6 +53,10 @@ export function asHostId(value: string): HostId {
 
 export function asActorId(value: string): ActorId {
   return value as ActorId
+}
+
+export function asAccountId(value: string): AccountId {
+  return value as AccountId
 }
 
 export function asPackageName(value: string): PackageName {

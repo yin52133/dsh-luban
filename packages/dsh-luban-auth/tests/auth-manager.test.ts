@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { asAccountId, asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AuthManager } from '../src/auth-manager.js'
 import { createManagerFixture, type ManagerFixture, MemoryAudit, MutableClock } from './helpers.js'
@@ -98,6 +99,39 @@ describe('AuthManager', () => {
       manager.provisionUser('forged', 'observer', 'observer pass', 'observer'),
     ).rejects.toThrow(/administrator session/u)
     expect(fixture.hasher.hashCount).toBe(hashesBeforeDeniedRequest)
+  })
+
+  it('persists DSH session ownership and rejects cross-account rebinding', async () => {
+    fixture = await createManagerFixture()
+    const { manager } = fixture
+    await manager.createInitialAdmin('admin', 'correct horse')
+    const admin = await manager.issueBrowserSession('admin', '127.0.0.1')
+    await manager.provisionUser(admin.session.id, 'operator', 'operator pass', 'operator')
+
+    const sessionId = asSessionId('shared-context')
+    await manager.bindDshSession(asAccountId('admin'), sessionId)
+    await manager.bindDshSession(asAccountId('admin'), sessionId)
+    expect(await manager.dshSessionOwner(sessionId)).toBe('admin')
+    await expect(manager.bindDshSession(asAccountId('operator'), sessionId)).rejects.toMatchObject({
+      code: 'E_ACCOUNT_SCOPE_MISMATCH',
+    })
+
+    const restarted = new AuthManager({
+      filePath: fixture.filePath,
+      audit: new MemoryAudit(),
+      clock: fixture.clock,
+      sessionTtlMs: 60_000,
+      maxFailures: 3,
+      lockoutMs: 30_000,
+      loginRateLimit: 10,
+      passwordHasher: fixture.hasher,
+    })
+    try {
+      await restarted.initialize()
+      expect(await restarted.dshSessionOwner(sessionId)).toBe('admin')
+    } finally {
+      await restarted.close()
+    }
   })
 })
 

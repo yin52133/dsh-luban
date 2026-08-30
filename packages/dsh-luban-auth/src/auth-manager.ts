@@ -2,8 +2,12 @@ import { createHash, randomBytes as systemRandomBytes, timingSafeEqual } from 'n
 import { argon2id, hash as argonHash, verify as argonVerify } from 'argon2'
 import {
   AtomicJsonStore,
+  LubanError,
+  asAccountId,
   type AuthEvent,
+  type AccountId,
   type IssuedSession,
+  type SessionId,
   type VerifyResult,
 } from 'dsh-luban-core'
 import { authStateCodec, initialAuthState } from './state.js'
@@ -277,6 +281,31 @@ export class AuthManager {
     return { session: toAuthenticatedSession(session), csrfHash: session.csrfHash }
   }
 
+  /** Persist a DSH session owner. Existing ownership can only be reaffirmed. */
+  public async bindDshSession(accountId: AccountId, sessionId: SessionId): Promise<void> {
+    const account = normalizeUsername(accountId)
+    const contextSessionId = normalizeContextSessionId(sessionId)
+    await this.#store.update((state): AuthState => {
+      if (state.users[account] === undefined) {
+        throw new LubanError('E_AUTH_REQUIRED', 'The account no longer exists')
+      }
+      const current = state.sessionOwners[contextSessionId]
+      if (current === account) return state
+      if (current !== undefined) {
+        throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'The DSH session belongs to another account')
+      }
+      return {
+        ...state,
+        sessionOwners: { ...state.sessionOwners, [contextSessionId]: account },
+      }
+    })
+  }
+
+  public async dshSessionOwner(sessionId: SessionId): Promise<AccountId | null> {
+    const owner = (await this.#store.read()).sessionOwners[normalizeContextSessionId(sessionId)]
+    return owner === undefined ? null : asAccountId(owner)
+  }
+
   public verifyCsrf(expectedHash: string, token: string | undefined): boolean {
     return (
       token !== undefined &&
@@ -401,12 +430,21 @@ export class AuthManager {
 function toAuthenticatedSession(session: PersistentSession): AuthenticatedSession {
   return {
     id: session.id,
+    accountId: asAccountId(session.user),
     user: session.user,
     role: session.role,
     issuedAt: session.issuedAt,
     expiresAt: session.expiresAt,
     sourceIp: session.sourceIp,
   }
+}
+
+function normalizeContextSessionId(value: SessionId): string {
+  const normalized = value.trim()
+  if (normalized === '' || normalized.length > 256) {
+    throw new TypeError('luban-auth: DSH session id must contain 1-256 characters')
+  }
+  return normalized
 }
 
 function normalizeUsername(value: string): string {

@@ -1,4 +1,13 @@
-import type { Actor, HostId, PlanId, SessionId, TaskId, Unsubscribe } from './common.js'
+import type {
+  AccountContext,
+  AccountId,
+  Actor,
+  HostId,
+  PlanId,
+  SessionId,
+  TaskId,
+  Unsubscribe,
+} from './common.js'
 import type {
   ArtifactRef,
   BrowserResult,
@@ -33,6 +42,7 @@ export interface VerifyResult {
 
 export interface IssuedSession {
   readonly id: string
+  readonly accountId?: AccountId
   readonly user: string
   readonly issuedAt: number
   readonly expiresAt: number
@@ -57,9 +67,16 @@ export interface AuthMiddlewareDecision {
   readonly status: 200 | 302 | 401 | 403 | 429
   readonly redirectTo?: string
   readonly user?: string
+  readonly account?: AccountContext
 }
 
 export type AuthMiddleware = (request: AuthMiddlewareRequest) => Promise<AuthMiddlewareDecision>
+
+export interface AccountSessionRegistry {
+  /** Bind an unowned DSH session to an account; rebinding to another account is rejected. */
+  bind(accountId: AccountId, sessionId: SessionId): Promise<void>
+  ownerOf(sessionId: SessionId): Promise<AccountId | null>
+}
 
 export interface AuthService {
   verify(user: string, password: string, sourceIp: string): Promise<VerifyResult>
@@ -68,9 +85,12 @@ export interface AuthService {
   revokeAllFor(user: string): Promise<void>
   middleware(): AuthMiddleware
   onChange(listener: (event: AuthEvent) => void): Unsubscribe
+  readonly accountSessions: AccountSessionRegistry
 }
 
 export interface TaskCreateInput {
+  /** Set by the authenticated service boundary, never by the request body. */
+  readonly accountId?: AccountId
   readonly title: string
   readonly description?: string
   readonly status?: 'backlog' | 'todo'
@@ -91,6 +111,7 @@ export interface TaskPatch {
 }
 
 export interface TaskQuery {
+  readonly accountId?: AccountId
   readonly statuses?: readonly TaskStatus[]
   readonly hostScope?: 'win' | 'ubuntu' | 'any'
   readonly workspace?: string

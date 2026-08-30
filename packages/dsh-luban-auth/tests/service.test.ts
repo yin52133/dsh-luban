@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http'
 import { Context } from '@deepseek-ai/cordis'
+import { asAccountId, asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { LubanAuthService } from '../src/service.js'
 import { createManagerFixture, type ManagerFixture } from './helpers.js'
@@ -33,8 +34,8 @@ describe('LubanAuthService', () => {
     })
     expect(await service.authenticateRequest(requestWithCookie(cookie))).toMatchObject({
       ok: true,
-      actor: { username: 'admin', role: 'admin' },
-      session: { id: browserSession.session.id },
+      actor: { accountId: 'admin', username: 'admin', role: 'admin' },
+      session: { accountId: 'admin', id: browserSession.session.id },
     })
 
     const middleware = service.middleware()
@@ -82,7 +83,16 @@ describe('LubanAuthService', () => {
         cookie,
         sourceIp: '127.0.0.1',
       }),
-    ).resolves.toEqual({ allowed: true, status: 200, user: 'admin' })
+    ).resolves.toEqual({
+      allowed: true,
+      status: 200,
+      user: 'admin',
+      account: { accountId: 'admin', username: 'admin', role: 'admin' },
+    })
+
+    const dshSessionId = asSessionId('dsh-session-1')
+    await service.accountSessions.bind(asAccountId('admin'), dshSessionId)
+    expect(await service.accountSessions.ownerOf(dshSessionId)).toBe('admin')
 
     const events: string[] = []
     const unsubscribe = service.onChange((event): void => {

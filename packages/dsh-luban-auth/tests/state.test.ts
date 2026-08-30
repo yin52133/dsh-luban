@@ -29,8 +29,8 @@ const validState = {
 } as const
 
 describe('auth state codec', () => {
-  it('decodes valid locked and unlocked account forms', () => {
-    expect(authStateCodec.decode(validState)).toEqual(validState)
+  it('decodes valid locked and unlocked account forms and migrates ownership state', () => {
+    expect(authStateCodec.decode(validState)).toEqual({ ...validState, sessionOwners: {} })
     const unlocked = structuredClone(validState) as Record<string, unknown>
     const users = unlocked.users as Record<string, Record<string, unknown>>
     delete users.admin?.lockedUntil
@@ -57,6 +57,9 @@ describe('auth state codec', () => {
       { ...validState, users: { admin: { ...validState.users.admin, failedCount: -1 } } },
     ],
     ['session key', { ...validState, sessions: { other: validState.sessions.abc } }],
+    ['session owners type', { ...validState, sessionOwners: [] }],
+    ['empty owned session id', { ...validState, sessionOwners: { '': 'admin' } }],
+    ['empty account owner', { ...validState, sessionOwners: { context: '' } }],
     [
       'session hash',
       { ...validState, sessions: { abc: { ...validState.sessions.abc, tokenHash: 'bad' } } },
