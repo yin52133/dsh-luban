@@ -9,6 +9,8 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：README 规范/版本与 tag/npm 注册/敏感红线/应急 |
 | v0.2 | 2026-08-30 | Codex | 要求 tag 发布 job 在制品生成前独立复验密钥门禁 |
 | v0.3 | 2026-08-30 | Codex | 明确包可按公开 API 需求提高 DSH 最低版本       |
+| v0.4 | 2026-08-30 | Codex | 固化多包发布远端恢复账本、受信 provenance 与三方核验 |
+| v0.5 | 2026-08-30 | Codex | 将发布恢复规范同步为 fixed-sequence entry、逐序号 immutable commit、无 mutable remote head 与逐包 attempt provenance |
 
 ## 1. README 规范
 
@@ -44,6 +46,27 @@
 | tag | `v<semver>`（如 `v0.2.0`），一个 tag 一次发布；tag 后 CI 自动走流水线 |
 | CHANGELOG | 按里程碑/模块分组；由发布脚本从 commit（`feat/fix/docs(<模块>):`）生成草稿，人工修订 |
 | GitHub ↔ npm 同步 | 同一 tag 触发：GitHub Release（changelog+产物）与 npm publish 同内容；发布后核对三者一致（M12-F003 口径） |
+
+多包 npm publish 不是事务。账本初始文件为 sequence 0，事件使用固定序号文件名；每个 entry 都必须
+配有同序号、create-once 的 immutable commit，commit 绑定 entry 名称/大小/SHA-256、前一 entry
+SHA-256 与前一 commit SHA-256。远端 draft Release 只保存这些不可变 entry/commit assets，不保存
+mutable head，也不得使用 clobber；本地 canonical head 仅用于修复缺失/落后一位的本地恢复窗口。
+同名 asset 逐字节一致视为幂等重试，异字节视为 fork 并 fail closed。
+
+draft 恢复只接受完整连续前缀，或恰好一个可证明的缺 commit 尾部 entry；任意 registry 读取或 npm
+副作用前，prefix barrier 必须补齐该 commit 并逐项确认远端前缀。两个 orphan、中间 gap、fork 或非法
+状态一律停止；public Release 不允许任何 orphan/gap/fork、未知资产或非 `published` 账本。每次
+`npm publish` 前还必须先持久化唯一 attempt 的 event/commit，结果不明时不得继续后续包，也不得以
+盲目重发、unpublish 或覆盖伪造“原子发布”。
+
+恢复只读固定的官方 npm registry。matching 要求 registry tarball 与本地制品逐字节一致，并用 npm
+随附的官方 Sigstore verifier 验证 registry 返回的同一 bundle；SLSA subject PURL/tarball SHA-512、
+repository 名称及 repository/owner IDs、tag/workflow ref、workflow/commit SHA、`push` event、
+GitHub-hosted runner、原 publish `runId`/`runAttempt` 必须全部精确匹配。每个包保留自己的原 publish
+attempt，post-verify 或后续 workflow rerun 不得改绑当前 attempt。明确 absent 才可 resume；pending
+包不得认领已有版本，conflict/unknown 不得继续。发布完成后必须核验 remote tag commit、非 draft/
+非 prerelease 的精确 entry/commit 资产集以及 npm tarball/provenance；全部通过后方可在本地追加
+`release-verified`，该审计尾与 local head 仅归档到 Actions artifact，不进入公开 Release。
 
 ## 3. npm 包注册规范
 

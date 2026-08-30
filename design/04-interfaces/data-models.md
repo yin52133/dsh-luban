@@ -8,6 +8,8 @@
 | v0.2 | 2026-08-30 | Codex | 增加 claim lease 身份及压缩前后 surface 快照兼容类型 |
 | v0.3 | 2026-08-30 | Codex | 明确 checklist 状态类型、需求汇总规则与里程碑派生状态 |
 | v0.4 | 2026-08-30 | Codex | 增加夜间调度 claim 的可信执行所有权标记 |
+| v0.5 | 2026-08-30 | Codex | 增加 M12 create-once 发布账本与摘要链事件模型 |
+| v0.6 | 2026-08-30 | Codex | 将 M12 模型细化为 fixed-sequence entry、逐序号 immutable commit、本地 canonical head 与逐包 publish attempt authority |
 
 > 本文档定义跨模块公共数据结构与 `checklist.json` 的 schema。模块专属字段在各模块文档「数据模型」章节补充。通用字段约定（version 乐观锁、epoch ms、Actor、LubanError）见 [api-overview.md](api-overview.md) §2。
 
@@ -222,7 +224,95 @@ export interface ReleaseRecord {
   securityScan: { gitleaks: 'clean' | 'findings'; filesAudit: 'pass' | 'fail' };
   at: number;
 }
+
+export interface PublishLedger {
+  schemaVersion: 1;
+  ledgerId: string;
+  createdAt: string;                 // ISO-8601 UTC
+  release: {
+    version: string; tag: string; manifestSha256: string;
+    authority: PublishReleaseAuthority;
+    packages: Array<{ name: PackageName; version: string; file: string; sha256: string }>;
+  };
+}
+
+export interface PublishReleaseAuthority {
+  repository: string;                // owner/name
+  repositoryId: string;
+  repositoryOwnerId: string;
+  workflowPath: '.github/workflows/release.yml';
+  ref: string;                       // refs/tags/v<semver>
+  commitSha: string;
+}
+
+export interface PublishAttemptAuthority {
+  eventName: 'push';
+  runId: string;
+  runAttempt: string;
+  runnerEnvironment: 'github-hosted';
+  workflowRef: string;               // owner/name/.github/workflows/release.yml@refs/tags/v<semver>
+  workflowSha: string;
+}
+
+export interface PublishLedgerEventBase {
+  schemaVersion: 1;
+  ledgerId: string;
+  sequence: number;                  // fixed file name: 00000001.json, ...
+  previousDigest: string;
+  at: string;                        // ISO-8601 UTC
+}
+
+export type PublishLedgerEvent = PublishLedgerEventBase & (
+  | {
+      type: 'attempt-started'; package: PackageName; attemptId: string;
+      authority: PublishAttemptAuthority;
+    }
+  | { type: 'publish-confirmed'; package: PackageName; attemptId: string }
+  | { type: 'reconciled-absent'; package: PackageName; attemptId: string }
+  | { type: 'reconciled-matching'; package: PackageName; attemptId: string }
+  | {
+      type: 'release-verified'; repository: string; expectedCommitSha: string;
+      githubReleaseId: number;
+    }
+);
+
+export interface PublishLedgerCommit {
+  schemaVersion: 1;
+  ledgerId: string;
+  sequence: number;                  // publish-ledger-commit-00000000.json, ...
+  entryName: string;
+  entrySize: number;
+  entryDigest: string;
+  previousDigest: string | null;
+  previousCommitDigest: string | null;
+}
+
+export interface LocalPublishLedgerHead {
+  schemaVersion: 1;
+  ledgerId: string;
+  sequence: number;
+  digest: string;                    // local canonical entry digest only; never a Release asset
+}
 ```
+
+`PublishLedger` 初始文件是 sequence 0；事件使用 fixed-sequence 文件名，而不是把摘要编码进文件名。
+每个初始文件/事件 entry 都必须有同序号 `PublishLedgerCommit`：commit 绑定 entry 名称、大小和 SHA-256，
+并通过 `previousDigest`、`previousCommitDigest` 同时链接前一 entry 与前一 commit。entry/commit 的最终名
+都由完整临时文件经 `fsync` 和原子 no-replace link 安装，并以无 clobber 的 create-once asset 上传到
+同 tag draft Release。同名逐字节一致是幂等重试；异字节是 fork，必须 fail closed。
+
+远端不保存 mutable head；`LocalPublishLedgerHead` 仅用于本地 canonical 恢复。draft 恢复只允许完整
+连续 entry/commit 前缀，或恰好一个缺 commit 的尾部 entry；prefix barrier 必须在任何 registry 读取
+或 npm 副作用前补齐该 commit 并逐项确认完整远端前缀。public Release 禁止 orphan、gap、fork、未知
+资产和非 `published` 状态。读取方还必须拒绝非 core-first 前缀及非法状态迁移，不能把 `npm publish`
+子进程退出不明直接解释为成功。
+
+`attempt-started.authority` 在包被 `publish-confirmed` 或 `reconciled-matching` 后成为该包的持久
+`publishAuthority`。后续 workflow attempt 必须使用包自身的原 authority 校验 registry 返回的同一
+Sigstore bundle：repository/owner IDs、原 run ID/attempt、workflow ref/SHA、tag ref、commit SHA、
+SLSA subject PURL 与 tarball SHA-512 必须全部匹配。pending 包不得依据 registry 现状认领已有版本。
+`release-verified` 绑定 immutable release repository/SHA 与实际 GitHub Release ID，但它及对应本地
+commit/head 只进入 Actions artifact，不作为已公开 Release 的远端 checkpoint。
 
 <a id="checklist-json-v1"></a>
 ## 13. checklist.json Schema（checklist-json-v1）
