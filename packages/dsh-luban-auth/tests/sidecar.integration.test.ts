@@ -18,6 +18,7 @@ interface IntegrationHarness {
   readonly fixture: ManagerFixture
   readonly upstream: Server
   readonly sidecar: AuthSidecar
+  readonly upstreamState: UpstreamTestState
   readonly baseUrl: string
   readonly publicPort: number
   close(): Promise<void>
@@ -27,6 +28,11 @@ interface TestRpcResponse {
   readonly type: 'server-response'
   readonly rpcId: string
   readonly result: Readonly<Record<string, unknown>>
+}
+
+interface UpstreamTestState {
+  readonly racedHostStreams: Set<ServerResponse>
+  readonly racedHostWaiters: Set<() => void>
 }
 
 const upstreamUpgradeSockets = new WeakMap<Server, Set<Duplex>>()
@@ -631,6 +637,92 @@ describe('AuthSidecar integration', () => {
     expect(foreignChildHistory.result).toMatchObject({ ok: false })
   })
 
+  it('holds create events until owner binding and releases them on success or failure', async () => {
+    harness = await createHarness()
+    const aliceCookie = await loginUser(harness.baseUrl, 'admin', 'correct horse')
+    const provision = await fetch(`${harness.baseUrl}/luban-auth/users`, {
+      method: 'POST',
+      headers: {
+        cookie: aliceCookie,
+        'content-type': 'application/json',
+        origin: harness.baseUrl,
+      },
+      body: JSON.stringify({ user: 'bob', password: 'bob password', role: 'operator' }),
+    })
+    expect(provision.status).toBe(201)
+    const bobCookie = await loginUser(harness.baseUrl, 'bob', 'bob password')
+
+    const aliceHostRequest = fetch(`${harness.baseUrl}/api/events.host?race=create`, {
+      headers: { cookie: aliceCookie },
+    })
+    const bobHostRequest = fetch(`${harness.baseUrl}/api/events.host?race=create`, {
+      headers: { cookie: bobCookie },
+    })
+    await waitForRacedHostStreams(harness.upstreamState, 2)
+    const created = await dshRpc(harness.baseUrl, aliceCookie, 'session.create', {
+      race: 'success',
+    })
+    expect(created.result).toMatchObject({
+      ok: true,
+      value: { sessionId: 'raced-session' },
+    })
+    const [aliceHost, bobHost] = await Promise.all([aliceHostRequest, bobHostRequest])
+    const [aliceEvents, bobEvents] = await Promise.all([aliceHost.text(), bobHost.text()])
+    expect(aliceEvents).toContain('raced-session')
+    expect(aliceEvents.indexOf('host/session-added')).toBeGreaterThanOrEqual(0)
+    expect(aliceEvents.indexOf('host/workspace-changed')).toBeGreaterThan(
+      aliceEvents.indexOf('host/session-added'),
+    )
+    expect(bobEvents).not.toContain('raced-session')
+    expect(await harness.fixture.manager.dshSessionOwner(asSessionId('raced-session'))).toBe(
+      asAccountId('admin'),
+    )
+
+    const aliceForkHostRequest = fetch(`${harness.baseUrl}/api/events.host?race=create`, {
+      headers: { cookie: aliceCookie },
+    })
+    const bobForkHostRequest = fetch(`${harness.baseUrl}/api/events.host?race=create`, {
+      headers: { cookie: bobCookie },
+    })
+    await waitForRacedHostStreams(harness.upstreamState, 2)
+    const forked = await dshRpc(harness.baseUrl, aliceCookie, 'session.fork', {
+      sessionId: 'raced-session',
+      race: 'success',
+    })
+    expect(forked.result).toMatchObject({
+      ok: true,
+      value: { sessionId: 'raced-fork-session' },
+    })
+    const [aliceForkHost, bobForkHost] = await Promise.all([
+      aliceForkHostRequest,
+      bobForkHostRequest,
+    ])
+    const [aliceForkEvents, bobForkEvents] = await Promise.all([
+      aliceForkHost.text(),
+      bobForkHost.text(),
+    ])
+    expect(aliceForkEvents).toContain('raced-fork-session')
+    expect(aliceForkEvents).toContain('raced-session')
+    expect(bobForkEvents).not.toContain('raced-fork-session')
+    expect(await harness.fixture.manager.dshSessionOwner(asSessionId('raced-fork-session'))).toBe(
+      asAccountId('admin'),
+    )
+
+    const failedHostRequest = fetch(`${harness.baseUrl}/api/events.host?race=create`, {
+      headers: { cookie: aliceCookie },
+    })
+    await waitForRacedHostStreams(harness.upstreamState, 1)
+    const failed = await dshRpc(harness.baseUrl, aliceCookie, 'session.create', {
+      race: 'failure',
+    })
+    expect(failed.result).toMatchObject({ ok: false, error: { code: 'invalid-request' } })
+    const failedHost = await failedHostRequest
+    expect(await failedHost.text()).not.toContain('failed-race-session')
+    expect(
+      await harness.fixture.manager.dshSessionOwner(asSessionId('failed-race-session')),
+    ).toBeNull()
+  })
+
   it('protects and tunnels WebSocket upgrades and closes upgraded resources', async () => {
     harness = await createHarness()
     const unauthorized = await openUpgrade(harness.publicPort)
@@ -701,7 +793,7 @@ async function createHarness(
 ): Promise<IntegrationHarness> {
   const fixture = await createManagerFixture()
   await fixture.manager.createInitialAdmin('admin', 'correct horse')
-  const upstream = createUpstreamServer()
+  const { server: upstream, state: upstreamState } = createUpstreamServer()
   await listen(upstream)
   const address = upstream.address()
   if (address === null || typeof address === 'string') throw new Error('test upstream has no port')
@@ -727,6 +819,7 @@ async function createHarness(
   return {
     fixture,
     upstream,
+    upstreamState,
     sidecar,
     publicPort,
     baseUrl: `http://127.0.0.1:${String(publicPort)}`,
@@ -740,10 +833,11 @@ async function createHarness(
   }
 }
 
-function createUpstreamServer(): Server {
+function createUpstreamServer(): { readonly server: Server; readonly state: UpstreamTestState } {
   const upgradeSockets = new Set<Duplex>()
+  const state: UpstreamTestState = { racedHostStreams: new Set(), racedHostWaiters: new Set() }
   const server = createServer((request, response): void => {
-    handleUpstreamRequest(request, response).catch((error: unknown): void => {
+    handleUpstreamRequest(request, response, state).catch((error: unknown): void => {
       response.destroy(error instanceof Error ? error : new Error(String(error)))
     })
   })
@@ -760,12 +854,13 @@ function createUpstreamServer(): Server {
     })
   })
   upstreamUpgradeSockets.set(server, upgradeSockets)
-  return server
+  return { server, state }
 }
 
 async function handleUpstreamRequest(
   request: IncomingMessage,
   response: ServerResponse,
+  state: UpstreamTestState,
 ): Promise<void> {
   const target = new URL(request.url ?? '/', 'http://upstream.test')
   if (target.pathname === '/assets/app.js') {
@@ -786,6 +881,21 @@ async function handleUpstreamRequest(
     timer.unref()
     request.once('close', (): void => {
       clearTimeout(timer)
+    })
+    return
+  }
+  if (target.pathname === '/api/events.host' && target.searchParams.get('race') === 'create') {
+    response.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+    })
+    response.flushHeaders()
+    state.racedHostStreams.add(response)
+    const waiters = [...state.racedHostWaiters]
+    state.racedHostWaiters.clear()
+    for (const wake of waiters) wake()
+    response.once('close', (): void => {
+      state.racedHostStreams.delete(response)
     })
     return
   }
@@ -860,32 +970,63 @@ async function handleUpstreamRequest(
         ...(target.pathname === '/api/session.search' ? { hasMore: false } : {}),
       }
     } else if (target.pathname === '/api/session.create') {
-      value = {
-        sessionId: typeof payload.sessionId === 'string' ? payload.sessionId : 'created-session',
+      if (payload.race === 'success' || payload.race === 'failure') {
+        const sessionId = payload.race === 'success' ? 'raced-session' : 'failed-race-session'
+        publishRacedHostEvents(state, sessionId)
+        await delay(25)
+        if (payload.race === 'failure') {
+          response.writeHead(200, { 'content-type': 'application/json' })
+          response.end(
+            JSON.stringify({
+              type: 'server-response',
+              rpcId,
+              result: {
+                ok: false,
+                error: { code: 'invalid-request', message: 'Create failed', details: {} },
+              },
+            }),
+          )
+          return
+        }
+        value = { sessionId }
+      } else {
+        value = {
+          sessionId: typeof payload.sessionId === 'string' ? payload.sessionId : 'created-session',
+        }
       }
     } else if (target.pathname === '/api/session.fork') {
-      if (payload.atSeq === 999) {
-        response.writeHead(200, { 'content-type': 'application/json' })
-        response.end(
-          JSON.stringify({
-            type: 'server-response',
-            rpcId,
-            result: {
-              ok: false,
-              error: {
-                code: 'workspace-attach-failed',
-                message: 'forked session was published before workspace attachment failed',
-                details: {
-                  sessionId: 'partial-fork-session',
-                  workspaceId: 'workspace',
+      if (payload.race === 'success') {
+        publishRacedHostEvents(
+          state,
+          'raced-fork-session',
+          typeof payload.sessionId === 'string' ? payload.sessionId : undefined,
+        )
+        await delay(25)
+        value = { sessionId: 'raced-fork-session' }
+      } else {
+        if (payload.atSeq === 999) {
+          response.writeHead(200, { 'content-type': 'application/json' })
+          response.end(
+            JSON.stringify({
+              type: 'server-response',
+              rpcId,
+              result: {
+                ok: false,
+                error: {
+                  code: 'workspace-attach-failed',
+                  message: 'forked session was published before workspace attachment failed',
+                  details: {
+                    sessionId: 'partial-fork-session',
+                    workspaceId: 'workspace',
+                  },
                 },
               },
-            },
-          }),
-        )
-        return
+            }),
+          )
+          return
+        }
+        value = { sessionId: 'forked-session' }
       }
-      value = { sessionId: 'forked-session' }
     } else if (target.pathname === '/api/workspace.list') {
       value = {
         workspaces: [
@@ -1086,6 +1227,54 @@ function sessionIdsFromRpc(response: TestRpcResponse): string[] {
 
 function dshSessionUri(sessionId: string): string {
   return `dsh-session:${Buffer.from(JSON.stringify(sessionId), 'utf8').toString('base64url')}`
+}
+
+function publishRacedHostEvents(
+  state: UpstreamTestState,
+  sessionId: string,
+  parentSessionId?: string,
+): void {
+  const payloads = [
+    {
+      type: 'host/session-added',
+      sessionId,
+      running: false,
+      ...(parentSessionId === undefined ? {} : { parentSessionId }),
+    },
+    {
+      type: 'host/workspace-changed',
+      workspace: { workspaceId: 'race-workspace', sessionIds: [sessionId] },
+    },
+  ]
+  for (const response of [...state.racedHostStreams]) {
+    state.racedHostStreams.delete(response)
+    for (const [index, payload] of payloads.entries()) {
+      response.write(
+        `data: ${JSON.stringify({
+          type: 'server-request',
+          rpcId: `race-event-${String(index)}`,
+          method: payload.type,
+          payload,
+        })}\n\n`,
+      )
+    }
+    response.end()
+  }
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve): void => {
+    const timer = setTimeout(resolve, milliseconds)
+    timer.unref()
+  })
+}
+
+async function waitForRacedHostStreams(state: UpstreamTestState, expected: number): Promise<void> {
+  while (state.racedHostStreams.size < expected) {
+    await new Promise<void>((resolve): void => {
+      state.racedHostWaiters.add(resolve)
+    })
+  }
 }
 
 async function rawHttpRequest(

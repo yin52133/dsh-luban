@@ -2,7 +2,10 @@ import { LubanError, asSessionId, type AccountId, type SessionId } from 'dsh-lub
 
 export type DshEventChannel = 'mux' | 'host'
 
-export type DshSessionOwnerLookup = (sessionId: SessionId) => Promise<AccountId | null>
+export type DshSessionOwnerLookup = (
+  accountId: AccountId,
+  sessionId: SessionId,
+) => Promise<AccountId | null>
 
 const MUX_SESSION_FRAME_TYPES = new Set([
   'session/event',
@@ -123,7 +126,7 @@ export class DshEventScope {
     }
 
     const sessionId = requiredString(payload, 'sessionId', `${frameType} payload`, true)
-    const owner = await this.#ownerOf(asSessionId(sessionId))
+    const owner = await this.#ownerOf(accountId, asSessionId(sessionId))
 
     if (frameType === 'question/requested' && owner !== null) {
       rememberOwner(this.#questionRpcOwners, message.rpcId, owner, 'question rpc')
@@ -218,6 +221,7 @@ export class DshEventScope {
       case 'cordis/request-run': {
         const request = requiredRemoteRecord(event, args)
         const owner = await this.#ownerOf(
+          accountId,
           asSessionId(requiredString(request, 'agentId', event, true)),
         )
         if (owner === null) return null
@@ -239,6 +243,7 @@ export class DshEventScope {
       case 'cordis/inspect-query': {
         const request = requiredRemoteRecord(event, args)
         const owner = await this.#ownerOf(
+          accountId,
           asSessionId(requiredString(request, 'agentId', event, true)),
         )
         if (owner === null) return null
@@ -279,7 +284,7 @@ export class DshEventScope {
   }
 
   async #isOwned(accountId: AccountId, sessionId: string): Promise<boolean> {
-    return (await this.#ownerOf(asSessionId(sessionId))) === accountId
+    return (await this.#ownerOf(accountId, asSessionId(sessionId))) === accountId
   }
 
   async #ownedSessionIds(accountId: AccountId, sessionIds: readonly string[]): Promise<string[]> {

@@ -14,10 +14,11 @@ import { connect as tlsConnect } from 'node:tls'
 import { Transform, type Duplex, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { StringDecoder } from 'node:string_decoder'
-import { asSessionId, type AccountId } from 'dsh-luban-core'
+import { asSessionId, type AccountId, type SessionId } from 'dsh-luban-core'
 import type { AuthManager } from './auth-manager.js'
 import { DshEventScope, type DshEventChannel } from './dsh-event-scope.js'
 import { dshMethodFromPath, dshRequestSessionIds } from './dsh-http-scope.js'
+import { DshSessionOperationBarrier } from './dsh-session-operation-barrier.js'
 import {
   AUTH_COOKIE_NAME,
   AUTH_ROOT,
@@ -109,6 +110,7 @@ export class AuthSidecar implements AuthGateway {
   readonly #trustedHostnames: ReadonlySet<string>
   readonly #onError: (error: Error) => void
   readonly #dshEventScope: DshEventScope
+  readonly #dshSessionOperations = new DshSessionOperationBarrier()
   readonly #sockets = new Set<Duplex>()
   readonly #upstreamRequests = new Set<ClientRequest>()
   #server: Server | undefined
@@ -120,7 +122,9 @@ export class AuthSidecar implements AuthGateway {
     this.#manager = options.manager
     this.#trustedHostnames = options.trustedHostnames
     this.#onError = options.onError ?? (() => undefined)
-    this.#dshEventScope = new DshEventScope((sessionId) => this.#manager.dshSessionOwner(sessionId))
+    this.#dshEventScope = new DshEventScope((accountId, sessionId) =>
+      this.#dshSessionOwnerAfterOperations(accountId, sessionId),
+    )
   }
 
   public get port(): number | undefined {
@@ -527,6 +531,17 @@ export class AuthSidecar implements AuthGateway {
     return null
   }
 
+  async #dshSessionOwnerAfterOperations(
+    accountId: AccountId,
+    sessionId: SessionId,
+  ): Promise<AccountId | null> {
+    let owner = await this.#manager.dshSessionOwner(sessionId)
+    while (owner === null && (await this.#dshSessionOperations.waitForChange(accountId))) {
+      owner = await this.#manager.dshSessionOwner(sessionId)
+    }
+    return owner
+  }
+
   async #proxyDshApi(
     request: IncomingMessage,
     response: ServerResponse,
@@ -561,11 +576,19 @@ export class AuthSidecar implements AuthGateway {
     if (rpcId !== undefined) {
       if (this.#denyDshRelationRequest(response, accountId, method, message, rpcId)) return
     }
-    await this.#proxyBufferedDshRequest(request, response, target, security, body, {
-      accountId,
-      method,
-      rpcId,
-    })
+    const settleOperation =
+      method === 'session.create' || method === 'session.fork'
+        ? this.#dshSessionOperations.begin(accountId)
+        : undefined
+    try {
+      await this.#proxyBufferedDshRequest(request, response, target, security, body, {
+        accountId,
+        method,
+        rpcId,
+      })
+    } finally {
+      settleOperation?.()
+    }
   }
 
   #denyDshRelationRequest(

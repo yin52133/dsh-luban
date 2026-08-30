@@ -322,7 +322,7 @@ describe('DshEventScope', () => {
       ['alice-session', alice],
       ['bob-session', bob],
     ])
-    const scope = new DshEventScope((sessionId): Promise<AccountId | null> => {
+    const scope = new DshEventScope((_accountId, sessionId): Promise<AccountId | null> => {
       return Promise.resolve(owners.get(sessionId) ?? null)
     })
     const request = (agentId: string): Buffer =>
@@ -363,18 +363,38 @@ describe('DshEventScope', () => {
     )
     expect(scope.ownerOfPlugin('second-plugin')).toBeNull()
   })
+
+  it('passes the requesting account through every session owner lookup', async () => {
+    const { scope, ownerOf } = fixture()
+
+    await scope.filter(
+      alice,
+      'host',
+      wire('host', { type: 'host/session-status', sessionId: 'alice-session', running: true }),
+    )
+    await scope.filter(
+      bob,
+      'mux',
+      wire('mux', { type: 'session/subscribed', sessionId: 'alice-session', lastSeq: 0 }),
+    )
+
+    expect(ownerOf).toHaveBeenNthCalledWith(1, alice, 'alice-session')
+    expect(ownerOf).toHaveBeenNthCalledWith(2, bob, 'alice-session')
+  })
 })
 
 function fixture(): {
   readonly scope: DshEventScope
-  readonly ownerOf: ReturnType<typeof vi.fn<(sessionId: string) => Promise<AccountId | null>>>
+  readonly ownerOf: ReturnType<
+    typeof vi.fn<(accountId: AccountId, sessionId: string) => Promise<AccountId | null>>
+  >
 } {
   const owners = new Map<string, AccountId>([
     ['alice-session', alice],
     ['alice-parent', alice],
     ['bob-session', bob],
   ])
-  const ownerOf = vi.fn((sessionId: string): Promise<AccountId | null> => {
+  const ownerOf = vi.fn((_accountId: AccountId, sessionId: string): Promise<AccountId | null> => {
     return Promise.resolve(owners.get(sessionId) ?? null)
   })
   return { scope: new DshEventScope(ownerOf), ownerOf }
