@@ -11,12 +11,15 @@ import { describe, expect, it, vi } from 'vitest'
 import * as plugin from '../src/index.js'
 import { keepaliveIndicator } from '../src/client/index.js'
 import type { HudSnapshotResponse } from '../src/types.js'
-import { HUD_RUNTIME_ARTIFACT_FIXTURE } from './runtime-artifact-fixture.js'
+import {
+  HUD_BUILD_PROVENANCE_FIXTURE,
+  HUD_RUNTIME_ARTIFACT_FIXTURE,
+} from './runtime-artifact-fixture.js'
 
 const hudPlugin = {
   ...plugin,
   apply(ctx: Context): void {
-    plugin.apply(ctx, {}, HUD_RUNTIME_ARTIFACT_FIXTURE)
+    plugin.apply(ctx, {}, HUD_RUNTIME_ARTIFACT_FIXTURE, HUD_BUILD_PROVENANCE_FIXTURE)
   },
 }
 

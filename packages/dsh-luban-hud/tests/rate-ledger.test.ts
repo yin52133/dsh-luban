@@ -5,7 +5,10 @@ import type { ProviderRequestIdentityAdapter, ProviderRequestIdentityQuery } fro
 import { describe, expect, it } from 'vitest'
 import { HUD_RATE_CAPTURE_SCHEMA, HudRateLedger } from '../src/rate-ledger.js'
 import { HUD_RATE_EXPORT_SCHEMA } from '../src/rate-reconcile.js'
-import { HUD_RUNTIME_ARTIFACT_FIXTURE } from './runtime-artifact-fixture.js'
+import {
+  HUD_BUILD_PROVENANCE_FIXTURE,
+  HUD_RUNTIME_ARTIFACT_FIXTURE,
+} from './runtime-artifact-fixture.js'
 
 const START = Date.parse('2026-08-30T12:00:00.000Z')
 const NOW = Date.parse('2026-08-30T12:05:00.000Z')
@@ -78,6 +81,7 @@ function ledger(
 ): HudRateLedger {
   return new HudRateLedger({
     runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
+    build: HUD_BUILD_PROVENANCE_FIXTURE,
     clock: clock.epoch,
     monotonicClock: clock.elapsed,
     ...(maxRecords === undefined ? {} : { maxRecords }),
@@ -173,6 +177,7 @@ describe('mounted HUD rate ledger', (): void => {
         processId: process.pid,
         nodeVersion: process.version,
         runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
+        build: HUD_BUILD_PROVENANCE_FIXTURE,
       },
       export: {
         schemaVersion: HUD_RATE_EXPORT_SCHEMA,
@@ -259,6 +264,7 @@ describe('mounted HUD rate ledger', (): void => {
       source: {
         coverageStartUtc: FIVE_MINUTE_WINDOW.startUtc,
         runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
+        build: HUD_BUILD_PROVENANCE_FIXTURE,
       },
     })
     expect(capture.export.records).toHaveLength(1)
@@ -507,6 +513,7 @@ describe('mounted HUD rate ledger', (): void => {
 
     const invalidClock = new HudRateLedger({
       runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
+      build: HUD_BUILD_PROVENANCE_FIXTURE,
       clock: { now: (): number => Number.NaN },
       monotonicClock: { now: (): number => 0 },
     })
@@ -515,6 +522,7 @@ describe('mounted HUD rate ledger', (): void => {
     )
     const outOfRangeClock = new HudRateLedger({
       runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
+      build: HUD_BUILD_PROVENANCE_FIXTURE,
       clock: { now: (): number => Number.MAX_SAFE_INTEGER },
       monotonicClock: { now: (): number => 0 },
     })

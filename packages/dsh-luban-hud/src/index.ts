@@ -12,6 +12,7 @@ import type {
 import { LubanError, modulePrefix, redactSecrets, systemClock } from 'dsh-luban-core'
 import { DefaultTelemetryAggregator } from './aggregator.js'
 import { TaskboardHudAlertSink } from './alerts.js'
+import { inspectHudBuildProvenance, type HudBuildProvenance } from './build-provenance.js'
 import { Config as ConfigSchema, type Config as HudConfig, parseConfig } from './config.js'
 import {
   DshContextEstimatorProvider,
@@ -49,6 +50,12 @@ export type Config = HudConfig
 export { DefaultTelemetryAggregator } from './aggregator.js'
 export type { TelemetryAggregatorOptions } from './aggregator.js'
 export { TaskboardHudAlertSink } from './alerts.js'
+export {
+  HUD_BUILD_PROVENANCE_SCHEMA,
+  inspectHudBuildProvenance,
+  parseHudBuildProvenance,
+} from './build-provenance.js'
+export type { HudBuildProvenance, HudLoadedBuildIdentity } from './build-provenance.js'
 export { renderCliHeader, sanitizeTerminalText } from './cli-render.js'
 export { parseConfig } from './config.js'
 export type { HudDisplayField, HudThresholds } from './config.js'
@@ -129,6 +136,7 @@ export function apply(
   ctx: Context,
   input: Partial<HudConfig> = {},
   runtimeArtifact: HudRuntimeArtifactIdentity = inspectHudRuntimeArtifact(new URL(import.meta.url)),
+  build: HudBuildProvenance = inspectHudBuildProvenance(new URL(import.meta.url), runtimeArtifact),
 ): void {
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth')
@@ -136,6 +144,7 @@ export function apply(
   const window = new SlidingRateWindow(systemMonotonicClock)
   const rateLedger = new HudRateLedger({
     runtimeArtifact,
+    build,
     clock: systemClock,
     monotonicClock: systemMonotonicClock,
     resolveProviderRequestIdentity: (): ProviderRequestIdentityAdapter | undefined =>

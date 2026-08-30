@@ -12,6 +12,7 @@ import {
   extractProviderRateWindow,
   fetchMountedHudRateCapture,
   inspectM07GitState,
+  inspectM07BuildProvenance,
   inspectM07RuntimePlatform,
   inspectM07RuntimeArtifact,
   inspectM07SourceProvenance,
@@ -39,7 +40,9 @@ const CHALLENGE = 'capture_challenge_0123456789abcdef'
 const TRACKED_SOURCE_PATHS = Object.freeze([
   'scripts/acceptance/m07-rate-reconcile.mjs',
   'packages/dsh-luban-hud/package.json',
+  'packages/dsh-luban-hud/scripts/build.mjs',
   'packages/dsh-luban-hud/tsdown.config.ts',
+  'packages/dsh-luban-hud/src/build-provenance.ts',
   'packages/dsh-luban-hud/src/rate-reconcile.ts',
   'packages/dsh-luban-hud/src/rate-ledger.ts',
   'packages/dsh-luban-hud/src/provider-request-identity.ts',
@@ -72,10 +75,31 @@ const RUNTIME_ARTIFACT = Object.freeze({
     .update(`${RUNTIME_FILE.relativePath}\0${RUNTIME_FILE.sha256}\0${String(RUNTIME_FILE.bytes)}\n`)
     .digest('hex'),
 })
+const BUILD_ID = '12345678-1234-4123-8123-123456789abc'
+const BUILD_MANIFEST = Object.freeze({
+  schemaVersion: 'dsh-luban/hud-build-provenance/v1',
+  gitHead: GIT_SHA,
+  buildId: BUILD_ID,
+  dirty: false,
+  artifacts: Object.freeze([
+    Object.freeze({ path: 'index.js', sha256: RUNTIME_FILE.sha256, bytes: RUNTIME_FILE.bytes }),
+  ]),
+})
+const BUILD_MANIFEST_BYTES = Buffer.from(`${JSON.stringify(BUILD_MANIFEST)}\n`, 'utf8')
+const BUILD_PROVENANCE = Object.freeze({
+  schemaVersion: 'dsh-luban/hud-build-provenance/v1',
+  gitHead: GIT_SHA,
+  buildId: BUILD_ID,
+  dirty: false,
+  runtime: 'repo-dist',
+  manifestSha256: createHash('sha256').update(BUILD_MANIFEST_BYTES).digest('hex'),
+  runtimeBundleSha256: RUNTIME_ARTIFACT.bundleSha256,
+})
 const SOURCE_PROVENANCE = Object.freeze({
   bundleSha256: 'f'.repeat(64),
   files: Object.freeze([]),
   runtimeArtifact: RUNTIME_ARTIFACT,
+  build: BUILD_PROVENANCE,
 })
 
 async function temporaryRoot(prefix = 'luban-m07-rate-test-') {
@@ -200,7 +224,7 @@ function mountedCapture(challenge = CHALLENGE) {
   const exportedAt = '2026-08-30T00:02:00.000Z'
   const challengeSha256 = createHash('sha256').update(challenge).digest('hex')
   return {
-    schemaVersion: 'dsh-luban/m07-hud-rate-capture/v3',
+    schemaVersion: 'dsh-luban/m07-hud-rate-capture/v4',
     source: {
       kind: 'mounted-hud-capture',
       exportedAt,
@@ -209,6 +233,7 @@ function mountedCapture(challenge = CHALLENGE) {
       nodeVersion: 'v22.19.0',
       challengeSha256,
       runtimeArtifact: RUNTIME_ARTIFACT,
+      build: BUILD_PROVENANCE,
     },
     export: {
       schemaVersion: 'dsh-luban/m07-hud-rate-export/v1',
@@ -264,6 +289,7 @@ function mountedInput() {
       exportedAt: capture.source.exportedAt,
       challengeSha256: capture.source.challengeSha256,
       runtimeArtifact: capture.source.runtimeArtifact,
+      build: capture.source.build,
       providerRequestIdentity: Object.freeze({
         adapter: Object.freeze({ ...providerRequest.adapter }),
         count: 1,
@@ -574,20 +600,24 @@ describe('M07 rate reconciliation acceptance runner', () => {
     const runtimePath = join(repository, 'packages', 'dsh-luban-hud', 'dist', 'index.js')
     await mkdir(dirname(runtimePath), { recursive: true })
     await writeFile(runtimePath, RUNTIME_ENTRYPOINT)
+    await writeFile(join(dirname(runtimePath), 'build-provenance.json'), BUILD_MANIFEST_BYTES)
     const invokeGit = vi.fn((_root, args) => {
       const relativePath = String(args[1]).slice('HEAD:'.length)
       return `${blobs.get(relativePath)}\n`
     })
 
-    await expect(inspectM07SourceProvenance(repository, invokeGit)).resolves.toMatchObject({
-      bundleSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      files: TRACKED_SOURCE_PATHS.map((relativePath) => ({
-        relativePath,
-        gitBlob: blobs.get(relativePath),
-        sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      })),
-      runtimeArtifact: RUNTIME_ARTIFACT,
-    })
+    await expect(inspectM07SourceProvenance(repository, invokeGit, GIT_SHA)).resolves.toMatchObject(
+      {
+        bundleSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        files: TRACKED_SOURCE_PATHS.map((relativePath) => ({
+          relativePath,
+          gitBlob: blobs.get(relativePath),
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        })),
+        runtimeArtifact: RUNTIME_ARTIFACT,
+        build: BUILD_PROVENANCE,
+      },
+    )
     expect(invokeGit).toHaveBeenCalledTimes(TRACKED_SOURCE_PATHS.length)
 
     const driftedGit = vi.fn((_root, args) => {
@@ -596,11 +626,16 @@ describe('M07 rate reconciliation acceptance runner', () => {
         ? `${'d'.repeat(40)}\n`
         : `${blobs.get(relativePath)}\n`
     })
-    await expect(inspectM07SourceProvenance(repository, driftedGit)).rejects.toMatchObject({
-      code: 'E_RATE_SOURCE_PROVENANCE',
-    })
+    await expect(inspectM07SourceProvenance(repository, driftedGit, GIT_SHA)).rejects.toMatchObject(
+      {
+        code: 'E_RATE_SOURCE_PROVENANCE',
+      },
+    )
 
     await expect(inspectM07RuntimeArtifact(repository)).resolves.toEqual(RUNTIME_ARTIFACT)
+    await expect(inspectM07BuildProvenance(repository, GIT_SHA, RUNTIME_ARTIFACT)).resolves.toEqual(
+      BUILD_PROVENANCE,
+    )
     await writeFile(runtimePath, 'import("./dynamic.js")\n', 'utf8')
     await expect(inspectM07RuntimeArtifact(repository)).rejects.toMatchObject({
       code: 'E_RATE_RUNTIME_PROVENANCE',
@@ -674,6 +709,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
       fetchImpl,
       environment: { LUBAN_SESSION_COOKIE: cookie },
       expectedRuntimeArtifact: RUNTIME_ARTIFACT,
+      expectedBuild: BUILD_PROVENANCE,
     })
 
     expect(fetchImpl).toHaveBeenCalledOnce()
@@ -685,7 +721,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
         window: WINDOW,
       },
       capture: {
-        schemaVersion: 'dsh-luban/m07-hud-rate-capture/v3',
+        schemaVersion: 'dsh-luban/m07-hud-rate-capture/v4',
         sourceKind: 'mounted-hud-capture',
         challengeSha256: createHash('sha256').update(CHALLENGE).digest('hex'),
         providerRequestIdentity: {
@@ -706,6 +742,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
         fetchImpl: neverCalled,
         environment: {},
         expectedRuntimeArtifact: RUNTIME_ARTIFACT,
+        expectedBuild: BUILD_PROVENANCE,
       }),
     ).rejects.toMatchObject({ code: 'E_RATE_HUD_COOKIE' })
     expect(neverCalled).not.toHaveBeenCalled()
@@ -721,6 +758,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
         fetchImpl: timeoutFetch,
         environment: { LUBAN_SESSION_COOKIE: 'luban_session=timeout-secret' },
         expectedRuntimeArtifact: RUNTIME_ARTIFACT,
+        expectedBuild: BUILD_PROVENANCE,
         timeoutMs: 5,
       }),
     ).rejects.toMatchObject({ code: 'E_RATE_HUD_TIMEOUT' })
@@ -737,6 +775,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
         fetchImpl: redirectFetch,
         environment: { LUBAN_SESSION_COOKIE: 'luban_session=redirect-secret' },
         expectedRuntimeArtifact: RUNTIME_ARTIFACT,
+        expectedBuild: BUILD_PROVENANCE,
       }),
     ).rejects.toMatchObject({ code: 'E_RATE_HUD_STATUS' })
 
@@ -752,6 +791,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
         fetchImpl: oversizedFetch,
         environment: { LUBAN_SESSION_COOKIE: 'luban_session=size-secret' },
         expectedRuntimeArtifact: RUNTIME_ARTIFACT,
+        expectedBuild: BUILD_PROVENANCE,
         maxBytes: 128,
       }),
     ).rejects.toMatchObject({ code: 'E_RATE_HUD_RESPONSE_SIZE' })
@@ -771,6 +811,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
         fetchImpl: reflectedFetch,
         environment: { LUBAN_SESSION_COOKIE: reflectedCookie },
         expectedRuntimeArtifact: RUNTIME_ARTIFACT,
+        expectedBuild: BUILD_PROVENANCE,
       }),
     ).rejects.toMatchObject({ code: 'E_RATE_SECRET_FIELD' })
   })
@@ -784,7 +825,13 @@ describe('M07 rate reconciliation acceptance runner', () => {
     )
 
     expect(
-      validateMountedHudCapture(mountedCapture(), WINDOW, CHALLENGE, RUNTIME_ARTIFACT),
+      validateMountedHudCapture(
+        mountedCapture(),
+        WINDOW,
+        CHALLENGE,
+        RUNTIME_ARTIFACT,
+        BUILD_PROVENANCE,
+      ),
     ).toMatchObject({
       value: { source: { origin: 'live-hud-events' }, window: WINDOW },
       capture: { sourceKind: 'mounted-hud-capture' },
@@ -822,7 +869,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
       const capture = clone(mountedCapture())
       mutate(capture)
       expect(() =>
-        validateMountedHudCapture(capture, WINDOW, CHALLENGE, RUNTIME_ARTIFACT),
+        validateMountedHudCapture(capture, WINDOW, CHALLENGE, RUNTIME_ARTIFACT, BUILD_PROVENANCE),
       ).toThrowError(expect.objectContaining({ code: expect.stringMatching(/^E_RATE_HUD_/u) }))
     }
 
@@ -834,7 +881,13 @@ describe('M07 rate reconciliation acceptance runner', () => {
       )
       .digest('hex')
     expect(() =>
-      validateMountedHudCapture(mountedCapture(), WINDOW, CHALLENGE, otherRuntime),
+      validateMountedHudCapture(
+        mountedCapture(),
+        WINDOW,
+        CHALLENGE,
+        otherRuntime,
+        BUILD_PROVENANCE,
+      ),
     ).toThrowError(expect.objectContaining({ code: 'E_RATE_HUD_RUNTIME_MISMATCH', blocked: true }))
     expect(() => validateMountedHudCapture(mountedCapture(), WINDOW, CHALLENGE)).toThrowError(
       expect.objectContaining({ code: 'E_RATE_HUD_RUNTIME_PROVENANCE', blocked: true }),
@@ -843,13 +896,25 @@ describe('M07 rate reconciliation acceptance runner', () => {
     const incompleteCoverage = clone(mountedCapture())
     incompleteCoverage.source.coverageStartUtc = '2026-08-30T00:00:00.001Z'
     expect(() =>
-      validateMountedHudCapture(incompleteCoverage, WINDOW, CHALLENGE, RUNTIME_ARTIFACT),
+      validateMountedHudCapture(
+        incompleteCoverage,
+        WINDOW,
+        CHALLENGE,
+        RUNTIME_ARTIFACT,
+        BUILD_PROVENANCE,
+      ),
     ).toThrowError(expect.objectContaining({ code: 'E_RATE_HUD_COVERAGE', blocked: true }))
 
     const credentialLeak = clone(mountedCapture())
     credentialLeak.captures[0].accessToken = 'must-not-be-accepted'
     expect(() =>
-      validateMountedHudCapture(credentialLeak, WINDOW, CHALLENGE, RUNTIME_ARTIFACT),
+      validateMountedHudCapture(
+        credentialLeak,
+        WINDOW,
+        CHALLENGE,
+        RUNTIME_ARTIFACT,
+        BUILD_PROVENANCE,
+      ),
     ).toThrowError(expect.objectContaining({ code: 'E_RATE_SECRET_FIELD' }))
   })
 

@@ -20,8 +20,9 @@ import {
   parseHudRuntimeArtifactIdentity,
   type HudRuntimeArtifactIdentity,
 } from './runtime-artifact.js'
+import { parseHudBuildProvenance, type HudBuildProvenance } from './build-provenance.js'
 
-export const HUD_RATE_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v3' as const
+export const HUD_RATE_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v4' as const
 
 const DEFAULT_MAX_CAPTURE_RECORDS = 10_000
 const FIVE_MINUTES_MS = 300_000
@@ -54,6 +55,7 @@ export interface HudRateCapture {
     readonly nodeVersion: string
     readonly challengeSha256: string
     readonly runtimeArtifact: HudRuntimeArtifactIdentity
+    readonly build: HudBuildProvenance
   }
   readonly export: HudRateExport
   readonly captures: readonly HudRateCaptureMetadata[]
@@ -61,6 +63,7 @@ export interface HudRateCapture {
 
 export interface HudRateLedgerOptions {
   readonly runtimeArtifact: HudRuntimeArtifactIdentity
+  readonly build: HudBuildProvenance
   readonly clock?: Clock
   readonly monotonicClock?: MonotonicClock
   readonly maxRecords?: number
@@ -283,6 +286,7 @@ async function attestCapturedRecords(
 /** Bounded, metadata-only ledger produced from mounted durable assistant events. */
 export class HudRateLedger {
   readonly #runtimeArtifact: HudRuntimeArtifactIdentity
+  readonly #build: HudBuildProvenance
   readonly #clock: Clock
   readonly #monotonicClock: MonotonicClock
   readonly #maxRecords: number
@@ -298,6 +302,10 @@ export class HudRateLedger {
 
   public constructor(options: HudRateLedgerOptions) {
     this.#runtimeArtifact = parseHudRuntimeArtifactIdentity(options.runtimeArtifact)
+    this.#build = parseHudBuildProvenance(options.build)
+    if (this.#build.runtimeBundleSha256 !== this.#runtimeArtifact.bundleSha256) {
+      throw new TypeError('HUD build provenance does not bind the runtime artifact')
+    }
     this.#clock = options.clock ?? systemClock
     this.#monotonicClock = options.monotonicClock ?? systemMonotonicClock
     this.#maxRecords = options.maxRecords ?? DEFAULT_MAX_CAPTURE_RECORDS
@@ -484,6 +492,7 @@ export class HudRateLedger {
         nodeVersion: process.version,
         challengeSha256: sha256(challenge),
         runtimeArtifact: this.#runtimeArtifact,
+        build: this.#build,
       }),
       export: Object.freeze({
         schemaVersion: HUD_RATE_EXPORT_SCHEMA,

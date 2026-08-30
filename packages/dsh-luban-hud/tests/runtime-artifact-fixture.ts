@@ -5,6 +5,7 @@ import {
   type HudRuntimeArtifactFile,
   type HudRuntimeArtifactIdentity,
 } from '../src/runtime-artifact.js'
+import { HUD_BUILD_PROVENANCE_SCHEMA, type HudBuildProvenance } from '../src/build-provenance.js'
 
 const fixtureFile = Object.freeze({
   relativePath: 'dist/index.js',
@@ -22,3 +23,13 @@ export const HUD_RUNTIME_ARTIFACT_FIXTURE = Object.freeze({
   files: fixtureFiles,
   bundleSha256: hudRuntimeArtifactBundleSha256(fixtureFiles),
 }) satisfies HudRuntimeArtifactIdentity
+
+export const HUD_BUILD_PROVENANCE_FIXTURE = Object.freeze({
+  schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
+  gitHead: 'a'.repeat(40),
+  buildId: '12345678-1234-4123-8123-123456789abc',
+  dirty: false,
+  runtime: 'repo-dist',
+  manifestSha256: 'b'.repeat(64),
+  runtimeBundleSha256: HUD_RUNTIME_ARTIFACT_FIXTURE.bundleSha256,
+}) satisfies HudBuildProvenance

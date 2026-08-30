@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, open, readFile, realpath, writeFile } from 'node:fs/promises'
+import { lstat, open, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
 import { isBuiltin } from 'node:module'
 import { devNull } from 'node:os'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
@@ -19,7 +19,9 @@ const RECONCILIATION_MODULE = new URL(
 const TRACKED_SOURCE_PATHS = Object.freeze([
   'scripts/acceptance/m07-rate-reconcile.mjs',
   'packages/dsh-luban-hud/package.json',
+  'packages/dsh-luban-hud/scripts/build.mjs',
   'packages/dsh-luban-hud/tsdown.config.ts',
+  'packages/dsh-luban-hud/src/build-provenance.ts',
   'packages/dsh-luban-hud/src/rate-reconcile.ts',
   'packages/dsh-luban-hud/src/rate-ledger.ts',
   'packages/dsh-luban-hud/src/provider-request-identity.ts',
@@ -33,8 +35,9 @@ const TRACKED_SOURCE_PATHS = Object.freeze([
 const PLAN_SCHEMA = 'dsh-luban/m07-rate-reconciliation-plan/v2'
 const EVIDENCE_SCHEMA = 'dsh-luban/m07-rate-reconciliation-evidence/v3'
 const HUD_EXPORT_SCHEMA = 'dsh-luban/m07-hud-rate-export/v1'
-const HUD_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v3'
+const HUD_CAPTURE_SCHEMA = 'dsh-luban/m07-hud-rate-capture/v4'
 const HUD_RUNTIME_ARTIFACT_SCHEMA = 'dsh-luban/m07-hud-runtime-artifact/v1'
+const HUD_BUILD_PROVENANCE_SCHEMA = 'dsh-luban/hud-build-provenance/v1'
 const PROVIDER_EXPORT_SCHEMA = 'dsh-luban/m07-provider-rate-export/v1'
 const FEATURE_ID = 'M07-F004'
 const MAX_INPUT_BYTES = 10 * 1024 * 1024
@@ -43,8 +46,13 @@ const MAX_OS_RELEASE_BYTES = 64 * 1024
 const MAX_RUNTIME_ARTIFACT_BYTES = 10 * 1024 * 1024
 const MAX_RUNTIME_ARTIFACT_FILES = 128
 const MAX_RUNTIME_ARTIFACT_TOTAL_BYTES = 25 * 1024 * 1024
+const MAX_BUILD_MANIFEST_BYTES = 1024 * 1024
+const MAX_BUILD_ARTIFACT_BYTES = 64 * 1024 * 1024
+const MAX_BUILD_ARTIFACTS = 512
+const MAX_BUILD_TOTAL_BYTES = 256 * 1024 * 1024
 const HUD_REQUEST_TIMEOUT_MS = 10_000
 const GIT_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u
+const BUILD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const SHA256 = /^[a-f0-9]{64}$/u
 const CHALLENGE = /^[A-Za-z0-9][A-Za-z0-9_-]{31,127}$/u
 const RATE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
@@ -509,7 +517,11 @@ function staticM07RuntimeSpecifiers(source) {
   return [...new Set([...specifiers, ...dynamicSpecifiers, ...quotedRelativeSpecifiers])]
 }
 
-async function readStableM07RuntimeFile(canonicalRoot, relativePath) {
+async function readStableM07RuntimeFile(
+  canonicalRoot,
+  relativePath,
+  maximumBytes = MAX_RUNTIME_ARTIFACT_BYTES,
+) {
   const requested = resolve(canonicalRoot, relativePath)
   if (!isInside(canonicalRoot, requested)) {
     throw new AcceptanceError(
@@ -525,7 +537,7 @@ async function readStableM07RuntimeFile(canonicalRoot, relativePath) {
       !requestedStat.isFile() ||
       requestedStat.isSymbolicLink() ||
       requestedStat.size <= 0n ||
-      requestedStat.size > BigInt(MAX_RUNTIME_ARTIFACT_BYTES)
+      requestedStat.size > BigInt(maximumBytes)
     ) {
       throw new Error('not a bounded regular file')
     }
@@ -542,7 +554,7 @@ async function readStableM07RuntimeFile(canonicalRoot, relativePath) {
         'HUD runtime artifact changed before it was inspected',
       )
     }
-    const raw = await readM07BoundedBytes(handle, MAX_RUNTIME_ARTIFACT_BYTES)
+    const raw = await readM07BoundedBytes(handle, maximumBytes)
     const openedAfter = await handle.stat({ bigint: true })
     const after = await lstat(canonical, { bigint: true })
     const finalCanonical = await realpath(requested)
@@ -712,7 +724,199 @@ export async function inspectM07RuntimeArtifact(root) {
   })
 }
 
-export async function inspectM07SourceProvenance(root, invokeGit = runGit) {
+function safeM07BuildArtifactPath(value) {
+  return (
+    typeof value === 'string' &&
+    value.length >= 1 &&
+    value.length <= 512 &&
+    !value.includes('\\') &&
+    !containsControlCharacter(value) &&
+    value
+      .split('/')
+      .every(
+        (segment) =>
+          segment !== '' &&
+          segment !== '.' &&
+          segment !== '..' &&
+          /^[A-Za-z0-9._-]+$/u.test(segment),
+      )
+  )
+}
+
+async function collectM07DistributionPaths(distributionRoot, directory = distributionRoot) {
+  let entries
+  try {
+    entries = await readdir(directory, { withFileTypes: true })
+  } catch {
+    throw new AcceptanceError(
+      'E_RATE_BUILD_PROVENANCE',
+      'Unable to enumerate the HUD build distribution',
+      true,
+    )
+  }
+  const paths = []
+  for (const entry of entries) {
+    const absolute = resolve(directory, entry.name)
+    const relativePath = runtimeRelativePath(relative(distributionRoot, absolute))
+    if (entry.isSymbolicLink()) {
+      throw new AcceptanceError(
+        'E_RATE_BUILD_PROVENANCE',
+        'HUD build distribution contains a symbolic link',
+        true,
+      )
+    }
+    if (entry.isDirectory()) {
+      paths.push(...(await collectM07DistributionPaths(distributionRoot, absolute)))
+      continue
+    }
+    if (!entry.isFile() || !safeM07BuildArtifactPath(relativePath)) {
+      throw new AcceptanceError(
+        'E_RATE_BUILD_PROVENANCE',
+        'HUD build distribution contains an unsupported entry',
+        true,
+      )
+    }
+    if (relativePath !== 'build-provenance.json') paths.push(relativePath)
+  }
+  return paths.sort(codeUnitCompare)
+}
+
+export async function inspectM07BuildProvenance(root, expectedGitHead, runtimeArtifact) {
+  if (!GIT_SHA.test(expectedGitHead)) {
+    throw new AcceptanceError('E_RATE_BUILD_PROVENANCE', 'Expected HUD build HEAD is invalid', true)
+  }
+  const canonicalPackageRoot = await realpath(resolve(root, 'packages', HUD_PACKAGE_NAME))
+  const canonicalDistRoot = await realpath(resolve(canonicalPackageRoot, 'dist'))
+  if (
+    !sameFilesystemPath(canonicalPackageRoot, resolve(root, 'packages', HUD_PACKAGE_NAME)) ||
+    !sameFilesystemPath(canonicalDistRoot, resolve(canonicalPackageRoot, 'dist'))
+  ) {
+    throw new AcceptanceError(
+      'E_RATE_BUILD_PROVENANCE',
+      'HUD build distribution uses a symbolic path',
+      true,
+    )
+  }
+  const manifestBytes = await readStableM07RuntimeFile(
+    canonicalDistRoot,
+    'build-provenance.json',
+    MAX_BUILD_MANIFEST_BYTES,
+  )
+  let manifest
+  try {
+    manifest = JSON.parse(manifestBytes.toString('utf8'))
+  } catch {
+    throw new AcceptanceError('E_RATE_BUILD_PROVENANCE', 'HUD build manifest is invalid', true)
+  }
+  if (
+    !hasExactKeys(manifest, ['artifacts', 'buildId', 'dirty', 'gitHead', 'schemaVersion']) ||
+    manifest.schemaVersion !== HUD_BUILD_PROVENANCE_SCHEMA ||
+    manifest.gitHead !== expectedGitHead ||
+    !BUILD_ID.test(manifest.buildId) ||
+    manifest.dirty !== false ||
+    !Array.isArray(manifest.artifacts) ||
+    manifest.artifacts.length < 1 ||
+    manifest.artifacts.length > MAX_BUILD_ARTIFACTS
+  ) {
+    throw new AcceptanceError(
+      'E_RATE_BUILD_PROVENANCE',
+      'HUD build manifest is not a clean build of repository HEAD',
+      true,
+    )
+  }
+  const artifacts = new Map()
+  let totalBytes = 0
+  for (const artifact of manifest.artifacts) {
+    if (
+      !hasExactKeys(artifact, ['bytes', 'path', 'sha256']) ||
+      !safeM07BuildArtifactPath(artifact.path) ||
+      artifact.path === 'build-provenance.json' ||
+      artifacts.has(artifact.path) ||
+      !SHA256.test(artifact.sha256) ||
+      !Number.isSafeInteger(artifact.bytes) ||
+      artifact.bytes < 1 ||
+      artifact.bytes > MAX_BUILD_ARTIFACT_BYTES
+    ) {
+      throw new AcceptanceError(
+        'E_RATE_BUILD_PROVENANCE',
+        'HUD build manifest artifact is invalid',
+        true,
+      )
+    }
+    totalBytes += artifact.bytes
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > MAX_BUILD_TOTAL_BYTES) {
+      throw new AcceptanceError(
+        'E_RATE_BUILD_PROVENANCE',
+        'HUD build manifest exceeds its total size bound',
+        true,
+      )
+    }
+    const bytes = await readStableM07RuntimeFile(
+      canonicalDistRoot,
+      artifact.path,
+      MAX_BUILD_ARTIFACT_BYTES,
+    )
+    if (bytes.length !== artifact.bytes || sha256(bytes) !== artifact.sha256) {
+      throw new AcceptanceError(
+        'E_RATE_BUILD_PROVENANCE',
+        'HUD build artifact does not match its manifest',
+        true,
+      )
+    }
+    artifacts.set(artifact.path, Object.freeze({ sha256: artifact.sha256, bytes: artifact.bytes }))
+  }
+  const manifestOrder = manifest.artifacts.map(({ path }) => path)
+  const sortedManifestOrder = [...manifestOrder].sort(codeUnitCompare)
+  const distributionBefore = await collectM07DistributionPaths(canonicalDistRoot)
+  if (
+    !manifestOrder.every((path, index) => path === sortedManifestOrder[index]) ||
+    distributionBefore.length !== artifacts.size ||
+    distributionBefore.some((path) => !artifacts.has(path))
+  ) {
+    throw new AcceptanceError(
+      'E_RATE_BUILD_PROVENANCE',
+      'HUD build manifest does not cover the complete canonical distribution',
+      true,
+    )
+  }
+  for (const runtimeFile of runtimeArtifact.files) {
+    const path = runtimeFile.relativePath.slice('dist/'.length)
+    const artifact = artifacts.get(path)
+    if (artifact?.sha256 !== runtimeFile.sha256 || artifact?.bytes !== runtimeFile.bytes) {
+      throw new AcceptanceError(
+        'E_RATE_BUILD_PROVENANCE',
+        'HUD runtime closure does not match the complete build manifest',
+        true,
+      )
+    }
+  }
+  const manifestAfter = await readStableM07RuntimeFile(
+    canonicalDistRoot,
+    'build-provenance.json',
+    MAX_BUILD_MANIFEST_BYTES,
+  )
+  const distributionAfter = await collectM07DistributionPaths(canonicalDistRoot)
+  if (
+    sha256(manifestAfter) !== sha256(manifestBytes) ||
+    JSON.stringify(distributionAfter) !== JSON.stringify(distributionBefore)
+  ) {
+    throw new AcceptanceError(
+      'E_RATE_BUILD_PROVENANCE',
+      'HUD build distribution changed during inspection',
+    )
+  }
+  return Object.freeze({
+    schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
+    gitHead: expectedGitHead,
+    buildId: manifest.buildId,
+    dirty: false,
+    runtime: 'repo-dist',
+    manifestSha256: sha256(manifestBytes),
+    runtimeBundleSha256: runtimeArtifact.bundleSha256,
+  })
+}
+
+export async function inspectM07SourceProvenance(root, invokeGit = runGit, expectedGitHead) {
   let canonicalRoot
   try {
     canonicalRoot = await realpath(resolve(root))
@@ -735,10 +939,12 @@ export async function inspectM07SourceProvenance(root, invokeGit = runGit) {
       .join(''),
   )
   const runtimeArtifact = await inspectM07RuntimeArtifact(root)
+  const build = await inspectM07BuildProvenance(root, expectedGitHead, runtimeArtifact)
   return Object.freeze({
     bundleSha256,
     files: Object.freeze(files),
     runtimeArtifact,
+    build,
   })
 }
 
@@ -1119,17 +1325,62 @@ function normalizeM07RuntimeArtifact(value) {
   })
 }
 
-export function validateMountedHudCapture(value, expectedWindow, challenge, expectedArtifact) {
+function normalizeM07BuildProvenance(value) {
+  if (
+    !hasExactKeys(value, [
+      'buildId',
+      'dirty',
+      'gitHead',
+      'manifestSha256',
+      'runtime',
+      'runtimeBundleSha256',
+      'schemaVersion',
+    ]) ||
+    value.schemaVersion !== HUD_BUILD_PROVENANCE_SCHEMA ||
+    !GIT_SHA.test(value.gitHead) ||
+    !BUILD_ID.test(value.buildId) ||
+    value.dirty !== false ||
+    value.runtime !== 'repo-dist' ||
+    !SHA256.test(value.manifestSha256) ||
+    !SHA256.test(value.runtimeBundleSha256)
+  ) {
+    throw new AcceptanceError(
+      'E_RATE_HUD_BUILD_PROVENANCE',
+      'Mounted HUD build provenance is invalid',
+      true,
+    )
+  }
+  return Object.freeze({
+    schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
+    gitHead: value.gitHead,
+    buildId: value.buildId,
+    dirty: false,
+    runtime: 'repo-dist',
+    manifestSha256: value.manifestSha256,
+    runtimeBundleSha256: value.runtimeBundleSha256,
+  })
+}
+
+export function validateMountedHudCapture(
+  value,
+  expectedWindow,
+  challenge,
+  expectedArtifact,
+  expectedBuild,
+) {
   const window = exactRateWindow(expectedWindow, 'Expected provider')
   const challengeSha256 = sha256(captureChallenge(challenge))
   const runtimeArtifact = normalizeM07RuntimeArtifact(value?.source?.runtimeArtifact)
   const localArtifact = normalizeM07RuntimeArtifact(expectedArtifact)
+  const build = normalizeM07BuildProvenance(value?.source?.build)
+  const localBuild = normalizeM07BuildProvenance(expectedBuild)
   assertNoSuspiciousCredentialFields(value)
   if (
     !hasExactKeys(value, ['captures', 'export', 'schemaVersion', 'source']) ||
     value.schemaVersion !== HUD_CAPTURE_SCHEMA ||
     !hasExactKeys(value.source, [
       'challengeSha256',
+      'build',
       'coverageStartUtc',
       'exportedAt',
       'kind',
@@ -1157,6 +1408,16 @@ export function validateMountedHudCapture(value, expectedWindow, challenge, expe
     throw new AcceptanceError(
       'E_RATE_HUD_RUNTIME_MISMATCH',
       'Mounted HUD endpoint is not running the inspected local runtime artifact',
+      true,
+    )
+  }
+  if (
+    JSON.stringify(build) !== JSON.stringify(localBuild) ||
+    build.runtimeBundleSha256 !== runtimeArtifact.bundleSha256
+  ) {
+    throw new AcceptanceError(
+      'E_RATE_HUD_BUILD_MISMATCH',
+      'Mounted HUD endpoint is not running the inspected clean repository build',
       true,
     )
   }
@@ -1221,6 +1482,7 @@ export function validateMountedHudCapture(value, expectedWindow, challenge, expe
       exportedAt: value.source.exportedAt,
       challengeSha256,
       runtimeArtifact,
+      build,
       providerRequestIdentity: Object.freeze({
         adapter: Object.freeze({ ...providerAdapter }),
         count: value.captures.length,
@@ -1332,6 +1594,7 @@ export async function fetchMountedHudRateCapture(hudUrl, providerWindow, challen
     window,
     boundedChallenge,
     options.expectedRuntimeArtifact,
+    options.expectedBuild,
   )
   return Object.freeze({
     sha256: sha256(raw),
@@ -1552,7 +1815,7 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
         true,
       )
     }
-    sourceBefore = await runtime.inspectSource(plan.root)
+    sourceBefore = await runtime.inspectSource(plan.root, before.sha)
     check(checks, 'tracked-source-bundle-bound-to-head', 'pass', sourceBefore.bundleSha256)
     if (hudMode === 'mounted' && execution === 'production') {
       if (sourceBefore.runtimeArtifact?.schemaVersion !== HUD_RUNTIME_ARTIFACT_SCHEMA) {
@@ -1568,6 +1831,14 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
         'pass',
         sourceBefore.runtimeArtifact.bundleSha256,
       )
+      if (sourceBefore.build?.gitHead !== before.sha || sourceBefore.build?.dirty !== false) {
+        throw new AcceptanceError(
+          'E_RATE_BUILD_PROVENANCE',
+          'Mounted HUD reconciliation requires a clean local build of repository HEAD',
+          true,
+        )
+      }
+      check(checks, 'local-hud-build-bound-to-head', 'pass', sourceBefore.build.buildId)
     }
     providerInput = await runtime.readInput(plan.root, options.providerExport, 'provider')
     assertNoSuspiciousCredentialFields(providerInput.value)
@@ -1576,6 +1847,7 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
       const challenge = captureChallenge(runtime.createChallenge())
       hudInput = await runtime.fetchHudCapture(options.hudUrl, providerWindow, challenge, {
         expectedRuntimeArtifact: sourceBefore.runtimeArtifact,
+        expectedBuild: sourceBefore.build,
       })
       if (hudInput.capture?.sourceKind !== 'mounted-hud-capture') {
         throw new AcceptanceError(
@@ -1598,6 +1870,7 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
           'pass',
           hudInput.capture.runtimeArtifact.bundleSha256,
         )
+        check(checks, 'mounted-hud-build-matched', 'pass', hudInput.capture.build.buildId)
       }
     } else {
       hudInput = await runtime.readInput(plan.root, options.hudExport, 'HUD')
@@ -1639,10 +1912,12 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
 
   if (sourceBefore !== null) {
     try {
-      sourceAfter = await runtime.inspectSource(plan.root)
+      sourceAfter = await runtime.inspectSource(plan.root, before?.sha)
       const sameSource =
         sourceAfter.bundleSha256 === sourceBefore.bundleSha256 &&
-        JSON.stringify(sourceAfter.runtimeArtifact) === JSON.stringify(sourceBefore.runtimeArtifact)
+        JSON.stringify(sourceAfter.runtimeArtifact) ===
+          JSON.stringify(sourceBefore.runtimeArtifact) &&
+        JSON.stringify(sourceAfter.build) === JSON.stringify(sourceBefore.build)
       check(checks, 'tracked-source-unchanged', sameSource ? 'pass' : 'fail', sameSource)
       if (!sameSource) {
         failure = new AcceptanceError(
@@ -1693,8 +1968,10 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
       (hudInput?.capture?.sourceKind === 'mounted-hud-capture' &&
         hudInput.capture.providerRequestIdentity?.count > 0 &&
         (execution !== 'production' ||
-          hudInput.capture.runtimeArtifact?.bundleSha256 ===
-            sourceBefore.runtimeArtifact?.bundleSha256))) &&
+          (hudInput.capture.runtimeArtifact?.bundleSha256 ===
+            sourceBefore.runtimeArtifact?.bundleSha256 &&
+            hudInput.capture.build?.manifestSha256 === sourceBefore.build?.manifestSha256 &&
+            hudInput.capture.build?.gitHead === before.sha)))) &&
     resultHasLiveOrigins(reconciliation)
   const boundaryCode = requiredM07BoundaryCode(execution, hudMode, operationStatus, integrityPass)
   if (boundaryCode !== null) {

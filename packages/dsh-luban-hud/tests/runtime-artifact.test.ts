@@ -5,6 +5,11 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  HUD_BUILD_PROVENANCE_SCHEMA,
+  inspectHudBuildProvenance,
+  parseHudBuildProvenance,
+} from '../src/build-provenance.js'
+import {
   HUD_RUNTIME_ARTIFACT_SCHEMA,
   hudRuntimeArtifactBundleSha256,
   inspectHudRuntimeArtifact,
@@ -13,6 +18,8 @@ import {
 } from '../src/runtime-artifact.js'
 
 const directories = new Set<string>()
+const GIT_HEAD = 'a'.repeat(40)
+const BUILD_ID = '12345678-1234-4123-8123-123456789abc'
 
 async function temporaryPackage(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'luban-hud-artifact-'))
@@ -146,5 +153,104 @@ describe('HUD runtime artifact identity', (): void => {
     expect((): void => {
       parseHudRuntimeArtifactIdentity({ ...valid, bundleSha256: '0'.repeat(64) })
     }).toThrow('closure identity is invalid')
+  })
+})
+
+describe('HUD loaded build provenance', (): void => {
+  it('binds the embedded build identity to the complete dist closure', async (): Promise<void> => {
+    const root = await temporaryPackage()
+    const source = 'export const entry = true;\n'
+    await writeArtifact(root, 'dist/index.js', source)
+    const runtime = inspectHudRuntimeArtifact(pathToFileURL(join(root, 'dist', 'index.js')))
+    const artifact = fileIdentity('dist/index.js', source)
+    const manifest = {
+      schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
+      gitHead: GIT_HEAD,
+      buildId: BUILD_ID,
+      dirty: false,
+      artifacts: [{ path: 'index.js', sha256: artifact.sha256, bytes: artifact.bytes }],
+    }
+    const manifestBytes = `${JSON.stringify(manifest)}\n`
+    await writeFile(join(root, 'dist', 'build-provenance.json'), manifestBytes, 'utf8')
+
+    expect(
+      inspectHudBuildProvenance(pathToFileURL(join(root, 'dist', 'index.js')), runtime, {
+        gitHead: GIT_HEAD,
+        buildId: BUILD_ID,
+      }),
+    ).toEqual({
+      schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
+      gitHead: GIT_HEAD,
+      buildId: BUILD_ID,
+      dirty: false,
+      runtime: 'repo-dist',
+      manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
+      runtimeBundleSha256: runtime.bundleSha256,
+    })
+  })
+
+  it('rejects dirty, mismatched, changed, and incomplete distributions', async (): Promise<void> => {
+    const root = await temporaryPackage()
+    const source = 'export const entry = true;\n'
+    await writeArtifact(root, 'dist/index.js', source)
+    const runtime = inspectHudRuntimeArtifact(pathToFileURL(join(root, 'dist', 'index.js')))
+    const artifact = fileIdentity('dist/index.js', source)
+    const manifest = {
+      schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
+      gitHead: GIT_HEAD,
+      buildId: BUILD_ID,
+      dirty: true,
+      artifacts: [{ path: 'index.js', sha256: artifact.sha256, bytes: artifact.bytes }],
+    }
+    await writeFile(
+      join(root, 'dist', 'build-provenance.json'),
+      `${JSON.stringify(manifest)}\n`,
+      'utf8',
+    )
+    expect((): void => {
+      inspectHudBuildProvenance(pathToFileURL(join(root, 'dist', 'index.js')), runtime, {
+        gitHead: GIT_HEAD,
+        buildId: BUILD_ID,
+      })
+    }).toThrow('clean loaded build')
+
+    await writeFile(
+      join(root, 'dist', 'build-provenance.json'),
+      `${JSON.stringify({ ...manifest, dirty: false })}\n`,
+      'utf8',
+    )
+    expect((): void => {
+      inspectHudBuildProvenance(pathToFileURL(join(root, 'dist', 'index.js')), runtime, {
+        gitHead: 'b'.repeat(40),
+        buildId: BUILD_ID,
+      })
+    }).toThrow('clean loaded build')
+
+    await writeArtifact(root, 'dist/untracked.js', 'export const extra = true;\n')
+    expect((): void => {
+      inspectHudBuildProvenance(pathToFileURL(join(root, 'dist', 'index.js')), runtime, {
+        gitHead: GIT_HEAD,
+        buildId: BUILD_ID,
+      })
+    }).toThrow('clean loaded build')
+  })
+
+  it('parses only exact, clean build evidence', (): void => {
+    const value = {
+      schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
+      gitHead: GIT_HEAD,
+      buildId: BUILD_ID,
+      dirty: false,
+      runtime: 'repo-dist',
+      manifestSha256: 'b'.repeat(64),
+      runtimeBundleSha256: 'c'.repeat(64),
+    }
+    expect(parseHudBuildProvenance(value)).toEqual(value)
+    expect((): void => {
+      parseHudBuildProvenance({ ...value, dirty: true })
+    }).toThrow('build provenance is invalid')
+    expect((): void => {
+      parseHudBuildProvenance({ ...value, extra: true })
+    }).toThrow('build provenance is invalid')
   })
 })
