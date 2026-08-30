@@ -24,6 +24,8 @@ describe('keepalive config and platform guard', (): void => {
       bootRestore: true,
     })
     expect(() => parseConfig({ patrolIntervalSec: 0 })).toThrow(/positive integer/u)
+    expect(parseConfig({ patrolIntervalSec: 300 }).patrolIntervalSec).toBe(300)
+    expect(() => parseConfig({ patrolIntervalSec: 301 })).toThrow(/at most 300/u)
     expect(name).toBe('luban-keepalive')
   })
 

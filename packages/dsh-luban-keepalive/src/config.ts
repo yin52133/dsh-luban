@@ -21,6 +21,8 @@ const DEFAULT_CONFIG: Config = Object.freeze({
   alertToTaskboard: true,
 })
 
+const MAX_PATROL_INTERVAL_SEC = 300
+
 type ValidationResult<Value> =
   | { readonly value: Value }
   | {
@@ -62,13 +64,17 @@ export function parseConfig(input: unknown): Config {
   if (typeof rawLedger !== 'string' || rawLedger.trim() === '') {
     throw new TypeError('ledgerFile must be a non-empty string')
   }
+  const patrolIntervalSec = positiveInteger(
+    root.patrolIntervalSec,
+    DEFAULT_CONFIG.patrolIntervalSec,
+    'patrolIntervalSec',
+  )
+  if (patrolIntervalSec > MAX_PATROL_INTERVAL_SEC) {
+    throw new TypeError(`patrolIntervalSec must be at most ${String(MAX_PATROL_INTERVAL_SEC)}`)
+  }
   return {
     strategy,
-    patrolIntervalSec: positiveInteger(
-      root.patrolIntervalSec,
-      DEFAULT_CONFIG.patrolIntervalSec,
-      'patrolIntervalSec',
-    ),
+    patrolIntervalSec,
     commandTimeoutSec: positiveInteger(
       root.commandTimeoutSec,
       DEFAULT_CONFIG.commandTimeoutSec,
