@@ -16,7 +16,22 @@ interface PendingRequest {
   readonly timer: NodeJS.Timeout
 }
 
+interface ChildState {
+  readonly child: ChildProcessWithoutNullStreams
+  readonly lines: ReadlineInterface
+  readonly errorLines: ReadlineInterface
+  readonly closed: Promise<void>
+  readonly onLine: (line: string) => void
+  readonly onErrorLine: (line: string) => void
+  readonly onError: (error: Error) => void
+  readonly onClose: (code: number | null, signal: NodeJS.Signals | null) => void
+  protocolClosed: boolean
+  disposed: boolean
+}
+
 type SpawnBridge = typeof spawn
+
+const PROCESS_CLOSE_TIMEOUT_MS = 5_000
 
 export interface BridgeProcessOptions {
   readonly config: ResolvedConfig['bridge']
@@ -31,9 +46,10 @@ export class BridgeProcess implements BrowserBridge {
   readonly #spawn: SpawnBridge
   readonly #log: (line: string) => void
   readonly #pending = new Map<string, PendingRequest>()
-  #child: ChildProcessWithoutNullStreams | null = null
-  #lines: ReadlineInterface | null = null
-  #errorLines: ReadlineInterface | null = null
+  #state: ChildState | null = null
+  #starting: Promise<void> | null = null
+  #terminating: Promise<void> | null = null
+  #closeOperation: Promise<void> | null = null
   #closed = false
 
   public constructor(options: BridgeProcessOptions) {
@@ -100,45 +116,80 @@ export class BridgeProcess implements BrowserBridge {
   }
 
   public async stop(): Promise<void> {
-    if (this.#child === null) return
+    if (this.#state === null) return
     await this.#request('stop', {}, 10_000)
   }
 
-  public async close(): Promise<void> {
-    if (this.#closed) return
-    const child = this.#child
-    if (child === null) {
-      this.#closed = true
+  public close(): Promise<void> {
+    if (this.#closeOperation !== null) return this.#closeOperation
+    this.#closed = true
+    const operation = this.#closeProcess()
+    this.#closeOperation = operation
+    return operation
+  }
+
+  async #closeProcess(): Promise<void> {
+    const state = this.#state
+    if (state === null) {
+      await this.#terminating
+      this.#rejectAll(new BrowserError('E_BROWSER_CLOSED', 'Browser bridge closed'))
       return
     }
+    let childClosed = false
     try {
       await this.#request('shutdown', {}, 10_000)
     } catch {
-      child.kill()
+      this.#kill(state.child)
+    }
+    try {
+      childClosed = await settlesWithin(state.closed, PROCESS_CLOSE_TIMEOUT_MS)
+      if (!childClosed) {
+        this.#kill(state.child, 'SIGKILL')
+        childClosed = await settlesWithin(state.closed, PROCESS_CLOSE_TIMEOUT_MS)
+      }
     } finally {
-      this.#closed = true
-      this.#lines?.close()
-      this.#lines = null
-      this.#errorLines?.close()
-      this.#errorLines = null
-      this.#child = null
+      if (this.#state === state) this.#state = null
+      this.#disposeState(state)
       this.#rejectAll(new BrowserError('E_BROWSER_CLOSED', 'Browser bridge closed'))
+    }
+    if (!childClosed) {
+      throw new BrowserError(
+        'E_BROWSER_TIMEOUT',
+        'Browser bridge did not exit after shutdown',
+        true,
+      )
     }
   }
 
   private async cancel(runId: string): Promise<void> {
-    if (this.#child === null) return
+    const state = this.#state
+    if (state === null) return
     try {
       await this.#request('cancel', { runId }, 5_000)
     } catch {
-      this.#child.kill()
+      this.#kill(state.child)
     }
   }
 
   async #ensureProcess(): Promise<void> {
     if (this.#closed) throw new BrowserError('E_BROWSER_CLOSED', 'Browser bridge is closed')
-    if (this.#child !== null) return
+    if (this.#state !== null) return
+    if (this.#starting !== null) return this.#starting
+    const starting = this.#startProcess()
+    this.#starting = starting
+    try {
+      await starting
+    } finally {
+      if (this.#starting === starting) this.#starting = null
+    }
+  }
+
+  async #startProcess(): Promise<void> {
+    await this.#terminating
+    this.#assertOpen()
+    if (this.#state !== null) return
     await mkdir(this.#config.environmentDir, { recursive: true, mode: 0o700 })
+    this.#assertOpen()
     const environment = bridgeEnvironment(
       this.#environment,
       this.#config.passEnvironment,
@@ -165,23 +216,7 @@ export class BridgeProcess implements BrowserBridge {
         windowsHide: true,
       },
     )
-    this.#child = child
-    this.#lines = createInterface({ input: child.stdout, crlfDelay: Infinity })
-    this.#lines.on('line', (line): void => this.#handleLine(line))
-    this.#errorLines = createInterface({ input: child.stderr, crlfDelay: Infinity })
-    this.#errorLines.on('line', (line): void => {
-      if (line !== '') this.#log(redactBrowserLog(line))
-    })
-    child.once('error', (error): void => this.#processFailed(error))
-    child.once('exit', (code, signal): void => {
-      this.#processFailed(
-        new BrowserError(
-          'E_BROWSER_UNAVAILABLE',
-          `Browser bridge exited (${code === null ? (signal ?? 'unknown') : String(code)})`,
-          true,
-        ),
-      )
-    })
+    this.#attach(child)
   }
 
   #request(
@@ -190,8 +225,8 @@ export class BridgeProcess implements BrowserBridge {
     timeoutMs: number,
     onEvent?: (event: BrowserEvent) => void,
   ): Promise<unknown> {
-    const child = this.#child
-    if (child === null) {
+    const state = this.#state
+    if (state === null) {
       return Promise.reject(
         new BrowserError('E_BROWSER_UNAVAILABLE', 'Browser bridge is not running', true),
       )
@@ -201,6 +236,7 @@ export class BridgeProcess implements BrowserBridge {
       const timer = setTimeout((): void => {
         this.#processFailed(
           new BrowserError('E_BROWSER_TIMEOUT', `Browser bridge ${method} timed out`, true),
+          state,
         )
       }, timeoutMs)
       this.#pending.set(id, {
@@ -210,7 +246,7 @@ export class BridgeProcess implements BrowserBridge {
         timer,
       })
       const frame = `${JSON.stringify({ v: 1, id, kind: 'request', method, params })}\n`
-      child.stdin.write(frame, 'utf8', (error): void => {
+      state.child.stdin.write(frame, 'utf8', (error): void => {
         if (error === null || error === undefined) return
         const pending = this.#pending.get(id)
         if (pending === undefined) return
@@ -223,19 +259,22 @@ export class BridgeProcess implements BrowserBridge {
     })
   }
 
-  #handleLine(line: string): void {
+  #handleLine(line: string, state: ChildState): void {
+    if (this.#state !== state) return
     let frame: unknown
     try {
       frame = JSON.parse(line) as unknown
     } catch {
       this.#processFailed(
         new BrowserError('E_BROWSER_PROTOCOL', 'Browser bridge emitted invalid JSON'),
+        state,
       )
       return
     }
     if (!isRecord(frame) || frame.v !== 1 || typeof frame.id !== 'string') {
       this.#processFailed(
         new BrowserError('E_BROWSER_PROTOCOL', 'Browser bridge emitted an invalid frame'),
+        state,
       )
       return
     }
@@ -245,13 +284,14 @@ export class BridgeProcess implements BrowserBridge {
       try {
         pending.onEvent?.(decodeEvent(frame.event))
       } catch (error: unknown) {
-        this.#processFailed(error)
+        this.#processFailed(error, state)
       }
       return
     }
     if (frame.kind !== 'response' || typeof frame.ok !== 'boolean') {
       this.#processFailed(
         new BrowserError('E_BROWSER_PROTOCOL', 'Browser bridge response is invalid'),
+        state,
       )
       return
     }
@@ -261,19 +301,108 @@ export class BridgeProcess implements BrowserBridge {
     else pending.reject(decodeError(frame.error))
   }
 
-  #processFailed(error: unknown): void {
+  #processFailed(error: unknown, state: ChildState): void {
+    if (this.#state !== state) return
     const failure =
       error instanceof BrowserError
         ? error
         : new BrowserError('E_BROWSER_UNAVAILABLE', 'Browser bridge process failed', true)
-    this.#lines?.close()
-    this.#lines = null
-    this.#errorLines?.close()
-    this.#errorLines = null
-    const child = this.#child
-    this.#child = null
-    if (child !== null && child.exitCode === null && child.signalCode === null) child.kill()
+    this.#state = null
+    this.#closeProtocol(state)
+    this.#kill(state.child)
     this.#rejectAll(failure)
+    const terminating = this.#finishTermination(state)
+    this.#terminating = terminating
+    const clearTermination = (): void => {
+      if (this.#terminating === terminating) this.#terminating = null
+    }
+    void terminating.then(clearTermination, clearTermination)
+  }
+
+  #attach(child: ChildProcessWithoutNullStreams): void {
+    let settleClose: (() => void) | undefined
+    const closed = new Promise<void>((resolve): void => {
+      let settled = false
+      settleClose = (): void => {
+        if (settled) return
+        settled = true
+        resolve()
+      }
+    })
+    if (settleClose === undefined) throw new Error('child close resolver was not initialized')
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity })
+    const errorLines = createInterface({ input: child.stderr, crlfDelay: Infinity })
+    const state: ChildState = {
+      child,
+      lines,
+      errorLines,
+      closed,
+      onLine: (line): void => this.#handleLine(line, state),
+      onErrorLine: (line): void => {
+        if (this.#state === state && line !== '') this.#log(redactBrowserLog(line))
+      },
+      onError: (error): void => {
+        if (child.pid === undefined) settleClose?.()
+        this.#processFailed(error, state)
+      },
+      onClose: (code, signal): void => {
+        settleClose?.()
+        this.#processFailed(
+          new BrowserError(
+            'E_BROWSER_UNAVAILABLE',
+            `Browser bridge exited (${code === null ? (signal ?? 'unknown') : String(code)})`,
+            true,
+          ),
+          state,
+        )
+      },
+      protocolClosed: false,
+      disposed: false,
+    }
+    this.#state = state
+    lines.on('line', state.onLine)
+    errorLines.on('line', state.onErrorLine)
+    child.once('error', state.onError)
+    child.once('close', state.onClose)
+  }
+
+  async #finishTermination(state: ChildState): Promise<void> {
+    try {
+      if (!(await settlesWithin(state.closed, PROCESS_CLOSE_TIMEOUT_MS))) {
+        this.#kill(state.child, 'SIGKILL')
+      }
+      await settlesWithin(state.closed, PROCESS_CLOSE_TIMEOUT_MS)
+    } finally {
+      this.#disposeState(state)
+    }
+  }
+
+  #closeProtocol(state: ChildState): void {
+    if (state.protocolClosed) return
+    state.protocolClosed = true
+    state.lines.off('line', state.onLine)
+    state.errorLines.off('line', state.onErrorLine)
+    state.lines.close()
+    state.errorLines.close()
+  }
+
+  #disposeState(state: ChildState): void {
+    if (state.disposed) return
+    state.disposed = true
+    this.#closeProtocol(state)
+    state.child.off('error', state.onError)
+    state.child.off('close', state.onClose)
+    state.child.stdin.destroy()
+    state.child.stdout.destroy()
+    state.child.stderr.destroy()
+  }
+
+  #kill(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals = 'SIGTERM'): void {
+    if (child.exitCode === null && child.signalCode === null) child.kill(signal)
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) throw new BrowserError('E_BROWSER_CLOSED', 'Browser bridge is closed')
   }
 
   #rejectAll(error: BrowserError): void {
@@ -282,6 +411,18 @@ export class BridgeProcess implements BrowserBridge {
       pending.reject(error)
       this.#pending.delete(id)
     }
+  }
+}
+
+async function settlesWithin(operation: Promise<void>, timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<boolean>((resolve): void => {
+    timer = setTimeout((): void => resolve(false), timeoutMs)
+  })
+  try {
+    return await Promise.race([operation.then((): boolean => true), timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
 }
 
