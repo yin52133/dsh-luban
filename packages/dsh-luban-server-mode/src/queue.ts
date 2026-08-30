@@ -106,12 +106,15 @@ export class BuildQueue {
   readonly #publish: ((event: BuildQueueEvent) => void) | undefined
   readonly #onError: (error: unknown) => void
   readonly #listeners = new Set<(event: BuildQueueEvent) => void>()
+  readonly #activeAlerts = new Set<Promise<void>>()
   readonly #running = new Map<
     string,
     { readonly controller: AbortController; readonly task: Promise<void> }
   >()
   #timer: ReturnType<typeof setInterval> | undefined
-  #draining = false
+  #lifecycle: Promise<void> = Promise.resolve()
+  #drainOperation: Promise<void> | undefined
+  #drainRequested = false
   #paused = false
   #stopping = false
   #started = false
@@ -139,7 +142,11 @@ export class BuildQueue {
     this.#onError = options.onError ?? ((): void => undefined)
   }
 
-  public async start(): Promise<void> {
+  public start(): Promise<void> {
+    return this.#serializeLifecycle(async (): Promise<void> => this.#start())
+  }
+
+  async #start(): Promise<void> {
     if (this.#started) return
     this.#started = true
     this.#stopping = false
@@ -258,6 +265,7 @@ export class BuildQueue {
       if (tasks.length === 0) {
         const jobs = await this.queue()
         if (jobs.every((job): boolean => job.status !== 'queued' && job.status !== 'running')) {
+          await this.#waitForAlerts()
           return
         }
         if (jobs.some((job): boolean => job.status === 'running')) {
@@ -266,55 +274,107 @@ export class BuildQueue {
           })
           continue
         }
-        if ((await this.resourceReport()).paused) return
+        if ((await this.resourceReport()).paused) {
+          await this.#waitForAlerts()
+          return
+        }
         continue
       }
       await Promise.all(tasks)
     }
   }
 
-  public async dispose(): Promise<void> {
+  public dispose(): Promise<void> {
+    return this.#serializeLifecycle(async (): Promise<void> => this.#dispose())
+  }
+
+  async #dispose(): Promise<void> {
     this.#stopping = true
     this.#started = false
     if (this.#timer !== undefined) clearInterval(this.#timer)
     this.#timer = undefined
     for (const entry of this.#running.values()) entry.controller.abort()
+    const draining = this.#drainOperation
+    if (draining !== undefined) await Promise.allSettled([draining])
+    for (const entry of this.#running.values()) entry.controller.abort()
     await Promise.allSettled([...this.#running.values()].map((entry) => entry.task))
+    await this.#waitForAlerts()
+    this.#drainRequested = false
     this.#listeners.clear()
+  }
+
+  #serializeLifecycle(operation: () => Promise<void>): Promise<void> {
+    const scheduled = this.#lifecycle.then(operation)
+    this.#lifecycle = scheduled.catch((): void => undefined)
+    return scheduled
   }
 
   #schedule(): void {
     if (this.#stopping || !this.#started) return
+    if (this.#drainOperation !== undefined) {
+      this.#drainRequested = true
+      return
+    }
     void this.#drain().catch(this.#onError)
   }
 
-  async #drain(): Promise<void> {
-    if (this.#draining || this.#stopping) return
-    this.#draining = true
-    try {
-      const report = await this.resourceReport()
-      const changedToPaused = report.paused && !this.#paused
-      this.#paused = report.paused
-      this.#emit({ type: 'resource', report })
-      if (changedToPaused && this.#alerts !== undefined) {
-        void this.#alerts.guardExceeded(report).catch(this.#onError)
+  #drain(): Promise<void> {
+    if (this.#stopping) return Promise.resolve()
+    if (this.#drainOperation !== undefined) return this.#drainOperation
+    const operation = this.#drainUntilQuiescent().finally((): void => {
+      if (this.#drainOperation !== operation) return
+      const reschedule = this.#shouldDrainAgain()
+      this.#drainOperation = undefined
+      if (reschedule) {
+        this.#drainRequested = false
+        this.#schedule()
       }
-      if (report.paused) return
-      const available = this.#maxConcurrent - this.#running.size
-      if (available <= 0) return
-      const records = Object.values((await this.#store.read()).records)
-        .filter((record): boolean => record.job.status === 'queued')
-        .sort((left, right): number => left.createdAt - right.createdAt)
-        .slice(0, available)
-      for (const record of records) await this.#launch(record.job.id)
-    } finally {
-      this.#draining = false
+    })
+    this.#drainOperation = operation
+    return operation
+  }
+
+  async #drainUntilQuiescent(): Promise<void> {
+    do {
+      this.#drainRequested = false
+      await this.#performDrain()
+    } while (this.#shouldDrainAgain())
+  }
+
+  async #performDrain(): Promise<void> {
+    const report = await this.resourceReport()
+    if (this.#isStopping()) return
+    const changedToPaused = report.paused && !this.#paused
+    this.#paused = report.paused
+    this.#emit({ type: 'resource', report })
+    if (changedToPaused && this.#alerts !== undefined) {
+      this.#trackAlert(this.#alerts.guardExceeded(report))
     }
+    if (report.paused) return
+    const available = this.#maxConcurrent - this.#running.size
+    if (available <= 0) return
+    const records = Object.values((await this.#store.read()).records)
+      .filter((record): boolean => record.job.status === 'queued')
+      .sort((left, right): number => left.createdAt - right.createdAt)
+      .slice(0, available)
+    for (const record of records) {
+      if (this.#isStopping()) return
+      await this.#launch(record.job.id)
+    }
+  }
+
+  #isStopping(): boolean {
+    return this.#stopping
+  }
+
+  #shouldDrainAgain(): boolean {
+    return this.#drainRequested && !this.#stopping
   }
 
   async #launch(jobId: string): Promise<void> {
     let runningJob: BuildJob | undefined
     await this.#store.update((ledger): BuildLedger => {
+      if (this.#isStopping()) return ledger
       const record = ledger.records[jobId]
       if (record?.job.status !== 'queued') return ledger
       runningJob = {
@@ -331,7 +391,7 @@ export class BuildQueue {
         },
       }
     })
-    if (runningJob === undefined) return
+    if (runningJob === undefined || this.#isStopping()) return
     this.#emit({ type: 'job', job: runningJob, from: 'queued', to: 'running' })
     const controller = new AbortController()
     const task = this.#run(runningJob, controller.signal)
@@ -409,9 +469,23 @@ export class BuildQueue {
     if (finished === undefined) return
     this.#emit({ type: 'job', job: finished, from: 'running', to })
     if (to === 'failed' && this.#alerts !== undefined) {
-      void this.#alerts.jobFailed(finished).catch(this.#onError)
+      this.#trackAlert(this.#alerts.jobFailed(finished))
     }
     await this.#enforceRetention()
+  }
+
+  #trackAlert(operation: Promise<void>): void {
+    const tracked = operation
+      .catch(this.#onError)
+      .finally((): void => void this.#activeAlerts.delete(tracked))
+    this.#activeAlerts.add(tracked)
+    void tracked.catch((): void => undefined)
+  }
+
+  async #waitForAlerts(): Promise<void> {
+    while (this.#activeAlerts.size > 0) {
+      await Promise.allSettled([...this.#activeAlerts])
+    }
   }
 
   async #enforceRetention(): Promise<void> {

@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -8,6 +8,7 @@ import type { BuildAlertSink } from '../src/alerts.js'
 import { ArtifactManager } from '../src/artifacts.js'
 import type { BuildTemplateConfig } from '../src/config.js'
 import type { BuildExecutionRequest, BuildExecutor } from '../src/executor.js'
+import type { BuildLedger } from '../src/ledger.js'
 import { BuildLedgerStore } from '../src/ledger.js'
 import { BuildQueue } from '../src/queue.js'
 import type { ResourceProbe, ResourceSample } from '../src/resources.js'
@@ -33,6 +34,68 @@ class FakeProbe implements ResourceProbe {
       return new Promise<ResourceSample>(() => undefined)
     }
     return Promise.resolve(this.value)
+  }
+}
+
+class GatedProbe extends FakeProbe {
+  readonly started: Promise<void>
+  #markStarted: () => void = (): void => undefined
+  #releaseSample: ((sample: ResourceSample) => void) | undefined
+
+  public constructor() {
+    super()
+    this.started = new Promise<void>((resolve): void => {
+      this.#markStarted = resolve
+    })
+  }
+
+  public override sample(): Promise<ResourceSample> {
+    return new Promise<ResourceSample>((resolve): void => {
+      this.#releaseSample = resolve
+      this.#markStarted()
+    })
+  }
+
+  public release(): void {
+    const release = this.#releaseSample
+    if (release === undefined) throw new Error('resource probe has not started')
+    this.#releaseSample = undefined
+    release(this.value)
+  }
+}
+
+class GatedUpdateBuildLedgerStore extends BuildLedgerStore {
+  readonly started: Promise<void>
+  readonly #released: Promise<void>
+  #markStarted: () => void = (): void => undefined
+  #releaseUpdate: () => void = (): void => undefined
+  readonly #gateAt: number
+  #updateCount = 0
+
+  public constructor(filePath: string, gateAt = 1) {
+    super(filePath)
+    this.#gateAt = gateAt
+    this.started = new Promise<void>((resolve): void => {
+      this.#markStarted = resolve
+    })
+    this.#released = new Promise<void>((resolve): void => {
+      this.#releaseUpdate = resolve
+    })
+  }
+
+  public override async update(
+    mutator: (ledger: BuildLedger) => BuildLedger,
+  ): Promise<BuildLedger> {
+    this.#updateCount += 1
+    if (this.#updateCount === this.#gateAt) {
+      this.#markStarted()
+      await this.#released
+    }
+    return super.update(mutator)
+  }
+
+  public release(): void {
+    this.#releaseUpdate()
   }
 }
 
@@ -100,6 +163,33 @@ class CapturingAlerts implements BuildAlertSink {
   }
 }
 
+class GatedFailureAlerts extends CapturingAlerts {
+  readonly started: Promise<void>
+  readonly #released: Promise<void>
+  #markStarted: () => void = (): void => undefined
+  #releaseAlert: () => void = (): void => undefined
+
+  public constructor() {
+    super()
+    this.started = new Promise<void>((resolve): void => {
+      this.#markStarted = resolve
+    })
+    this.#released = new Promise<void>((resolve): void => {
+      this.#releaseAlert = resolve
+    })
+  }
+
+  public override async jobFailed(job: BuildJob): Promise<void> {
+    await super.jobFailed(job)
+    this.#markStarted()
+    await this.#released
+  }
+
+  public release(): void {
+    this.#releaseAlert()
+  }
+}
+
 interface QueueFixture {
   readonly directory: string
   readonly workspace: string
@@ -119,6 +209,9 @@ async function fixture(
     readonly failArtifactDiscovery?: boolean
     readonly concurrencyBarrier?: number
     readonly probeTimeoutMs?: number
+    readonly probe?: FakeProbe
+    readonly alerts?: CapturingAlerts
+    readonly storeFactory?: (filePath: string) => BuildLedgerStore
   } = {},
 ): Promise<QueueFixture> {
   const directory = join(tmpdir(), `luban-queue-${randomUUID()}`)
@@ -128,11 +221,12 @@ async function fixture(
   const artifacts = options.failArtifactDiscovery
     ? new FailingArtifactManager(join(directory, 'artifacts'))
     : new ArtifactManager(join(directory, 'artifacts'))
-  const probe = new FakeProbe()
+  const probe = options.probe ?? new FakeProbe()
   const executor = new FakeExecutor(options.concurrencyBarrier)
-  const alerts = new CapturingAlerts()
+  const alerts = options.alerts ?? new CapturingAlerts()
   const errors: unknown[] = []
-  const store = new BuildLedgerStore(join(directory, 'ledger.json'))
+  const ledgerPath = join(directory, 'ledger.json')
+  const store = options.storeFactory?.(ledgerPath) ?? new BuildLedgerStore(ledgerPath)
   let timestamp = 1_788_048_000_000
   const queue = new BuildQueue({
     store,
@@ -330,5 +424,136 @@ describe('BuildQueue', (): void => {
     expect((await queue.get(id)).status).toBe('done')
     expect(executor.maximum).toBe(1)
     await queue.dispose()
+  })
+
+  it('waits for an in-flight drain and does not launch queued work while disposing', async (): Promise<void> => {
+    const probe = new GatedProbe()
+    const { directory, executor, queue, workspace } = await fixture({ probe })
+    await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } })
+    await queue.start()
+    await probe.started
+
+    let disposed = false
+    const disposal = queue.dispose().then((): void => {
+      disposed = true
+    })
+    await new Promise<void>((resolve): void => {
+      setImmediate(resolve)
+    })
+    const resolvedBeforeProbeRelease = disposed
+    probe.release()
+    await disposal
+
+    expect(resolvedBeforeProbeRelease).toBe(false)
+    expect(executor.maximum).toBe(0)
+    await rm(directory, { recursive: true, force: true })
+    await new Promise<void>((resolve): void => {
+      setTimeout(resolve, 25)
+    })
+    await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' })
+    directories.delete(directory)
+  })
+
+  it('waits for active failure alerts while disposing', async (): Promise<void> => {
+    const alerts = new GatedFailureAlerts()
+    const { queue, workspace } = await fixture({ alerts, maxConcurrent: 1 })
+    await queue.start()
+    await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'fail' } })
+    await alerts.started
+
+    let disposed = false
+    const disposal = queue.dispose().then((): void => {
+      disposed = true
+    })
+    await new Promise<void>((resolve): void => {
+      setImmediate(resolve)
+    })
+    const resolvedBeforeAlertRelease = disposed
+    alerts.release()
+    await disposal
+
+    expect(resolvedBeforeAlertRelease).toBe(false)
+    expect(alerts.failures).toHaveLength(1)
+  })
+
+  it('starts the next queued job from completion without waiting for the patrol interval', async (): Promise<void> => {
+    const { queue, workspace } = await fixture({
+      concurrencyBarrier: 1,
+      maxConcurrent: 1,
+    })
+    await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } })
+    await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace, mode: 'ok' } })
+    await queue.start()
+
+    await expect
+      .poll(
+        async (): Promise<number> =>
+          (await queue.queue()).filter((job): boolean => job.status === 'done').length,
+        { interval: 10, timeout: 2_000 },
+      )
+      .toBe(2)
+    await queue.dispose()
+  })
+
+  it('does not launch a job when disposal starts during its ledger transition', async (): Promise<void> => {
+    let gatedStore: GatedUpdateBuildLedgerStore | undefined
+    const { executor, queue, workspace } = await fixture({
+      maxConcurrent: 1,
+      storeFactory: (filePath): BuildLedgerStore => {
+        const store = new GatedUpdateBuildLedgerStore(filePath, 3)
+        gatedStore = store
+        return store
+      },
+    })
+    if (gatedStore === undefined) throw new Error('gated ledger store was not created')
+    const queued = await queue.enqueue({
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'ok' },
+    })
+    await queue.start()
+    await gatedStore.started
+
+    const disposal = queue.dispose()
+    await new Promise<void>((resolve): void => {
+      setImmediate(resolve)
+    })
+    gatedStore.release()
+    await disposal
+
+    expect(executor.maximum).toBe(0)
+    expect((await queue.get(queued.id)).status).toBe('queued')
+  })
+
+  it('serializes start and disposal while ledger recovery is in flight', async (): Promise<void> => {
+    let gatedStore: GatedUpdateBuildLedgerStore | undefined
+    const { directory, queue } = await fixture({
+      storeFactory: (filePath): BuildLedgerStore => {
+        const store = new GatedUpdateBuildLedgerStore(filePath)
+        gatedStore = store
+        return store
+      },
+    })
+    if (gatedStore === undefined) throw new Error('gated ledger store was not created')
+
+    const start = queue.start()
+    await gatedStore.started
+    let disposed = false
+    const disposal = queue.dispose().then((): void => {
+      disposed = true
+    })
+    await new Promise<void>((resolve): void => {
+      setImmediate(resolve)
+    })
+    const resolvedBeforeRecoveryRelease = disposed
+    gatedStore.release()
+    await Promise.all([start, disposal])
+
+    expect(resolvedBeforeRecoveryRelease).toBe(false)
+    await rm(directory, { recursive: true, force: true })
+    await new Promise<void>((resolve): void => {
+      setTimeout(resolve, 25)
+    })
+    await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' })
+    directories.delete(directory)
   })
 })
