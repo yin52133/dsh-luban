@@ -232,7 +232,7 @@ pnpm --filter dsh-luban-keepalive build
 pnpm --filter dsh-luban-keepalive pack --dry-run
 ```
 
-Inspect the dry-run file list, run the repository release/security gates, then publish through the
+Inspect the dry-run file list, run the repository release quality checks, then publish through the
 reviewed release workflow.
 
 ## License

@@ -18,10 +18,10 @@ out-of-tree Luban and A-class bundles are added with `dsh plugin`.
    bash scripts/install-3rd-party.sh --profile ubuntu-server --dry-run
    ```
 
-   The schema-v2 lock pins `dshmarket@1.36.0`, `dsh-better-sidebar@0.17.1`,
-   and `@furongjun1999/dsh-memory@0.4.0`, including npm metadata identity,
-   repository, license, and SHA-512 integrity. Preview mode makes no registry
-   request and starts no `dsh` child process.
+   The version lock pins `dshmarket@1.36.0`, `dsh-better-sidebar@0.17.1`, and
+   `@furongjun1999/dsh-memory@0.4.0` so repeated installations resolve the same
+   direct versions. Preview mode makes no registry request and starts no `dsh`
+   child process.
 
 3. Apply only on a Linux host after reviewing the exact package specs. Apply
    requires an absolute, non-root DSH home and an approval actor:

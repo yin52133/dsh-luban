@@ -9,8 +9,8 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 
 - Added a fail-closed M12 target-host profile smoke runner for isolated DSH
   fixture installation, host/client lifecycle checks, restart, and cleanup.
-- Added an opt-in M11 production browser runner and same-clean-SHA Windows/Ubuntu
-  evidence aggregator with nonce, screenshot, platform, and secret boundaries.
+- Added an opt-in M11 production browser runner and Windows/Ubuntu result
+  aggregator with browser progress, page readback, and screenshot evidence.
 - Added a mounted M06 visual readback acceptance runner through the production
   attachment and DSH followup path, with exact message/turn/route evidence and
   fail-closed cleanup.
@@ -22,9 +22,8 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
   `dsh --profile ubuntu-server --no-open` and made the exact
   `LUBAN_BOOT_RESTORE=1` sentinel force M03 recovery even when profile config
   disables boot restore.
-- Hardened the A-class installers with a schema-v2 identity/integrity lock,
-  official-registry metadata checks, target-host and DSH_HOME binding, explicit
-  approval attribution, and separately approved exact unpinned resolution.
+- Made A-class installation repeatable with fixed package versions, target-host
+  checks, an isolated DSH_HOME, idempotent reruns, and post-install load checks.
 - Made night-task capacity reservation and terminal scheduler accounting a
   single crash-safe ledger transaction across concurrent schedulers and days.
 - Aligned HUD context usage with the DSH rc2 session projection and retained a
@@ -41,7 +40,7 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 - Initial DSH Luban monorepo foundation and module implementations.
 - M12 plugin scaffolding with optional DSH `0.1.1-rc.2` lazy-CJS client output.
 - Cross-platform pinned A-class installer previews and dual profile templates.
-- Fixed-version, README, manifest, secret, and npm payload release gates.
+- Fixed-version, README, manifest, and npm payload release checks.
 - Protected tag release workflow that reuses identical tarballs for npm and
   GitHub Release artifacts.
 

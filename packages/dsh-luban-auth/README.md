@@ -4,6 +4,10 @@
 It authenticates HTTP, SSE, and WebSocket traffic and supplies the account
 identity used to isolate Luban data and DSH session context.
 
+This package targets a trusted LAN and separates a small number of users'
+contexts. It is not an enterprise authorization system and does not claim to
+protect the service from hostile clients on the same network.
+
 ## Features
 
 - Local accounts, expiring login sessions, logout, and global session revocation.
