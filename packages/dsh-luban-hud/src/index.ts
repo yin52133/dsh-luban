@@ -11,6 +11,7 @@ import {
   DshContextEstimatorProvider,
   DshRateCollector,
   DshSessionTelemetryProvider,
+  type SessionProjectionReader,
 } from './dsh-telemetry.js'
 import { HudHttpApi } from './http-api.js'
 import { HudKeepaliveHealthStore } from './keepalive-health.js'
@@ -53,6 +54,7 @@ export {
   tokenUsageTotal,
 } from './dsh-telemetry.js'
 export type { AgentLookup } from './dsh-telemetry.js'
+export type { SessionProjectionReader, SessionProjectionResolver } from './dsh-telemetry.js'
 export { HudEventStream, HudHttpApi } from './http-api.js'
 export { HudKeepaliveHealthStore } from './keepalive-health.js'
 export { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
@@ -104,8 +106,19 @@ export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
       ctx.logger.warn(`luban-hud: telemetry sampling failed: ${message}`)
     },
   })
-  telemetry.register(new DshSessionTelemetryProvider(ctx.agents))
-  telemetry.register(new DshContextEstimatorProvider(ctx.agents))
+  const resolveProjections = (): SessionProjectionReader | undefined => {
+    const service = (ctx as unknown as { get(name: string): unknown }).get('sessionProjections')
+    if (
+      service === null ||
+      typeof service !== 'object' ||
+      typeof (service as { snapshot?: unknown }).snapshot !== 'function'
+    ) {
+      return undefined
+    }
+    return service as SessionProjectionReader
+  }
+  telemetry.register(new DshSessionTelemetryProvider(ctx.agents, process.cwd(), resolveProjections))
+  telemetry.register(new DshContextEstimatorProvider(ctx.agents, resolveProjections))
   telemetry.register(new RateTelemetryProvider(window))
   const publicConfig = Object.freeze({ thresholds: config.thresholds, display: config.display })
   const keepalive = new HudKeepaliveHealthStore()

@@ -18,6 +18,27 @@ const ROLE_OVERHEAD = 4
 
 export type AgentLookup = Pick<AgentRegistry, 'currentInitiator' | 'get' | 'list'>
 
+/** Optional read face of DSH's rc2 session-projection capability seam. */
+export interface SessionProjectionReader {
+  snapshot(session: Session): {
+    readonly values: Readonly<Record<string, unknown>>
+  }
+}
+
+export type SessionProjectionResolver = () => SessionProjectionReader | undefined
+
+interface ContextPressureProjection {
+  readonly pressureTokens?: unknown
+  readonly projectedTokens?: unknown
+  readonly contextWindow?: unknown
+}
+
+interface ProjectedContext {
+  readonly used: number | 'unknown'
+  readonly max: number | 'unknown'
+  readonly ratio: number | 'unknown'
+}
+
 /** Prefer causal attribution, then a running agent, then the newest registered agent. */
 export function selectTelemetryAgent(agents: AgentLookup): Agent | undefined {
   try {
@@ -53,6 +74,44 @@ function tokenCountTotal(values: readonly unknown[]): number | 'unknown' {
 
 function optionalTokenCount(value: unknown): unknown {
   return value === undefined ? 0 : value
+}
+
+function nonNegativeTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+function positiveTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+/** Read token-meter's official rc2 occupancy view without making the seam mandatory. */
+function projectedContext(
+  session: Session,
+  resolveProjections: SessionProjectionResolver | undefined,
+): ProjectedContext | undefined {
+  if (resolveProjections === undefined) return undefined
+  try {
+    const reader = resolveProjections()
+    if (reader === undefined) return undefined
+    const values = reader.snapshot(session).values
+    if (!Object.hasOwn(values, 'contextPressure')) return undefined
+    const projection = values.contextPressure
+    if (projection === null || typeof projection !== 'object') return undefined
+    const context = projection as ContextPressureProjection
+    const used =
+      nonNegativeTokenCount(context.projectedTokens) ??
+      nonNegativeTokenCount(context.pressureTokens) ??
+      'unknown'
+    const max = positiveTokenCount(context.contextWindow) ?? 'unknown'
+    return {
+      used,
+      max,
+      ratio: used === 'unknown' || max === 'unknown' ? 'unknown' : used / max,
+    }
+  } catch {
+    // The optional service may disappear during plugin teardown; legacy telemetry remains safe.
+    return undefined
+  }
 }
 
 export function tokenUsageTotal(usage: TokenUsage): number | 'unknown' {
@@ -149,10 +208,16 @@ export class DshSessionTelemetryProvider implements TelemetryProvider {
   public readonly id = 'dsh-session'
   readonly #agents: AgentLookup
   readonly #workspaceRoot: string
+  readonly #resolveProjections: SessionProjectionResolver | undefined
 
-  public constructor(agents: AgentLookup, workspaceRoot = process.cwd()) {
+  public constructor(
+    agents: AgentLookup,
+    workspaceRoot = process.cwd(),
+    resolveProjections?: SessionProjectionResolver,
+  ) {
     this.#agents = agents
     this.#workspaceRoot = workspaceRoot
+    this.#resolveProjections = resolveProjections
   }
 
   public capabilities(): readonly ['context', 'workspace', 'model'] {
@@ -171,15 +236,19 @@ export class DshSessionTelemetryProvider implements TelemetryProvider {
     if (agent === undefined) return Promise.resolve({})
     const requestContext = agent.session.requestContext()
     const requestHeader = agent.session.requestHeader()
-    const usage = latestUsage(agent.session)
-    const used = usage === undefined ? 'unknown' : contextPressureTotal(usage)
+    const officialContext = projectedContext(agent.session, this.#resolveProjections)
+    const usage = officialContext === undefined ? latestUsage(agent.session) : undefined
+    const used =
+      officialContext?.used ?? (usage === undefined ? 'unknown' : contextPressureTotal(usage))
     const max =
-      requestContext?.contextWindow !== undefined &&
+      officialContext?.max ??
+      (requestContext?.contextWindow !== undefined &&
       Number.isFinite(requestContext.contextWindow) &&
       requestContext.contextWindow > 0
         ? requestContext.contextWindow
-        : 'unknown'
-    const ratio = used === 'unknown' || max === 'unknown' ? 'unknown' : used / max
+        : 'unknown')
+    const ratio =
+      officialContext?.ratio ?? (used === 'unknown' || max === 'unknown' ? 'unknown' : used / max)
     const model = requestHeader?.config.model ?? requestContext?.model ?? agent.options.model
     const reasoning = requestHeader?.config.reasoningEffort
     return Promise.resolve({
@@ -197,9 +266,11 @@ export class DshSessionTelemetryProvider implements TelemetryProvider {
 export class DshContextEstimatorProvider implements TelemetryProvider {
   public readonly id = 'dsh-token-estimator'
   readonly #agents: AgentLookup
+  readonly #resolveProjections: SessionProjectionResolver | undefined
 
-  public constructor(agents: AgentLookup) {
+  public constructor(agents: AgentLookup, resolveProjections?: SessionProjectionResolver) {
     this.#agents = agents
+    this.#resolveProjections = resolveProjections
   }
 
   public capabilities(): readonly ['context'] {
@@ -215,8 +286,10 @@ export class DshContextEstimatorProvider implements TelemetryProvider {
   }
 
   #sampleAgent(agent: Agent | undefined): Promise<Partial<TelemetrySnapshot>> {
+    const hasOfficialProjection =
+      agent !== undefined && projectedContext(agent.session, this.#resolveProjections) !== undefined
     return Promise.resolve(
-      agent === undefined
+      agent === undefined || hasOfficialProjection
         ? {}
         : {
             context: {

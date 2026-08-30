@@ -1,10 +1,13 @@
 import { resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
+import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { asSessionId } from '@luban/core'
+import { TokenMeter, type ContextPressureProjection } from '@deepseek-ai/dsh-token-meter'
+import { asSessionId, type TelemetrySnapshot } from '@luban/core'
 import { describe, expect, it } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import {
@@ -17,6 +20,16 @@ import {
   tokenUsageTotal,
 } from '../src/dsh-telemetry.js'
 import { SlidingRateWindow, type MonotonicClock } from '../src/rate-window.js'
+
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    'compaction/prune': {
+      shadowedRange: { start: number; end: number }
+      shadowedSeqs: number[]
+      shadowedTokenCount: number
+    }
+  }
+}
 
 class ManualClock implements MonotonicClock {
   public value = 300_000
@@ -53,12 +66,16 @@ function lookup(agent: Agent): AgentLookup {
   }
 }
 
-function appendAssistant(value: Session, usage?: TokenUsage): SessionEvent<'assistant/message'> {
+function appendAssistant(
+  value: Session,
+  usage?: TokenUsage,
+  step = value.seq,
+): SessionEvent<'assistant/message'> {
   return value.append(
     'assistant/message',
     {
       turn: 0,
-      step: value.seq,
+      step,
       message: createAssistantMessage({
         content: [{ type: 'text', text: 'measured response' }],
         source: { provider: 'deepseek', model: 'deepseek-chat' },
@@ -87,6 +104,43 @@ function historicalSession(idValue: string, time: number, usage: TokenUsage): Se
     surfaceOp: 'append',
   }
   return { id, events: [event] } as unknown as Session
+}
+
+function publish(context: Context, value: Session, event: SessionEvent): void {
+  context.emit('session/event', value, event)
+}
+
+function officialContext(
+  projections: SessionProjectionRegistry,
+  value: Session,
+): ContextPressureProjection {
+  const projection = projections.snapshot(value).values.contextPressure
+  if (projection === undefined) throw new Error('token-meter contextPressure projection is missing')
+  return projection
+}
+
+function expectWithinFivePercent(
+  snapshot: TelemetrySnapshot,
+  projection: ContextPressureProjection,
+): void {
+  const used = projection.projectedTokens ?? projection.pressureTokens
+  if (used === undefined || projection.contextWindow === undefined) {
+    throw new Error('official context occupancy is incomplete')
+  }
+  if (snapshot.context.used === 'unknown' || snapshot.context.max === 'unknown') {
+    throw new Error('HUD context occupancy is incomplete')
+  }
+  const expectedRatio = used / projection.contextWindow
+  const usedError = Math.abs(snapshot.context.used - used) / Math.max(used, 1)
+  const maxError =
+    Math.abs(snapshot.context.max - projection.contextWindow) / projection.contextWindow
+  const ratioError =
+    snapshot.context.ratio === 'unknown'
+      ? Number.POSITIVE_INFINITY
+      : Math.abs(snapshot.context.ratio - expectedRatio) / Math.max(expectedRatio, Number.EPSILON)
+  expect(usedError).toBeLessThanOrEqual(0.05)
+  expect(maxError).toBeLessThanOrEqual(0.05)
+  expect(ratioError).toBeLessThanOrEqual(0.05)
 }
 
 describe('rc2 DSH telemetry providers', (): void => {
@@ -166,6 +220,148 @@ describe('rc2 DSH telemetry providers', (): void => {
         cacheWriteTokens: 5,
       }),
     ).toBe(115)
+  })
+
+  it('tracks the real rc2 token-meter projection across append and compaction', async (): Promise<void> => {
+    const context = new Context()
+    const projectionFiber = context.plugin(SessionProjectionRegistry)
+    await projectionFiber
+    const meterFiber = context.plugin(TokenMeter)
+    await meterFiber
+
+    try {
+      const value = session('hud-official-projection', resolve('workspace-root'))
+      publish(
+        context,
+        value,
+        value.append('request/context', {
+          provider: 'deepseek',
+          model: 'deepseek-chat',
+          contextWindow: 4_096,
+        }),
+      )
+      publish(
+        context,
+        value,
+        value.append('request/header', {
+          header: { config: { provider: 'deepseek', model: 'deepseek-chat' } },
+          reason: 'initial',
+        }),
+      )
+      publish(context, value, value.append('turn/start', { turn: 0 }))
+      publish(
+        context,
+        value,
+        value.append(
+          'user/message',
+          createUserMessage({
+            content: [{ type: 'text', text: 'initial prompt '.repeat(20) }],
+            source: { kind: 'user' },
+          }),
+          { surfaceOp: 'append' },
+        ),
+      )
+
+      const projections = context.sessionProjections
+      const meter = context.tokenMeter
+      const resolveProjections = (): SessionProjectionRegistry => projections
+      const agents = lookup(agentFor(value))
+      const aggregator = new DefaultTelemetryAggregator({
+        refreshMs: 1_000,
+        providerTimeoutMs: 100,
+      })
+      aggregator.register(
+        new DshSessionTelemetryProvider(agents, resolve('workspace-root'), resolveProjections),
+      )
+      aggregator.register(new DshContextEstimatorProvider(agents, resolveProjections))
+
+      const beforeUsageProjection = officialContext(projections, value)
+      expect(beforeUsageProjection).toEqual({ contextWindow: 4_096 })
+      expect((await aggregator.snapshotFor(asSessionId(value.id))).context).toEqual({
+        used: 'unknown',
+        max: 4_096,
+        ratio: 'unknown',
+      })
+
+      publish(context, value, value.append('step/start', { turn: 0, step: 0 }))
+      publish(
+        context,
+        value,
+        appendAssistant(
+          value,
+          {
+            inputTokens: 700,
+            outputTokens: 50,
+            cacheReadTokens: 100,
+            cacheWriteTokens: 20,
+          },
+          0,
+        ),
+      )
+      publish(context, value, value.append('step/end', { turn: 0, step: 0 }))
+      publish(context, value, value.append('turn/end', { turn: 0, reason: { kind: 'completed' } }))
+
+      const initialProjection = officialContext(projections, value)
+      expect(initialProjection.projectedTokens).toBeGreaterThan(
+        initialProjection.pressureTokens ?? Number.POSITIVE_INFINITY,
+      )
+      const initialHud = await aggregator.snapshotFor(asSessionId(value.id))
+      expectWithinFivePercent(initialHud, initialProjection)
+      expect(initialHud.context.used).toBe(initialProjection.projectedTokens)
+      const initialUsed = initialProjection.projectedTokens ?? 0
+
+      const appended = value.append(
+        'user/message',
+        createUserMessage({
+          content: [{ type: 'text', text: 'new surface context '.repeat(40) }],
+          source: { kind: 'plugin', plugin: 'hud-test' },
+        }),
+        { surfaceOp: 'append' },
+      )
+      publish(context, value, appended)
+      const appendedProjection = officialContext(projections, value)
+      const appendedHud = await aggregator.snapshotFor(asSessionId(value.id))
+      expectWithinFivePercent(appendedHud, appendedProjection)
+      expect(appendedProjection.projectedTokens).toBeGreaterThan(initialUsed)
+
+      const beforeCompaction = meter.measure(value)
+      const shadowed = beforeCompaction.nodes.slice(0, 2)
+      const start = shadowed.at(0)?.seq
+      const end = shadowed.at(-1)?.seq
+      if (start === undefined || end === undefined) throw new Error('surface prefix is missing')
+      const shadowedSeqs = shadowed.map((node): number => node.seq)
+      const shadowedTokenCount = shadowed.reduce((total, node): number => total + node.tokens, 0)
+      publish(
+        context,
+        value,
+        value.append('compaction/prune', {
+          shadowedRange: { start, end },
+          shadowedSeqs,
+          shadowedTokenCount,
+        }),
+      )
+      const replacement = value.append(
+        'user/message',
+        createUserMessage({
+          content: [{ type: 'text', text: 'compact summary' }],
+          source: { kind: 'plugin', plugin: 'hud-test' },
+        }),
+        {
+          surfaceOp: { op: 'replace', start, end },
+          sourceEventSeqs: shadowedSeqs,
+        },
+      )
+      publish(context, value, replacement)
+      const compactedProjection = officialContext(projections, value)
+      const compactedHud = await aggregator.snapshotFor(asSessionId(value.id))
+      expectWithinFivePercent(compactedHud, compactedProjection)
+      expect(compactedProjection.projectedTokens).toBeLessThan(
+        appendedProjection.projectedTokens ?? Number.NEGATIVE_INFINITY,
+      )
+      expect(meter.measure(value).surfaceTokens).toBeLessThan(beforeCompaction.surfaceTokens)
+    } finally {
+      await Promise.allSettled([meterFiber.dispose(), projectionFiber.dispose()])
+    }
   })
 
   it('samples the requested session instead of the global newest-agent selection', async (): Promise<void> => {
