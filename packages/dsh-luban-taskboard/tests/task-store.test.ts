@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -6,7 +6,7 @@ import type { Actor, Clock } from 'dsh-luban-core'
 import { asAccountId, asActorId, asHostId, asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
-import { createLedgerStore } from '../src/ledger.js'
+import { createLedgerStore, decodeLedger } from '../src/ledger.js'
 import { JsonTaskStore } from '../src/task-store.js'
 
 const directories = new Set<string>()
@@ -50,6 +50,39 @@ afterEach(async (): Promise<void> => {
 })
 
 describe('JsonTaskStore', (): void => {
+  it('does not copy legacy process-wide scheduler state into account ledgers', async (): Promise<void> => {
+    const { store, ledgerPath } = await harness()
+    await store.create({
+      accountId: asAccountId('alice'),
+      title: 'Alice task',
+      hostScope: 'any',
+      priority: 'P3',
+    })
+    await store.create({
+      accountId: asAccountId('bob'),
+      title: 'Bob task',
+      hostScope: 'any',
+      priority: 'P3',
+    })
+
+    const persisted = JSON.parse(await readFile(ledgerPath, 'utf8')) as Record<string, unknown>
+    const legacy = Object.fromEntries(
+      Object.entries(persisted).filter(([key]): boolean => key !== 'schedulers'),
+    )
+    const decoded = decodeLedger({
+      ...legacy,
+      scheduler: {
+        dateKey: '2026-08-30',
+        quotaUsed: 9,
+        consecutiveFailures: 4,
+        circuit: 'open',
+      },
+    })
+
+    expect(decoded.scheduler).toMatchObject({ quotaUsed: 9, circuit: 'open' })
+    expect(decoded.schedulers).toEqual({})
+  })
+
   it('partitions queries, imports, and claims by account', async (): Promise<void> => {
     const { store, claims } = await harness()
     const alice = asAccountId('alice')

@@ -171,14 +171,6 @@ export function decodeLedger(value: unknown): TaskLedger {
   const scheduler = schedulerValue(row.scheduler, 'ledger.scheduler')
   const tasks = row.tasks.map(taskValue)
   const schedulers = decodeSchedulers(row.schedulers)
-  if (row.schedulers === undefined) {
-    const accounts = new Set(
-      tasks.flatMap((task): readonly string[] =>
-        task.accountId === undefined ? [] : [String(task.accountId)],
-      ),
-    )
-    for (const accountId of accounts) schedulers[accountId] = scheduler
-  }
   return {
     schemaVersion: 1,
     sequence: numberValue(row.sequence, 'ledger.sequence'),
