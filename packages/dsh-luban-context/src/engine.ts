@@ -47,6 +47,14 @@ export type AccountCompactionDoneEvent = LubanEventMap['luban.compaction.done'] 
   readonly accountId: AccountId
 }
 
+/** A live-surface mutation whose audit still needs durable confirmation. */
+interface AppliedCompaction {
+  readonly accountId: AccountId
+  readonly repository: ContextArchiveRepository
+  readonly audit: CompactionAuditRecord
+  readonly auditPersisted: boolean
+}
+
 export interface CompactionEngineWithReplay extends CompactionEngine {
   markScope(sessionId: SessionId, scope: CompactionTaskScope, accountId?: AccountId): Promise<void>
   profile(scope: CompactionTaskScope): CompactionCadence
@@ -84,6 +92,7 @@ export class DefaultCompactionEngine implements CompactionEngineWithReplay {
   readonly #repositories = new Map<string, ContextArchiveRepository>()
   readonly #inFlight = new Set<string>()
   readonly #roundsSinceCompaction = new Map<string, number>()
+  readonly #appliedCompactions = new Map<string, AppliedCompaction>()
 
   public constructor(options: {
     readonly config: Config
@@ -153,9 +162,19 @@ export class DefaultCompactionEngine implements CompactionEngineWithReplay {
     const accountId = await this.#accountSessions.ownerOf(session.id)
     if (accountId === null) return
     const sessionKey = ownedSessionKey(accountId, session.id)
+    if (this.#inFlight.has(sessionKey)) return
+    const applied = this.#appliedCompactions.get(sessionKey)
+    if (applied !== undefined) {
+      this.#inFlight.add(sessionKey)
+      try {
+        await this.#persistAppliedCompaction(sessionKey, applied)
+      } finally {
+        this.#inFlight.delete(sessionKey)
+      }
+      return
+    }
     const rounds = (this.#roundsSinceCompaction.get(sessionKey) ?? 0) + 1
     this.#roundsSinceCompaction.set(sessionKey, rounds)
-    if (this.#inFlight.has(sessionKey)) return
     const ratio = ratioOf(telemetry)
     const scope = this.#scope(accountId, session.id)
     const profile = this.profile(scope)
@@ -233,15 +252,15 @@ export class DefaultCompactionEngine implements CompactionEngineWithReplay {
           after: workspace.snapshotSurface(),
         },
       }
-      await workspace.repository.recordAudit(audit)
       this.#roundsSinceCompaction.set(sessionKey, 0)
-      this.#events?.emit('luban.compaction.done', {
+      const appliedCompaction = {
         accountId,
-        sessionId: session.id,
-        strategy: strategyId,
-        beforeTokens: result.beforeTokens,
-        afterTokens: result.afterTokens,
-      })
+        repository: workspace.repository,
+        audit,
+        auditPersisted: false,
+      }
+      this.#appliedCompactions.set(sessionKey, appliedCompaction)
+      await this.#persistAppliedCompaction(sessionKey, appliedCompaction)
     } finally {
       this.#inFlight.delete(sessionKey)
     }
@@ -309,5 +328,68 @@ export class DefaultCompactionEngine implements CompactionEngineWithReplay {
       throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', `Session ${sessionId} was not found`)
     }
     return owner
+  }
+
+  async #persistAppliedCompaction(sessionKey: string, applied: AppliedCompaction): Promise<void> {
+    let confirmed = applied
+    if (!applied.auditPersisted) {
+      try {
+        await applied.repository.recordAudit(applied.audit)
+      } catch (error: unknown) {
+        const reason = error instanceof Error ? error.message : String(error)
+        throw new LubanError(
+          'E_IO',
+          `Compaction was applied to ${applied.audit.sessionId}, but its audit could not be persisted: ${reason}`,
+          {
+            retriable: true,
+            cause: error,
+            details: {
+              phase: 'audit-persistence',
+              compactionApplied: true,
+              auditPersisted: false,
+              retryMode: 'audit-only',
+              strategyId: applied.audit.strategyId,
+              beforeTokens: applied.audit.beforeTokens,
+              afterTokens: applied.audit.afterTokens,
+              archiveFiles: applied.audit.archiveFiles,
+            },
+          },
+        )
+      }
+      confirmed = { ...applied, auditPersisted: true }
+      if (this.#appliedCompactions.get(sessionKey) === applied) {
+        this.#appliedCompactions.set(sessionKey, confirmed)
+      }
+    }
+    try {
+      this.#events?.emit('luban.compaction.done', {
+        accountId: confirmed.accountId,
+        sessionId: confirmed.audit.sessionId,
+        strategy: confirmed.audit.strategyId,
+        beforeTokens: confirmed.audit.beforeTokens,
+        afterTokens: confirmed.audit.afterTokens,
+      })
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new LubanError(
+        'E_UNAVAILABLE',
+        `Compaction and audit completed for ${confirmed.audit.sessionId}, but the completion event failed: ${reason}`,
+        {
+          retriable: true,
+          cause: error,
+          details: {
+            phase: 'event-emission',
+            compactionApplied: true,
+            auditPersisted: true,
+            eventEmitted: false,
+            retryMode: 'event-only',
+            strategyId: confirmed.audit.strategyId,
+          },
+        },
+      )
+    }
+    if (this.#appliedCompactions.get(sessionKey) === confirmed) {
+      this.#appliedCompactions.delete(sessionKey)
+    }
   }
 }

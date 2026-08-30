@@ -169,6 +169,7 @@ describe('ContextArchiveRepository', () => {
     }
     const repository = new ContextArchiveRepository(options)
     await repository.recordAudit(captured)
+    await repository.recordAudit(captured)
     await expect(new ContextArchiveRepository(options).audit()).resolves.toEqual([captured])
 
     const legacyRecord = {

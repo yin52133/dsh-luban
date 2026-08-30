@@ -11,6 +11,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import type {
   AccountId,
   Clock,
@@ -316,6 +317,10 @@ const auditCodec: JsonCodec<readonly CompactionAuditRecord[]> = Object.freeze({
   },
 })
 
+function sameAuditRecord(left: CompactionAuditRecord, right: CompactionAuditRecord): boolean {
+  return isDeepStrictEqual(left, right)
+}
+
 function safeIdentifierDirectory(raw: string, fallback: string): string {
   const safe = raw
     .replace(/[^A-Za-z0-9._-]+/gu, '_')
@@ -490,7 +495,17 @@ export class ContextArchiveRepository {
     }
     const root = await this.#root()
     await this.#assertRoot(root)
-    await root.audit.update((records): readonly CompactionAuditRecord[] => [...records, record])
+    // A prior atomic publish may have succeeded before its caller observed a later failure.
+    const persisted = await root.audit.read()
+    if (persisted.some((candidate): boolean => sameAuditRecord(candidate, record))) {
+      await this.#assertRoot(root)
+      return
+    }
+    await root.audit.update((records): readonly CompactionAuditRecord[] =>
+      records.some((candidate): boolean => sameAuditRecord(candidate, record))
+        ? records
+        : [...records, record],
+    )
     await this.#assertRoot(root)
   }
 

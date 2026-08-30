@@ -12,7 +12,7 @@ import type {
   SessionRef,
   TelemetrySnapshot,
 } from 'dsh-luban-core'
-import { asSessionId } from 'dsh-luban-core'
+import { LubanError, asSessionId } from 'dsh-luban-core'
 import { ContextArchiveRepository } from '../src/archive.js'
 import type { Config } from '../src/config.js'
 import { DefaultCompactionEngine, type CompactionWorkspace } from '../src/engine.js'
@@ -80,7 +80,13 @@ describe('DefaultCompactionEngine', () => {
     await rm(directory, { recursive: true, force: true })
   })
 
-  function harness(activeConfig: Config = config): {
+  function harness(
+    activeConfig: Config = config,
+    repositoryFactory: (
+      options: ConstructorParameters<typeof ContextArchiveRepository>[0],
+    ) => ContextArchiveRepository = (options): ContextArchiveRepository =>
+      new ContextArchiveRepository(options),
+  ): {
     readonly engine: DefaultCompactionEngine
     readonly inject: ReturnType<typeof vi.fn>
     readonly accountSessions: ReturnType<typeof memoryAccountSessions>
@@ -98,7 +104,7 @@ describe('DefaultCompactionEngine', () => {
         create: (ref, accountId): Promise<CompactionWorkspace> => {
           let repository = repositories.get(ref.id)
           if (repository === undefined) {
-            repository = new ContextArchiveRepository({
+            repository = repositoryFactory({
               workspace: directory,
               archiveDir: activeConfig.archiveDir,
               accountId,
@@ -187,6 +193,96 @@ describe('DefaultCompactionEngine', () => {
       'always-fail:archive-fallback',
     )
     expect(await engine.archives(asSessionId('fallback'))).toHaveLength(3)
+  })
+
+  it('retries only audit persistence after compaction has changed the live surface', async () => {
+    const activeSession = session('audit-recovery')
+    const firstFailure = new Error('audit disk unavailable')
+    const secondFailure = new Error('audit disk still unavailable')
+    const failures = [firstFailure, secondFailure]
+    let recordAuditCalls = 0
+    const controlled = harness(
+      {
+        ...config,
+        trigger: { ...config.trigger, minGapRounds: 1 },
+      },
+      (options): ContextArchiveRepository => {
+        const repository = new ContextArchiveRepository(options)
+        const persist = repository.recordAudit.bind(repository)
+        repository.recordAudit = (record): Promise<void> => {
+          const failure = failures[recordAuditCalls]
+          recordAuditCalls += 1
+          return failure === undefined ? persist(record) : Promise.reject(failure)
+        }
+        return repository
+      },
+    )
+    await controlled.accountSessions.bind(ALICE, activeSession.id)
+
+    const firstResult = await controlled.engine
+      .maybeCompact(activeSession, telemetry(0.9))
+      .catch((error: unknown): unknown => error)
+    expect(firstResult).toBeInstanceOf(LubanError)
+    expect(firstResult).toMatchObject({
+      code: 'E_IO',
+      retriable: true,
+      message:
+        'Compaction was applied to audit-recovery, but its audit could not be persisted: audit disk unavailable',
+      details: {
+        phase: 'audit-persistence',
+        compactionApplied: true,
+        auditPersisted: false,
+        retryMode: 'audit-only',
+        strategyId: 'summarize+virtualfile',
+      },
+    })
+    expect((firstResult as Error).cause).toBe(firstFailure)
+
+    const secondResult = await controlled.engine
+      .maybeCompact(activeSession, telemetry(0.9))
+      .catch((error: unknown): unknown => error)
+    expect(secondResult).toBeInstanceOf(LubanError)
+    expect((secondResult as Error).cause).toBe(secondFailure)
+    expect(controlled.inject).toHaveBeenCalledOnce()
+
+    await controlled.engine.maybeCompact(activeSession, telemetry(0.9))
+    expect(recordAuditCalls).toBe(3)
+    expect(controlled.inject).toHaveBeenCalledOnce()
+    await expect(controlled.engine.audit(activeSession.id)).resolves.toHaveLength(1)
+  })
+
+  it('does not duplicate an audit when persistence committed before reporting failure', async () => {
+    const reportedFailure = new Error('post-commit audit verification failed')
+    let recordAuditCalls = 0
+    const { engine, inject, accountSessions } = harness(
+      {
+        ...config,
+        trigger: { ...config.trigger, minGapRounds: 1 },
+      },
+      (options): ContextArchiveRepository => {
+        const repository = new ContextArchiveRepository(options)
+        const persist = repository.recordAudit.bind(repository)
+        repository.recordAudit = async (record): Promise<void> => {
+          recordAuditCalls += 1
+          await persist(record)
+          if (recordAuditCalls === 1) throw reportedFailure
+        }
+        return repository
+      },
+    )
+    const activeSession = session('audit-post-commit-failure')
+    await accountSessions.bind(ALICE, activeSession.id)
+
+    const failed = await engine
+      .maybeCompact(activeSession, telemetry(0.9))
+      .catch((error: unknown): unknown => error)
+    expect(failed).toBeInstanceOf(LubanError)
+    expect((failed as Error).cause).toBe(reportedFailure)
+
+    await engine.maybeCompact(activeSession, telemetry(0.9))
+    expect(recordAuditCalls).toBe(2)
+    expect(inject).toHaveBeenCalledOnce()
+    await expect(engine.audit(activeSession.id)).resolves.toHaveLength(1)
   })
 
   it('executes custom strategies without extra contracts and ignores unknown telemetry', async () => {
