@@ -8,6 +8,7 @@
 | v0.2 | 2026-08-30 | Codex | 增加 M11 browser-use 的 uv 隔离环境要求 |
 | v0.3 | 2026-08-30 | Codex | 落地默认预览且拒绝覆盖的 win-debug 生成脚本 |
 | v0.4 | 2026-08-30 | Codex | 同步 A 档 lock v2、安装授权门禁与 profile smoke |
+| v0.5 | 2026-08-30 | Codex | 同步 A 档 lock v3、精确原生构建许可与安装后验收链 |
 
 ## 1. 目标形态
 
@@ -33,9 +34,10 @@ flowchart LR
    `README.md`）。可用 `-DshHome <path>` 指向隔离目录。脚本不改官方 preset，且目标已存在时拒绝覆盖。
 3. **安装本套件**：`dsh plugin --profile win-debug add dsh-luban-auth dsh-luban-taskboard ...`（monorepo 发布后逐包，或本地 `file:` 联调）。
 4. **A 档直装**：先运行 `scripts/install-3rd-party.ps1 -Profile win-debug -DryRun` 审核本地
-   lock v2 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
+   lock v3 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
    `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Windows 宿主提供绝对且非根目录的
-   `-DshHome` 与 `-ApprovedBy`；latest/显式 semver 还需 `-ApproveUnpinned`。
+   `-DshHome` 与 `-ApprovedBy`，并使用 pnpm `11.24.0`；latest/显式 semver 还需
+   `-ApproveUnpinned`。
 5. **保活注册**：M03-F002 注册计划任务（登录时启动/开机按用户选择）；账本与配置目录 `%DSH_HOME%\luban\`。
 6. **认证初始化**：首次访问 web 引导创建管理员（M01-F001）；端口默认 42600 可配。
 
@@ -61,10 +63,12 @@ dsh --profile win-debug --dump-config
   -DshHome C:\dsh-acceptance -ApprovedBy operator-name -ApproveUnpinned -Apply
 ```
 
-apply 只向 `dsh plugin add` 子进程注入 `DSH_HOME` 与固定官方 npm registry，不修改当前
-PowerShell 环境。执行前会从官方 registry 核对包名、版本、license metadata、repository 与
-integrity；任一不一致即拒绝安装。npm metadata 中的 MIT 声明不等于源码 LICENSE 或安装后
-notices 已完成复核。
+apply 只向子进程注入 `DSH_HOME`、固定官方 npm registry 与无敏感字段的验收身份，不修改当前
+PowerShell 环境。执行前会核对三包及 `node-pty@1.1.0` 的包名、版本、license metadata、
+repository、integrity、bundle 与依赖边界；任一不一致即拒绝安装。安装使用 `--save-exact` 与
+`--allow-build=node-pty@1.1.0` 连续执行两次，随后核对精确依赖清单、`--dump-config`、唯一 bundle、
+安装 manifest、LICENSE SHA-256 和 `node-pty` native load。npm metadata 中的 MIT 声明仍不等于
+双端 live notices 证据已经生成。
 
 M12-F001 的目标宿主 smoke runner 默认只打印无写入计划。Windows 现场验收时使用项目本地
 DSH `0.1.1-rc.2` 执行：
@@ -93,7 +97,8 @@ live runner 在隔离 `DSH_HOME` 中安装临时 host/client fixture，验证唯
 
 ## 4. 平台注意点
 
-- 串口：pnpm 构建脚本允许清单需包含原生模块（本机 profile 的 `pnpm-workspace.yaml` 设置 onlyBuiltDependencies）。
+- 原生构建：A 档 profile 只允许精确 `node-pty@1.1.0`，不得改成包名级或其他版本的宽泛许可。
+- 串口：本套件其他原生模块必须按各自审查结果单独登记，不能复用 A 档的构建许可。
 - 桌面自动化（M10-F006）：MCP 服务以独立进程配置接入，凭据走系统凭据管理器。
 - 浏览器桥接（M11）：插件以 `uv run --locked` 启动随包 Python 项目，隔离环境位于 `%DSH_HOME%\luban\browser\uv-env`，禁止使用全局 pip。
 - 防火墙：首次监听提示放行私网；文档明确「仅限可信局域网」。

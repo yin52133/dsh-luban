@@ -9,6 +9,7 @@
 | v0.3 | 2026-08-30 | Codex | 落地默认预览且拒绝覆盖的 ubuntu-server 生成脚本 |
 | v0.4 | 2026-08-30 | Codex | 修正 systemd 启动命令并明确强制恢复哨兵语义 |
 | v0.5 | 2026-08-30 | Codex | 同步 A 档 lock v2、安装授权门禁与 profile smoke |
+| v0.6 | 2026-08-30 | Codex | 同步 A 档 lock v3、精确原生构建许可与安装后验收链 |
 
 ## 1. 目标形态
 
@@ -31,9 +32,10 @@ flowchart LR
    脚本不改官方 preset，且目标已存在时拒绝覆盖。
 3. **安装套件**：`dsh plugin --profile ubuntu-server add dsh-luban-auth ... dsh-luban-server-mode`。
 4. **A 档直装**：先运行 `scripts/install-3rd-party.sh --profile ubuntu-server --dry-run` 审核
-   本地 lock v2 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
+   本地 lock v3 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
    `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Linux 宿主提供绝对且非根目录的
-   `--dsh-home` 与 `--approved-by`；latest/显式 semver 还需 `--approve-unpinned`。
+   `--dsh-home` 与 `--approved-by`，并使用 pnpm `11.24.0`；latest/显式 semver 还需
+   `--approve-unpinned`。
 5. **服务注册**：M09-F001 安装 user 级 unit：
 
 ```ini
@@ -84,9 +86,12 @@ bash scripts/install-3rd-party.sh --profile ubuntu-server --version latest \
   --dsh-home /tmp/dsh-acceptance --approved-by operator-name --approve-unpinned --apply
 ```
 
-apply 只向 `dsh plugin add` 子进程注入 `DSH_HOME` 与固定官方 npm registry，不修改当前 shell
-环境。执行前会从官方 registry 核对包名、版本、license metadata、repository 与 integrity；任一
-不一致即拒绝安装。npm metadata 中的 MIT 声明不等于源码 LICENSE 或安装后 notices 已完成复核。
+apply 只向子进程注入 `DSH_HOME`、固定官方 npm registry 与无敏感字段的验收身份，不修改当前
+shell 环境。执行前会核对三包及 `node-pty@1.1.0` 的包名、版本、license metadata、repository、
+integrity、bundle 与依赖边界；任一不一致即拒绝安装。安装使用 `--save-exact` 与
+`--allow-build=node-pty@1.1.0` 连续执行两次，随后核对精确依赖清单、`--dump-config`、唯一 bundle、
+安装 manifest、LICENSE SHA-256 和 `node-pty` native load。npm metadata 中的 MIT 声明仍不等于
+双端 live notices 证据已经生成。
 
 M12-F001 的目标宿主 smoke runner 默认只打印无写入计划。Ubuntu 现场验收时使用项目本地
 DSH `0.1.1-rc.2` 执行：

@@ -10,18 +10,20 @@
 | v0.2 | 2026-08-30 | Codex | 核实 browser-use 0.13.8 为 MIT 并确定 uv 集成形态 |
 | v0.3 | 2026-08-30 | Codex | 核实三项 taskboard 参考许可，仅保留 C 档功能描述参考 |
 | v0.4 | 2026-08-30 | Codex | 记录 A 档 npm metadata/lock v2 与源码许可待核边界 |
+| v0.5 | 2026-08-30 | Codex | 记录 lock v3 原生构建边界与安装后许可证核验链 |
 
 ## 1. A 档 · 插件级安装原版（不进入本仓库代码）
 
 | 项目 | 地址/包名 | License（状态） | 用途 | 安装方式 | 边界 |
 | --- | --- | --- | --- | --- | --- |
-| dsh-market | npm `dshmarket@1.36.0`（github.com/dsh-market/dsh-market） | MIT（npm metadata/lock v2 已核对；源码 LICENSE 待核实） | 插件市场 UI/热启停/备份恢复 | `install-3rd-party` 脚本经 `dsh plugin add` 安装原版 | 不 fork 不改；只通过其公开 Update API 集成 |
-| dsh-better-sidebar | npm `dsh-better-sidebar@0.17.1`（github.com/omdsh-dev/DSH-better-sidebar） | MIT（npm metadata/lock v2 已核对；源码 LICENSE 待核实） | Trae 式 diff 展示回退、VSCode 式工作区树（相对路径） | 同上 | 同上；界面体验直接使用原版，不复制其代码 |
-| @furongjun1999/dsh-memory | npm `@furongjun1999/dsh-memory@0.4.0`（github.com/FuRongJun-1999/dsh-memory） | MIT（npm metadata/lock v2 已核对；源码 LICENSE 待核实） | 长期记忆（本套件不做记忆功能，避免重复） | 同上 | 同上 |
+| dsh-market | npm `dshmarket@1.36.0`（github.com/dsh-market/dsh-market） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | 插件市场 UI/热启停/备份恢复 | `install-3rd-party` 脚本经 `dsh plugin add` 安装原版 | 不 fork 不改；只通过其公开 Update API 集成 |
+| dsh-better-sidebar | npm `dsh-better-sidebar@0.17.1`（github.com/omdsh-dev/DSH-better-sidebar） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | Trae 式 diff 展示回退、VSCode 式工作区树（相对路径） | 同上；仅允许锁定的 `node-pty@1.1.0` 原生构建 | 同上；界面体验直接使用原版，不复制其代码 |
+| @furongjun1999/dsh-memory | npm `@furongjun1999/dsh-memory@0.4.0`（github.com/FuRongJun-1999/dsh-memory） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | 长期记忆（本套件不做记忆功能，避免重复） | 同上 | 同上 |
 
-> lock v2 记录包名、版本、SHA-512 integrity、license metadata 与 repository；安装器在 apply
-> 前向官方 npm registry 逐项复核。该供应链身份门禁不等同于已阅读源码 LICENSE，也不替代真实
-> 安装后的 notices 登记；两项仍是 M12-F004 目标环境验收内容。
+> lock v3 记录三项顶层包及 `node-pty@1.1.0` 的包名、版本、SHA-512 integrity、license metadata
+> 与 repository；安装器在 apply 前向官方 npm registry 逐项复核，并在安装后读取每个常规
+> LICENSE 文件、记录 SHA-256、核对唯一 bundle 挂载及 native load。verifier 能力本身不等于已经
+> 生成双平台 live 证据，也不替代 release notices 登记；两项仍是 M12-F004 目标环境验收内容。
 
 ## 2. B 档 · 依赖/服务级集成（只写适配层）
 
