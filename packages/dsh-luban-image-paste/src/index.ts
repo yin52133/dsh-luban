@@ -44,6 +44,7 @@ export {
   runSimulatedVisualAcceptance,
   sameVisualAcceptanceGit,
   VISUAL_ACCEPTANCE_BUILD_SCHEMA,
+  visualAcceptanceRequestBody,
   visualAcceptanceInstruction,
 } from './live-visual-acceptance.js'
 export type {

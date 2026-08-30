@@ -23,6 +23,8 @@ import {
   testConfig,
 } from './helpers.js'
 
+const VISUAL_CHALLENGE = 'A'.repeat(43)
+
 function authentication(): AuthService {
   return {
     middleware: () => (request) =>
@@ -164,13 +166,19 @@ describe('authenticated image HTTP API', () => {
     const live = await fetch(`${baseUrl}/visual-acceptance`, {
       method: 'POST',
       headers: { ...authHeaders, 'content-type': 'application/json' },
-      body: JSON.stringify({ live: true, sessionId: 'session-live', timeoutMs: 10_000 }),
+      body: JSON.stringify({
+        live: true,
+        sessionId: 'session-live',
+        timeoutMs: 10_000,
+        challenge: VISUAL_CHALLENGE,
+      }),
     })
     expect(live.status).toBe(200)
     expect(visualRun).toHaveBeenCalledExactlyOnceWith({
       live: true,
       sessionId: 'session-live',
       timeoutMs: 10_000,
+      challenge: VISUAL_CHALLENGE,
     })
     const liveBody = await json(live)
     expect(liveBody).toMatchObject({
@@ -202,7 +210,11 @@ describe('authenticated image HTTP API', () => {
         {
           method: 'POST',
           headers: { ...authHeaders, 'content-type': 'application/json' },
-          body: JSON.stringify({ live: true, sessionId: 'session-live' }),
+          body: JSON.stringify({
+            live: true,
+            sessionId: 'session-live',
+            challenge: VISUAL_CHALLENGE,
+          }),
         },
       )
 
@@ -265,7 +277,11 @@ describe('authenticated image HTTP API', () => {
         {
           method: 'POST',
           headers: { ...authHeaders, 'content-type': 'application/json' },
-          body: JSON.stringify({ live: true, sessionId: 'session-live' }),
+          body: JSON.stringify({
+            live: true,
+            sessionId: 'session-live',
+            challenge: VISUAL_CHALLENGE,
+          }),
         },
       )
 

@@ -11,6 +11,7 @@
 | v0.3 | 2026-08-30 | Codex | 补齐 Settings 挂载、paste/drop 路由与多文件边界验证 |
 | v0.4 | 2026-08-30 | Codex | 补齐 ReactDOM 客户端与真实 Sharp resize 验证 |
 | v0.5 | 2026-08-30 | Codex | 增加 mounted live 视觉读图验收与证据边界 |
+| v0.6 | 2026-08-30 | Codex | live 验收绑定实际挂载服务、fresh challenge 与 OS listener/process 身份 |
 
 ## 1. 概述与目标
 
@@ -118,17 +119,24 @@ M06-F001 ~ M06-F004 共 4 项，与 `checklist.json` 一一对应。
 - 客户端测试使用真实 ReactDOM/jsdom 覆盖 paste/drop、预览、删除、cleanup 与刷新；真实 Sharp
   resize/整图解码探针验证截断输入 fail closed。本地 Prettier、严格类型、ESLint、构建、
   Cordis route/timer 卸载、release metadata 与 pack dry-run 通过；具体测试数以当前门禁输出为准。
-- `ctx.lubanImageVisualAcceptance.run({ live: true, sessionId })` 在已挂载 Cordis 中执行生产
+- `ctx.lubanImageVisualAcceptance` 在已挂载 Cordis 中执行生产
   `AttachmentRepository → FileImageIngestService → DshImageSessionInjector.followup` 链路。runner
-  要求 clean Git、Windows/Ubuntu、空 idle inbox 与 top-level live session；像素 nonce 不进入 prompt、
+  只使用 `apply()` 实际提供的同一 repository/service/冻结 config，配置的压缩与注入样式不会被验收
+  硬编码绕过；每次注入还绑定当次已验证的同一 Agent 实例。runner 要求 clean Git、Windows/Ubuntu、
+  空 idle inbox 与 top-level live session；像素 nonce 不进入 prompt、
   文件名或证据，并绑定精确 message→turn、单一实际 provider/model route 及模型 image capability。
-  turn 未确定结束时不取消其他 inbox 工作且保留 fixture，只有确定 settlement 后才清理自己目录。
+  turn 未确定结束时不取消其他 inbox 工作且保留已引用附件，只有确定 settlement 后才移除本次附件。
 - standalone CLI 不重建 Host 拥有的模型/工具组合；注入 fake 的结果永久标记 `simulated`，不能升级为
-  live pass。当前 runner 仅使验收可执行，尚无真实视觉 provider session 的 direct evidence。
+  live pass。服务端对 fresh challenge 仅返回 challenge/request 摘要与 PID，且自身只能产出 endpoint
+  pending candidate；CLI 复验本地 current-HEAD build，并在 Windows 通过系统 `netstat`、Ubuntu 通过
+  `/proc` 两次确认同一 PID 持有 literal IPv4 loopback listener，同时核验该进程由 workspace 中的精确
+  DSH entrypoint 启动，最终证据仅记录 Node/DSH entry/command/HTTP response 摘要。当前仍无真实视觉
+  provider session 与可信 provider request-ID adapter 的 direct evidence。
 
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu profile 抽查系统剪贴板、浏览器 paste/drop 与长期 TTL；M06-F003 的
-  明确 blocker 是尚无 mounted live 视觉 provider 读图 pass。
+  明确 blocker 是尚无 mounted live 视觉 provider 读图 pass，且 rc2 公共成功事件未暴露 provider
+  request ID，仍需可信 provider adapter 将本次精确 message/turn/step 与真实请求 ID 关联。
 - 最近列表返回数量受 `recentLimit` 限制，但当前 UI 读取原图而非缩略图；大图工作区应调低该值，缩略图列入后续优化。
 - Web 与 CLI API 请求均有 10 秒完整 deadline；该期限覆盖 headers 与 JSON body，JSON 响应另有显式字节上限。

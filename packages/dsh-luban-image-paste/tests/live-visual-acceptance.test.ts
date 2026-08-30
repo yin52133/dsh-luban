@@ -495,7 +495,12 @@ describe('M06 live visual acceptance', () => {
     expect(headers.get('cookie')).toBe('luban_session=secret-cookie')
     expect(headers.get('x-luban-csrf')).toBe('csrf-secret-token')
     expect(calls[0]?.init?.body).toBe(
-      JSON.stringify({ live: true, sessionId: SESSION, timeoutMs: 10_000 }),
+      JSON.stringify({
+        live: true,
+        sessionId: SESSION,
+        timeoutMs: 10_000,
+        challenge: 'A'.repeat(43),
+      }),
     )
     expect(result.evidence).toMatchObject({
       execution: 'test-double',
@@ -940,6 +945,27 @@ function productionEvidence(): VisualAcceptanceEvidence {
     },
     platform: { target: 'windows', runtimePlatform: 'win32', arch: 'x64', node: 'v22.0.0' },
     response: { matched: true, sha256: 'd'.repeat(64), bytes: 8 },
+    endpoint: {
+      kind: 'mounted-loopback-candidate',
+      host: '127.0.0.1',
+      port: 42_600,
+      processId: 1234,
+      nodeVersion: 'v22.0.0',
+      challengeSha256: 'f'.repeat(64),
+      requestSha256: '1'.repeat(64),
+      responseSha256: '2'.repeat(64),
+      responseBytes: 2_048,
+      listener: {
+        kind: 'os-loopback-listener-pid',
+        host: '127.0.0.1',
+        port: 42_600,
+        processId: 1234,
+        nodeExecutableSha256: '3'.repeat(64),
+        dshEntrypointSha256: '4'.repeat(64),
+        commandSha256: '5'.repeat(64),
+        observedAt: new Date(1).toISOString(),
+      },
+    },
     checks: [
       'target-platform',
       'git-clean',
@@ -957,6 +983,7 @@ function productionEvidence(): VisualAcceptanceEvidence {
       'nonce-output-boundary',
       'cleanup',
       'git-clean-after',
+      'listener-process-attestation',
     ].map((id) => ({ id, status: 'pass' as const, actual: 'pass' })),
     cleanup: 'pass',
     startedAt: new Date(1).toISOString(),

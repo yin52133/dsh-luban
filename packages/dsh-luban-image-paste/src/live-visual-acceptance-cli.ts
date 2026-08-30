@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process'
+import { createHash, randomBytes } from 'node:crypto'
 import { lstat, mkdir, open, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,11 +10,15 @@ import {
   createVisualAcceptancePlan,
   downgradeVisualAcceptanceEvidence,
   inspectCleanVisualAcceptanceGit,
+  inspectVisualAcceptanceBuild,
   sameVisualAcceptanceGit,
   VISUAL_ACCEPTANCE_BUILD_SCHEMA,
+  visualAcceptanceRequestBody,
   type GitIdentity,
+  type MountedVisualAcceptanceOptions,
   type VisualAcceptanceEvidence,
 } from './live-visual-acceptance.js'
+import { attestLoopbackListener, type LoopbackListenerAttestor } from './listener-attestation.js'
 
 const HELP = `Usage: luban-img-visual-acceptance [options]
 
@@ -33,7 +38,7 @@ Authentication is read only from LUBAN_SESSION_COOKIE and LUBAN_CSRF_TOKEN.
 const MAX_RESPONSE_BYTES = 256 * 1024
 const DEFAULT_LIVE_TIMEOUT_MS = 120_000
 const REQUEST_GRACE_MS = 30_000
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]', '::1'])
+const LOOPBACK_HOSTNAME = '127.0.0.1'
 const REQUIRED_PASS_CHECKS = Object.freeze([
   'target-platform',
   'git-clean',
@@ -51,7 +56,11 @@ const REQUIRED_PASS_CHECKS = Object.freeze([
   'nonce-output-boundary',
   'cleanup',
   'git-clean-after',
+  'listener-process-attestation',
 ] as const)
+const SERVER_REQUIRED_PASS_CHECKS = REQUIRED_PASS_CHECKS.filter(
+  (id): boolean => id !== 'listener-process-attestation',
+)
 
 interface ParsedCli {
   readonly live: boolean
@@ -66,6 +75,8 @@ interface CliIo {
   readonly cwd: string
   readonly environment: Readonly<Record<string, string | undefined>>
   readonly fetch: typeof fetch
+  readonly createChallenge: () => string
+  readonly attestListener: LoopbackListenerAttestor
   write(value: string): void
 }
 
@@ -78,6 +89,8 @@ export interface VisualAcceptanceCliTestDependencies {
   readonly cwd?: string
   readonly environment?: Readonly<Record<string, string | undefined>>
   readonly fetch?: typeof fetch
+  readonly createChallenge?: () => string
+  readonly attestListener?: LoopbackListenerAttestor
   readonly write?: (value: string) => void
 }
 
@@ -136,7 +149,7 @@ function apiRoot(value: string): string {
   }
   if (
     (url.protocol !== 'http:' && url.protocol !== 'https:') ||
-    !LOOPBACK_HOSTNAMES.has(url.hostname.toLowerCase()) ||
+    url.hostname.toLowerCase() !== LOOPBACK_HOSTNAME ||
     url.username !== '' ||
     url.password !== '' ||
     url.search !== '' ||
@@ -259,13 +272,17 @@ function requiredEnvironment(
   return value
 }
 
-async function boundedResponseText(response: Response): Promise<string> {
+function sha256(value: string | Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+async function boundedResponseBytes(response: Response): Promise<Buffer> {
   const declared = Number.parseInt(response.headers.get('content-length') ?? '', 10)
   if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
     await response.body?.cancel()
     throw new Error('mounted acceptance response is too large')
   }
-  if (response.body === null) return ''
+  if (response.body === null) return Buffer.alloc(0)
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
   let total = 0
@@ -286,13 +303,23 @@ async function boundedResponseText(response: Response): Promise<string> {
   return Buffer.concat(
     chunks.map((chunk): Buffer => Buffer.from(chunk)),
     total,
-  ).toString('utf8')
+  )
+}
+
+interface MountedAcceptanceResponse {
+  readonly evidence: VisualAcceptanceEvidence
+  readonly challenge: string
+  readonly requestBody: string
+  readonly responseSha256: string
+  readonly responseBytes: number
+  readonly host: '127.0.0.1'
+  readonly port: number
 }
 
 async function requestMountedAcceptance(
   parsed: ParsedCli,
   io: CliIo,
-): Promise<VisualAcceptanceEvidence> {
+): Promise<MountedAcceptanceResponse> {
   const cookie = requiredEnvironment(io.environment, 'LUBAN_SESSION_COOKIE')
   const csrf = requiredEnvironment(io.environment, 'LUBAN_CSRF_TOKEN')
   const root = apiRoot(
@@ -300,6 +327,24 @@ async function requestMountedAcceptance(
       io.environment.LUBAN_IMAGE_BASE_URL ??
       'http://127.0.0.1:42600/luban-image-paste',
   )
+  const rootUrl = new URL(root)
+  const port = Number(
+    rootUrl.port === '' ? (rootUrl.protocol === 'https:' ? 443 : 80) : rootUrl.port,
+  )
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('mounted acceptance port is invalid')
+  }
+  const challenge = io.createChallenge()
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(challenge)) {
+    throw new Error('visual acceptance challenge generation failed')
+  }
+  const options: MountedVisualAcceptanceOptions = {
+    live: true,
+    sessionId: parsed.sessionId ?? '',
+    ...(parsed.timeoutMs === undefined ? {} : { timeoutMs: parsed.timeoutMs }),
+    challenge,
+  }
+  const requestBody = visualAcceptanceRequestBody(options)
   const controller = new AbortController()
   const timer = setTimeout(
     (): void => controller.abort(),
@@ -317,20 +362,16 @@ async function requestMountedAcceptance(
         cookie,
         'x-luban-csrf': csrf,
       },
-      body: JSON.stringify({
-        live: true,
-        sessionId: parsed.sessionId,
-        ...(parsed.timeoutMs === undefined ? {} : { timeoutMs: parsed.timeoutMs }),
-      }),
+      body: requestBody,
       signal: controller.signal,
     })
     if (!response.ok) {
       await response.body?.cancel()
       throw new Error(`mounted acceptance request failed (${String(response.status)})`)
     }
-    const raw = await boundedResponseText(response)
+    const raw = await boundedResponseBytes(response)
     if (controller.signal.aborted) throw new Error('mounted acceptance request timed out')
-    const decoded: unknown = JSON.parse(raw)
+    const decoded: unknown = JSON.parse(raw.toString('utf8'))
     if (!isRecord(decoded) || !hasExactKeys(decoded, ['evidence'])) {
       throw new Error('mounted acceptance returned invalid JSON')
     }
@@ -338,7 +379,15 @@ async function requestMountedAcceptance(
     if (evidence.session?.requestedId !== parsed.sessionId) {
       throw new Error('mounted acceptance returned evidence for another session')
     }
-    return evidence
+    return {
+      evidence,
+      challenge,
+      requestBody,
+      responseSha256: sha256(raw),
+      responseBytes: raw.byteLength,
+      host: '127.0.0.1',
+      port,
+    }
   } catch (error: unknown) {
     if (controller.signal.aborted) throw new Error('mounted acceptance request timed out')
     throw error
@@ -365,6 +414,7 @@ function parseProductionEvidence(value: unknown): VisualAcceptanceEvidence {
     'build',
     'platform',
     'response',
+    'endpoint',
     'checks',
     'cleanup',
     'error',
@@ -417,6 +467,9 @@ function parseProductionEvidence(value: unknown): VisualAcceptanceEvidence {
   if (value.response !== undefined && !isResponseEvidence(value.response)) {
     throw new Error('response evidence is invalid')
   }
+  if (value.endpoint !== undefined && !isEndpointEvidence(value.endpoint)) {
+    throw new Error('endpoint evidence is invalid')
+  }
   const passing =
     value.status === 'pass' &&
     value.cleanup === 'pass' &&
@@ -430,6 +483,10 @@ function parseProductionEvidence(value: unknown): VisualAcceptanceEvidence {
     isImageEvidence(value.image) &&
     isResponseEvidence(value.response) &&
     value.response.matched &&
+    isEndpointEvidence(value.endpoint) &&
+    value.endpoint.listener !== undefined &&
+    value.endpoint.responseSha256 !== undefined &&
+    value.endpoint.responseBytes !== undefined &&
     isSha256(value.nonceSha256) &&
     value.platform.target !== 'other' &&
     value.error === undefined &&
@@ -560,6 +617,59 @@ function isResponseEvidence(value: unknown): value is {
   )
 }
 
+function isEndpointEvidence(
+  value: unknown,
+): value is NonNullable<VisualAcceptanceEvidence['endpoint']> {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(
+      value,
+      ['kind', 'host', 'port', 'processId', 'nodeVersion', 'challengeSha256', 'requestSha256'],
+      ['responseSha256', 'responseBytes', 'listener'],
+    ) ||
+    value.kind !== 'mounted-loopback-candidate' ||
+    value.host !== '127.0.0.1' ||
+    !isNonNegativeInteger(value.port) ||
+    value.port < 1 ||
+    value.port > 65_535 ||
+    !isNonNegativeInteger(value.processId) ||
+    value.processId < 1 ||
+    typeof value.nodeVersion !== 'string' ||
+    !/^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(value.nodeVersion) ||
+    !isSha256(value.challengeSha256) ||
+    !isSha256(value.requestSha256) ||
+    (value.responseSha256 !== undefined && !isSha256(value.responseSha256)) ||
+    (value.responseBytes !== undefined &&
+      (!isNonNegativeInteger(value.responseBytes) || value.responseBytes < 1)) ||
+    (value.responseSha256 === undefined) !== (value.responseBytes === undefined)
+  ) {
+    return false
+  }
+  if (value.listener === undefined) return value.responseSha256 === undefined
+  return (
+    value.responseSha256 !== undefined &&
+    isRecord(value.listener) &&
+    hasExactKeys(value.listener, [
+      'kind',
+      'host',
+      'port',
+      'processId',
+      'nodeExecutableSha256',
+      'dshEntrypointSha256',
+      'commandSha256',
+      'observedAt',
+    ]) &&
+    value.listener.kind === 'os-loopback-listener-pid' &&
+    value.listener.host === value.host &&
+    value.listener.port === value.port &&
+    value.listener.processId === value.processId &&
+    isSha256(value.listener.nodeExecutableSha256) &&
+    isSha256(value.listener.dshEntrypointSha256) &&
+    isSha256(value.listener.commandSha256) &&
+    isIsoTimestamp(value.listener.observedAt)
+  )
+}
+
 function isChecks(value: unknown): boolean {
   if (!Array.isArray(value) || value.length > 64) return false
   const ids = new Set<string>()
@@ -589,6 +699,92 @@ function requiredChecksPassed(value: unknown): boolean {
     ),
   )
   return REQUIRED_PASS_CHECKS.every((id): boolean => passed.has(id))
+}
+
+function serverCandidateChecksPassed(value: unknown): boolean {
+  if (!Array.isArray(value)) return false
+  let listenerPending = false
+  const passed = new Set<string>()
+  for (const check of value) {
+    if (!isRecord(check) || typeof check.id !== 'string') return false
+    if (check.id === 'listener-process-attestation') {
+      if (listenerPending || check.status !== 'blocked') return false
+      listenerPending = true
+      continue
+    }
+    if (check.status !== 'pass') return false
+    passed.add(check.id)
+  }
+  return listenerPending && SERVER_REQUIRED_PASS_CHECKS.every((id): boolean => passed.has(id))
+}
+
+async function attestMountedAcceptance(
+  response: MountedAcceptanceResponse,
+  attestListener: LoopbackListenerAttestor,
+  repositoryRoot: string,
+  localBuild: NonNullable<VisualAcceptanceEvidence['build']>,
+): Promise<VisualAcceptanceEvidence> {
+  const candidate = response.evidence
+  const endpoint = candidate.endpoint
+  if (
+    candidate.status !== 'blocked' ||
+    candidate.acceptancePassed ||
+    candidate.error !== 'standalone CLI listener/process endpoint attestation is required' ||
+    candidate.cleanup !== 'pass' ||
+    !isGitEvidence(candidate.git) ||
+    !isBuildEvidence(candidate.build) ||
+    JSON.stringify(candidate.build) !== JSON.stringify(localBuild) ||
+    !isSessionEvidence(candidate.session) ||
+    candidate.session.respondingId !== candidate.session.requestedId ||
+    candidate.session.agentId !== candidate.session.requestedId ||
+    !isNonNegativeInteger(candidate.session.turn) ||
+    !isAgentEvidence(candidate.agent) ||
+    !isImageEvidence(candidate.image) ||
+    !isResponseEvidence(candidate.response) ||
+    !candidate.response.matched ||
+    !isSha256(candidate.nonceSha256) ||
+    candidate.platform.target === 'other' ||
+    !isEndpointEvidence(endpoint) ||
+    endpoint.listener !== undefined ||
+    endpoint.responseSha256 !== undefined ||
+    endpoint.port !== response.port ||
+    endpoint.nodeVersion !== candidate.platform.node ||
+    endpoint.challengeSha256 !== sha256(response.challenge) ||
+    endpoint.requestSha256 !== sha256(response.requestBody) ||
+    !serverCandidateChecksPassed(candidate.checks)
+  ) {
+    return candidate
+  }
+  const listener = await attestListener({
+    host: endpoint.host,
+    port: endpoint.port,
+    processId: endpoint.processId,
+    workspaceRoot: repositoryRoot,
+    dshEntrypoint: resolve(repositoryRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+  })
+  const { error: candidateError, ...candidateWithoutError } = candidate
+  void candidateError
+  const finalEvidence: VisualAcceptanceEvidence = {
+    ...candidateWithoutError,
+    status: 'pass',
+    acceptancePassed: true,
+    endpoint: {
+      ...endpoint,
+      responseSha256: response.responseSha256,
+      responseBytes: response.responseBytes,
+      listener,
+    },
+    checks: candidate.checks.map((check) =>
+      check.id === 'listener-process-attestation'
+        ? {
+            id: check.id,
+            status: 'pass' as const,
+            actual: `pid=${String(endpoint.processId)};port=${String(endpoint.port)}`,
+          }
+        : check,
+    ),
+  }
+  return parseProductionEvidence(finalEvidence)
 }
 
 export function defaultVisualAcceptanceOutput(
@@ -683,11 +879,26 @@ async function runCli(
     if (parsed.live && parsed.output !== undefined) {
       await requireUnusedOutput(parsed.output)
     }
-    const received = parsed.live
-      ? await requestMountedAcceptance(parsed, io)
-      : createVisualAcceptancePlan(parsed.sessionId)
+    const mountedResponse = parsed.live ? await requestMountedAcceptance(parsed, io) : undefined
+    const received = mountedResponse?.evidence ?? createVisualAcceptancePlan(parsed.sessionId)
+    const localBuild =
+      mountedResponse !== undefined && !testDouble && gitBoundary !== undefined
+        ? await inspectVisualAcceptanceBuild(gitBoundary.repositoryRoot, gitBoundary.identity)
+        : undefined
     const evidence =
-      parsed.live && testDouble ? downgradeVisualAcceptanceEvidence(received) : received
+      mountedResponse === undefined
+        ? received
+        : testDouble
+          ? downgradeVisualAcceptanceEvidence(received)
+          : await attestMountedAcceptance(
+              mountedResponse,
+              io.attestListener,
+              gitBoundary?.repositoryRoot ?? io.cwd,
+              localBuild ??
+                (() => {
+                  throw new Error('local build attestation is unavailable')
+                })(),
+            )
     const output =
       parsed.output ?? defaultVisualAcceptanceOutput(io.cwd, evidence, gitBoundary?.repositoryRoot)
     if (gitBoundary !== undefined) {
@@ -748,6 +959,10 @@ export function runVisualAcceptanceCliForTest(
       environment: dependencies.environment ?? {},
       fetch:
         dependencies.fetch ?? (() => Promise.reject(new Error('test transport is not configured'))),
+      createChallenge: dependencies.createChallenge ?? ((): string => 'A'.repeat(43)),
+      attestListener:
+        dependencies.attestListener ??
+        (() => Promise.reject(new Error('test listener attestor is not configured'))),
       write: dependencies.write ?? ((): void => undefined),
     },
     true,
@@ -826,6 +1041,8 @@ if (isMain()) {
       cwd: process.cwd(),
       environment: process.env,
       fetch,
+      createChallenge: (): string => randomBytes(32).toString('base64url'),
+      attestListener: attestLoopbackListener,
       write: (value): void => {
         process.stdout.write(value)
       },

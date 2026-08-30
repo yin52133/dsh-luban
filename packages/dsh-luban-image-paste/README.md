@@ -106,30 +106,31 @@ The CLI sends `x-luban-csrf` on both upload and injection writes.
 
 ## Live visual acceptance
 
-Live M06-F003 evidence must run inside the mounted plugin so it can use the
-Host-owned `AgentRegistry`, LLM registry, and existing top-level session:
-
-```typescript
-const evidence = await ctx.lubanImageVisualAcceptance.run({
-  live: true,
-  sessionId: '<idle top-level rc2 session>',
-})
-```
+Live M06-F003 evidence must run through the standalone CLI and the already
+mounted plugin so it can use the Host-owned `AgentRegistry`, LLM registry, and
+existing top-level session. Direct service calls deliberately remain endpoint
+attestation candidates rather than final pass evidence.
 
 The runner requires a clean Git worktree, Windows or Ubuntu, an empty idle
 inbox, and an actual response route whose model metadata declares image input.
 The nonce exists only in PNG pixels and model-authored output; evidence stores
 hashes, never the nonce or provider credential. It waits for the exact queued
-message's turn and removes only its owned fixture after that turn settles. A
-timeout or uncertain queue state retains the fixture and fails closed.
+message's turn and removes only the attachment it created after that turn
+settles. A timeout or uncertain queue state retains the referenced attachment
+and fails closed.
 
 `luban-img-visual-acceptance` defaults to a plan and cannot call a provider
 unless `--live` is explicit. Live mode calls the authenticated endpoint on the
 already-mounted production plugin; it requires `LUBAN_SESSION_COOKIE`,
 `LUBAN_CSRF_TOKEN`, and `--session <idle-top-level-session>`. Each run creates a
 new evidence file and refuses to overwrite an existing path. The authenticated
-endpoint is restricted to a literal IPv4 or IPv6 loopback host so operator
-credentials are never forwarded to a remote `--base-url`. A live evidence path
+endpoint is restricted to literal IPv4 loopback so operator credentials are
+never forwarded to a remote `--base-url`. Every request carries a fresh
+challenge; the server returns only its hash, the canonical request hash, and
+its process id. The CLI independently verifies twice that the same PID owns the
+target listener, inspects the OS process launch, requires the workspace's exact
+DSH entrypoint, rejects `NODE_OPTIONS` on Ubuntu, and records only executable,
+entrypoint, command, and HTTP-response hashes. A live evidence path
 is confined to the repository's ignored `.luban/acceptance` directory; existing
 symlink/junction parents and existing files are rejected. The CLI rechecks the
 same clean HEAD after writing and invalidates the new evidence if that check
@@ -144,9 +145,10 @@ Production acceptance also requires the loaded module to be a hash-matching
 artifact from this repository's clean current-HEAD build. Provenance v3 embeds
 both the Git HEAD and a random per-build ID into the loaded module, so an old
 Host process is rejected even after a same-HEAD rebuild replaces `dist` on
-disk. Source execution, external installations, dirty/stale builds, and
-injected transports always remain blocked or `simulated` and cannot satisfy
-live acceptance.
+disk. The CLI independently re-inspects the same local build before upgrading
+the mounted candidate. Source execution, a different listener process,
+dirty/stale builds, and injected transports always remain blocked or
+`simulated` and cannot satisfy live acceptance.
 
 ## Compatibility
 

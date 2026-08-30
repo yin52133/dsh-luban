@@ -34,6 +34,7 @@ const DEFAULT_TIMEOUT_MS = 120_000
 const MIN_TIMEOUT_MS = 10_000
 const MAX_TIMEOUT_MS = 10 * 60_000
 const MODEL_PROBE_TIMEOUT_MS = 10_000
+const VISUAL_CHALLENGE = /^[A-Za-z0-9_-]{43}$/u
 const MAX_BUILD_ARTIFACTS = 512
 const MAX_BUILD_ARTIFACT_BYTES = 64 * 1024 * 1024
 const MAX_BUILD_TOTAL_BYTES = 256 * 1024 * 1024
@@ -102,6 +103,27 @@ export interface VisualAcceptanceEvidence {
     readonly sha256: string
     readonly bytes: number
   }
+  readonly endpoint?: {
+    readonly kind: 'mounted-loopback-candidate'
+    readonly host: '127.0.0.1'
+    readonly port: number
+    readonly processId: number
+    readonly nodeVersion: string
+    readonly challengeSha256: string
+    readonly requestSha256: string
+    readonly responseSha256?: string
+    readonly responseBytes?: number
+    readonly listener?: {
+      readonly kind: 'os-loopback-listener-pid'
+      readonly host: '127.0.0.1'
+      readonly port: number
+      readonly processId: number
+      readonly nodeExecutableSha256: string
+      readonly dshEntrypointSha256: string
+      readonly commandSha256: string
+      readonly observedAt: string
+    }
+  }
   readonly checks: readonly VisualAcceptanceCheck[]
   readonly cleanup: 'not-needed' | 'pass' | 'fail'
   readonly simulatedOutcome?: 'pass' | 'fail'
@@ -132,6 +154,7 @@ export interface MountedVisualAcceptanceOptions {
   readonly live: boolean
   readonly sessionId: string
   readonly timeoutMs?: number
+  readonly challenge?: string
 }
 
 export interface MountedVisualAcceptanceMount {
@@ -212,6 +235,18 @@ function mountedConfigDigest(config: Config): string {
       clipboardTimeoutMs: config.clipboardTimeoutMs,
     }),
   )
+}
+
+export function visualAcceptanceRequestBody(options: MountedVisualAcceptanceOptions): string {
+  if (!options.live || !VISUAL_CHALLENGE.test(options.challenge ?? '')) {
+    throw new TypeError('visual acceptance challenge is invalid')
+  }
+  return JSON.stringify({
+    live: true,
+    sessionId: options.sessionId,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    challenge: options.challenge,
+  })
 }
 
 function platformEvidence(): VisualAcceptanceEvidence['platform'] {
@@ -1261,6 +1296,7 @@ export class MountedVisualAcceptanceService {
     let git: GitIdentity | undefined
     let build: VisualAcceptanceBuildEvidence | undefined
     let response: VisualAcceptanceEvidence['response'] | undefined
+    let endpoint: VisualAcceptanceEvidence['endpoint'] | undefined
     let turn: number | undefined
     let baselineSequence: number | undefined
     let turnTracker: VisualTurnTracker | undefined
@@ -1275,13 +1311,31 @@ export class MountedVisualAcceptanceService {
 
     try {
       const waitTimeout = timeoutMs(options.timeoutMs)
-      platform = await inspectVisualAcceptancePlatform()
-      recordCheck(checks, 'target-platform', 'pass', platform.target)
-      canonicalWorkspace = await realpath(this.#workspaceRoot)
+      const requestBody = visualAcceptanceRequestBody(options)
       const mount = this.#mount
       if (mount === undefined) {
         throw new VisualAcceptanceBlocked('production service/config mount is unavailable')
       }
+      if (
+        this.#ctx.webServer.host !== '127.0.0.1' ||
+        !Number.isSafeInteger(this.#ctx.webServer.port) ||
+        this.#ctx.webServer.port < 1 ||
+        this.#ctx.webServer.port > 65_535
+      ) {
+        throw new VisualAcceptanceFailure('mounted loopback endpoint identity is invalid')
+      }
+      endpoint = {
+        kind: 'mounted-loopback-candidate',
+        host: '127.0.0.1',
+        port: this.#ctx.webServer.port,
+        processId: process.pid,
+        nodeVersion: process.version,
+        challengeSha256: sha256(options.challenge ?? ''),
+        requestSha256: sha256(requestBody),
+      }
+      platform = await inspectVisualAcceptancePlatform()
+      recordCheck(checks, 'target-platform', 'pass', platform.target)
+      canonicalWorkspace = await realpath(this.#workspaceRoot)
       if (
         Object.getPrototypeOf(mount.repository) !== AttachmentRepository.prototype ||
         Object.getPrototypeOf(mount.service) !== FileImageIngestService.prototype ||
@@ -1609,6 +1663,17 @@ export class MountedVisualAcceptanceService {
       }
     }
 
+    if (status === 'pass') {
+      status = 'blocked'
+      error = 'standalone CLI listener/process endpoint attestation is required'
+      recordCheck(
+        checks,
+        'listener-process-attestation',
+        'blocked',
+        'standalone CLI must bind the reported PID to the loopback listener',
+      )
+    }
+
     const result: VisualAcceptanceEvidence = {
       schemaVersion: SCHEMA_VERSION,
       featureId: FEATURE_ID,
@@ -1616,12 +1681,7 @@ export class MountedVisualAcceptanceService {
       execution: 'production',
       evidenceKind: 'live',
       status,
-      acceptancePassed:
-        status === 'pass' &&
-        response?.matched === true &&
-        cleanup === 'pass' &&
-        git !== undefined &&
-        build !== undefined,
+      acceptancePassed: false,
       ...(nonce === undefined ? {} : { nonceSha256: sha256(nonce) }),
       session: {
         requestedId: requestedSessionId,
@@ -1638,6 +1698,7 @@ export class MountedVisualAcceptanceService {
       ...(build === undefined ? {} : { build }),
       platform,
       ...(response === undefined ? {} : { response }),
+      ...(endpoint === undefined ? {} : { endpoint }),
       checks,
       cleanup,
       ...(error === undefined ? {} : { error }),

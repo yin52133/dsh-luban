@@ -251,7 +251,7 @@ export class ImagePasteHttpApi {
         const body = record(await jsonBody(request))
         if (
           Object.keys(body).some(
-            (key): boolean => !['live', 'sessionId', 'timeoutMs'].includes(key),
+            (key): boolean => !['live', 'sessionId', 'timeoutMs', 'challenge'].includes(key),
           ) ||
           body.live !== true
         ) {
@@ -269,10 +269,14 @@ export class ImagePasteHttpApi {
         ) {
           throw new LubanError('E_INVALID_INPUT', 'timeoutMs is outside the allowed live range')
         }
+        if (typeof body.challenge !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(body.challenge)) {
+          throw new LubanError('E_INVALID_INPUT', 'challenge is invalid')
+        }
         const requestedSession = sessionId(body.sessionId)
         const options = {
           live: true,
           sessionId: requestedSession,
+          challenge: body.challenge,
           ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
         } satisfies MountedVisualAcceptanceOptions
         const observed =
