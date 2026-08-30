@@ -59,6 +59,26 @@ export { HudEventStream, HudHttpApi } from './http-api.js'
 export { HudKeepaliveHealthStore } from './keepalive-health.js'
 export { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
 export type { MonotonicClock } from './rate-window.js'
+export {
+  HUD_RATE_EXPORT_SCHEMA,
+  PROVIDER_RATE_EXPORT_SCHEMA,
+  RATE_RECONCILIATION_SCHEMA,
+  RATE_TOKEN_TOLERANCE,
+  RateReconciliationError,
+  reconcileRateExports,
+} from './rate-reconcile.js'
+export type {
+  HudRateExport,
+  HudRateOrigin,
+  ProviderRateExport,
+  ProviderRateOrigin,
+  RateLedgerRecord,
+  RateMetricDelta,
+  RateReconciliation,
+  RateTotals,
+  RateWindowUtc,
+  ReconciledTokenUsage,
+} from './rate-reconcile.js'
 export { HUD_TELEMETRY_EVENT } from './types.js'
 export type {
   HudLevel,
