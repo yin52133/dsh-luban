@@ -40,6 +40,32 @@ function delay(milliseconds: number): Promise<void> {
   })
 }
 
+const WINDOWS_RENAME_RETRY_DELAYS_MS = [5, 10, 20, 40, 80, 160, 320, 500] as const
+const WINDOWS_TRANSIENT_FILE_CODES = new Set(['EACCES', 'EBUSY', 'EPERM'])
+
+function isWindowsTransientFileError(error: unknown): boolean {
+  return process.platform === 'win32' && WINDOWS_TRANSIENT_FILE_CODES.has(errorCode(error) ?? '')
+}
+
+async function renameAtomically(source: string, target: string): Promise<void> {
+  let retry = 0
+  for (;;) {
+    try {
+      await rename(source, target)
+      return
+    } catch (error: unknown) {
+      const retryDelay = WINDOWS_RENAME_RETRY_DELAYS_MS[retry]
+      if (!isWindowsTransientFileError(error) || retryDelay === undefined) {
+        throw error
+      }
+      // Windows readers briefly prevent replacing an existing file. Keep the publish atomic,
+      // but give bounded local readers and security scanners time to release their handles.
+      retry += 1
+      await delay(retryDelay)
+    }
+  }
+}
+
 function sameLocalCalendarDay(left: number, right: number): boolean {
   const leftDate = new Date(left)
   const rightDate = new Date(right)
@@ -69,6 +95,15 @@ export class AtomicJsonStore<Value> {
   }
 
   public async read(): Promise<Value> {
+    const release = await this.#acquireLock()
+    try {
+      return await this.#readUnlocked()
+    } finally {
+      await release()
+    }
+  }
+
+  async #readUnlocked(): Promise<Value> {
     try {
       const raw = await readFile(this.#filePath, 'utf8')
       return this.#codec.decode(JSON.parse(raw) as unknown)
@@ -97,7 +132,7 @@ export class AtomicJsonStore<Value> {
   public async update(mutator: (current: Value) => Value | Promise<Value>): Promise<Value> {
     const release = await this.#acquireLock()
     try {
-      const current = await this.read()
+      const current = await this.#readUnlocked()
       const next = await mutator(current)
       await this.#writeUnlocked(next)
       return next
@@ -121,7 +156,7 @@ export class AtomicJsonStore<Value> {
       } finally {
         await handle.close()
       }
-      await rename(temporary, this.#filePath)
+      await renameAtomically(temporary, this.#filePath)
     } catch (error: unknown) {
       await rm(temporary, { force: true }).catch((): undefined => undefined)
       throw new LubanError('E_IO', `Unable to atomically write ${this.#filePath}`, {
@@ -150,7 +185,7 @@ export class AtomicJsonStore<Value> {
       const source = `${this.#filePath}.bak.${String(index)}`
       const target = `${this.#filePath}.bak.${String(index + 1)}`
       try {
-        await rename(source, target)
+        await renameAtomically(source, target)
       } catch (error: unknown) {
         if (errorCode(error) !== 'ENOENT') throw error
       }
@@ -171,7 +206,7 @@ export class AtomicJsonStore<Value> {
           await rm(lockPath, { force: true })
         }
       } catch (error: unknown) {
-        if (errorCode(error) !== 'EEXIST') {
+        if (errorCode(error) !== 'EEXIST' && !isWindowsTransientFileError(error)) {
           throw new LubanError('E_IO', `Unable to lock ${this.#filePath}`, {
             retriable: true,
             cause: error,
@@ -185,6 +220,10 @@ export class AtomicJsonStore<Value> {
           }
         } catch (statError: unknown) {
           if (errorCode(statError) === 'ENOENT') continue
+          if (isWindowsTransientFileError(statError)) {
+            await delay(25)
+            continue
+          }
           throw statError
         }
         await delay(25)

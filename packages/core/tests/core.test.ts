@@ -185,6 +185,31 @@ describe('AtomicJsonStore', (): void => {
     expect(JSON.parse(await readFile(`${filePath}.bak.1`, 'utf8'))).toBe(10)
   })
 
+  it('publishes updates while local readers repeatedly open the ledger', async (): Promise<void> => {
+    const directory = await temporaryDirectory()
+    const filePath = join(directory, 'read-write-ledger.json')
+    const store = new AtomicJsonStore({
+      filePath,
+      codec: numberCodec,
+      initial: (): number => 0,
+      backupCount: 0,
+    })
+    await store.write(0)
+
+    let reading = true
+    const readers = Array.from({ length: 4 }, async (): Promise<void> => {
+      while (reading) await store.read()
+    })
+    try {
+      for (let value = 1; value <= 4; value += 1) await store.write(value)
+    } finally {
+      reading = false
+      await Promise.all(readers)
+    }
+
+    expect(await store.read()).toBe(4)
+  })
+
   it('bounds the default daily history to seven write days', async (): Promise<void> => {
     const directory = await temporaryDirectory()
     const filePath = join(directory, 'seven-day-ledger.json')
