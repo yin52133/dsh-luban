@@ -170,6 +170,7 @@ async function provenanceWorkspaceClone(options = {}) {
       `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
       'commit',
       '--quiet',
+      '--allow-empty',
       '-m',
       'test: add M09 runner fixture',
     ],
