@@ -11,7 +11,7 @@ import type {
   SessionRef,
   TelemetryAggregator,
 } from 'dsh-luban-core'
-import { LubanError, asSessionId, redactSecrets } from 'dsh-luban-core'
+import { LubanError, asSessionId } from 'dsh-luban-core'
 import { ContextArchiveRepository } from './archive.js'
 import type { Config } from './config.js'
 import type {
@@ -133,7 +133,7 @@ export class DshCompactionContext implements ReadableCompactionContext {
       'Compacted earlier context (preserve these decisions and constraints):',
       ...lines.map((line): string => `- ${line}`),
     ].join('\n')
-    return redactSecrets(summary).slice(0, 12_000)
+    return summary.slice(0, 12_000)
   }
 
   public inject(summary: string, archiveFiles: readonly string[]): Promise<void> {
@@ -153,7 +153,7 @@ export class DshCompactionContext implements ReadableCompactionContext {
       archiveFiles.length === 0
         ? ''
         : `\n\nExact archived source (retrieve when detail is needed):\n${archiveFiles.map((file): string => `- ${file}`).join('\n')}`
-    const content = redactSecrets(`${summary}${index}`)
+    const content = `${summary}${index}`
     this.#session.append(
       'user/message',
       createUserMessage({

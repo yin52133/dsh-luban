@@ -23,13 +23,7 @@ import type {
   JsonCodec,
   SessionId,
 } from 'dsh-luban-core'
-import {
-  AtomicJsonStore,
-  LubanError,
-  asAccountId,
-  asSessionId,
-  redactSecrets,
-} from 'dsh-luban-core'
+import { AtomicJsonStore, LubanError, asAccountId, asSessionId } from 'dsh-luban-core'
 
 export interface ArchiveIndexEntry {
   readonly accountId: AccountId
@@ -384,15 +378,14 @@ export class ContextArchiveRepository {
   public async archive(segment: ContextSegment, rawContent: string): Promise<string> {
     const root = await this.#root()
     await this.#assertRoot(root)
-    const content = redactSecrets(rawContent)
     const document = [
       `# Context segment ${String(segment.startSeq)}–${String(segment.endSeq)}`,
       '',
       `- Session: \`${this.#sessionId}\``,
       `- Estimated tokens: ${String(segment.estTokens)}`,
-      ...(segment.topic === undefined ? [] : [`- Topic: ${redactSecrets(segment.topic)}`]),
+      ...(segment.topic === undefined ? [] : [`- Topic: ${segment.topic}`]),
       '',
-      content,
+      rawContent,
       '',
     ].join('\n')
     const digest = createHash('sha256').update(document).digest('hex')
@@ -407,7 +400,7 @@ export class ContextArchiveRepository {
       startSeq: segment.startSeq,
       endSeq: segment.endSeq,
       estTokens: segment.estTokens,
-      ...(segment.topic === undefined ? {} : { topic: redactSecrets(segment.topic) }),
+      ...(segment.topic === undefined ? {} : { topic: segment.topic }),
       path,
       sha256: digest,
       createdAt: this.#clock.now(),

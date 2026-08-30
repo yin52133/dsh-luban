@@ -58,7 +58,7 @@ describe('DSH compaction boundary', () => {
     )
   })
 
-  it('replaces only the old surface prefix while retaining redacted archives for replay', async () => {
+  it('replaces only the old surface prefix while retaining exact archives for replay', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'luban-dsh-context-'))
     directories.push(directory)
     const id = SessionId('surface-session')
@@ -115,12 +115,12 @@ describe('DSH compaction boundary', () => {
     const derived = JSON.stringify(session.deriveMessages())
     expect(derived).toContain('stable API')
     expect(derived).toContain('Recent user request must remain verbatim')
-    expect(derived).not.toContain('very-secret')
+    expect(derived).toContain('token=very-secret')
     const entry = (await workspace.repository.entries())[0]
     if (entry === undefined) throw new Error('archive entry missing')
     const replay = await workspace.repository.replay(entry.startSeq, entry.endSeq)
     expect(replay).toContain('Requirement')
-    expect(replay).toContain('[REDACTED]')
+    expect(replay).toContain('token=very-secret')
     expect(await (await factory.open(ref.id, ALICE)).entries()).toHaveLength(
       result.archiveFiles.length,
     )

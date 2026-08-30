@@ -19,7 +19,7 @@ describe('ContextArchiveRepository', () => {
     await rm(directory, { recursive: true, force: true })
   })
 
-  it('writes searchable, redacted, checksum-verified virtual files', async () => {
+  it('writes searchable, exact, checksum-verified virtual files', async () => {
     const repository = new ContextArchiveRepository({
       workspace: directory,
       archiveDir: '.luban/context-archive',
@@ -34,8 +34,7 @@ describe('ContextArchiveRepository', () => {
     expect(path).toMatch(/^\.luban\/context-archive\/alice\/session_unsafe-[a-f0-9]{8}\/seg-/u)
     const replay = await repository.replay(1, 3)
     expect(replay).toContain('constraint A')
-    expect(replay).not.toContain('super-secret')
-    expect(replay).toContain('token=[REDACTED]')
+    expect(replay).toContain('token=super-secret')
     expect(await repository.entries()).toHaveLength(1)
 
     await writeFile(join(directory, path), 'tampered', 'utf8')
