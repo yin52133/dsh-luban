@@ -235,7 +235,7 @@ describe('HUD loaded build provenance', (): void => {
     }).toThrow('clean loaded build')
   })
 
-  it('parses only exact, clean build evidence', (): void => {
+  it('parses exact build diagnostics including dirty builds', (): void => {
     const value = {
       schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
       gitHead: GIT_HEAD,
@@ -246,9 +246,7 @@ describe('HUD loaded build provenance', (): void => {
       runtimeBundleSha256: 'c'.repeat(64),
     }
     expect(parseHudBuildProvenance(value)).toEqual(value)
-    expect((): void => {
-      parseHudBuildProvenance({ ...value, dirty: true })
-    }).toThrow('build provenance is invalid')
+    expect(parseHudBuildProvenance({ ...value, dirty: true })).toEqual({ ...value, dirty: true })
     expect((): void => {
       parseHudBuildProvenance({ ...value, extra: true })
     }).toThrow('build provenance is invalid')

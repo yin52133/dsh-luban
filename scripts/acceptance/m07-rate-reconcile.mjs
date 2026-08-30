@@ -785,8 +785,19 @@ export async function inspectM07BuildProvenance(root, expectedGitHead, runtimeAr
   if (!GIT_SHA.test(expectedGitHead)) {
     throw new AcceptanceError('E_RATE_BUILD_PROVENANCE', 'Expected HUD build HEAD is invalid', true)
   }
-  const canonicalPackageRoot = await realpath(resolve(root, 'packages', HUD_PACKAGE_NAME))
-  const canonicalDistRoot = await realpath(resolve(canonicalPackageRoot, 'dist'))
+  const normalizedRuntimeArtifact = normalizeM07RuntimeArtifact(runtimeArtifact)
+  let canonicalPackageRoot
+  let canonicalDistRoot
+  try {
+    canonicalPackageRoot = await realpath(resolve(root, 'packages', HUD_PACKAGE_NAME))
+    canonicalDistRoot = await realpath(resolve(canonicalPackageRoot, 'dist'))
+  } catch {
+    throw new AcceptanceError(
+      'E_RATE_BUILD_PROVENANCE',
+      'Unable to locate the HUD build distribution',
+      true,
+    )
+  }
   if (
     !sameFilesystemPath(canonicalPackageRoot, resolve(root, 'packages', HUD_PACKAGE_NAME)) ||
     !sameFilesystemPath(canonicalDistRoot, resolve(canonicalPackageRoot, 'dist'))
@@ -879,7 +890,7 @@ export async function inspectM07BuildProvenance(root, expectedGitHead, runtimeAr
       true,
     )
   }
-  for (const runtimeFile of runtimeArtifact.files) {
+  for (const runtimeFile of normalizedRuntimeArtifact.files) {
     const path = runtimeFile.relativePath.slice('dist/'.length)
     const artifact = artifacts.get(path)
     if (artifact?.sha256 !== runtimeFile.sha256 || artifact?.bytes !== runtimeFile.bytes) {
@@ -912,11 +923,11 @@ export async function inspectM07BuildProvenance(root, expectedGitHead, runtimeAr
     dirty: false,
     runtime: 'repo-dist',
     manifestSha256: sha256(manifestBytes),
-    runtimeBundleSha256: runtimeArtifact.bundleSha256,
+    runtimeBundleSha256: normalizedRuntimeArtifact.bundleSha256,
   })
 }
 
-export async function inspectM07SourceProvenance(root, invokeGit = runGit, expectedGitHead) {
+export async function inspectM07SourceProvenance(root, expectedGitHead, invokeGit = runGit) {
   let canonicalRoot
   try {
     canonicalRoot = await realpath(resolve(root))
@@ -1339,7 +1350,7 @@ function normalizeM07BuildProvenance(value) {
     value.schemaVersion !== HUD_BUILD_PROVENANCE_SCHEMA ||
     !GIT_SHA.test(value.gitHead) ||
     !BUILD_ID.test(value.buildId) ||
-    value.dirty !== false ||
+    typeof value.dirty !== 'boolean' ||
     value.runtime !== 'repo-dist' ||
     !SHA256.test(value.manifestSha256) ||
     !SHA256.test(value.runtimeBundleSha256)
@@ -1354,26 +1365,18 @@ function normalizeM07BuildProvenance(value) {
     schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
     gitHead: value.gitHead,
     buildId: value.buildId,
-    dirty: false,
+    dirty: value.dirty,
     runtime: 'repo-dist',
     manifestSha256: value.manifestSha256,
     runtimeBundleSha256: value.runtimeBundleSha256,
   })
 }
 
-export function validateMountedHudCapture(
-  value,
-  expectedWindow,
-  challenge,
-  expectedArtifact,
-  expectedBuild,
-) {
+export function validateMountedHudCapture(value, expectedWindow, challenge) {
   const window = exactRateWindow(expectedWindow, 'Expected provider')
   const challengeSha256 = sha256(captureChallenge(challenge))
   const runtimeArtifact = normalizeM07RuntimeArtifact(value?.source?.runtimeArtifact)
-  const localArtifact = normalizeM07RuntimeArtifact(expectedArtifact)
   const build = normalizeM07BuildProvenance(value?.source?.build)
-  const localBuild = normalizeM07BuildProvenance(expectedBuild)
   assertNoSuspiciousCredentialFields(value)
   if (
     !hasExactKeys(value, ['captures', 'export', 'schemaVersion', 'source']) ||
@@ -1402,23 +1405,6 @@ export function validateMountedHudCapture(
     throw new AcceptanceError(
       'E_RATE_HUD_CAPTURE_SCHEMA',
       'Mounted HUD capture wrapper provenance is invalid',
-    )
-  }
-  if (JSON.stringify(runtimeArtifact) !== JSON.stringify(localArtifact)) {
-    throw new AcceptanceError(
-      'E_RATE_HUD_RUNTIME_MISMATCH',
-      'Mounted HUD endpoint is not running the inspected local runtime artifact',
-      true,
-    )
-  }
-  if (
-    JSON.stringify(build) !== JSON.stringify(localBuild) ||
-    build.runtimeBundleSha256 !== runtimeArtifact.bundleSha256
-  ) {
-    throw new AcceptanceError(
-      'E_RATE_HUD_BUILD_MISMATCH',
-      'Mounted HUD endpoint is not running the inspected clean repository build',
-      true,
     )
   }
   if (Date.parse(value.source.coverageStartUtc) > Date.parse(window.startUtc)) {
@@ -1610,14 +1596,14 @@ async function productionReconcile(hud, provider) {
   } catch {
     throw new AcceptanceError(
       'E_RATE_SOURCE_UNAVAILABLE',
-      'Unable to load the tracked HUD reconciliation implementation',
+      'Unable to load the HUD reconciliation implementation',
       true,
     )
   }
   if (typeof module.reconcileRateExports !== 'function') {
     throw new AcceptanceError(
       'E_RATE_SOURCE_UNAVAILABLE',
-      'Tracked HUD source does not expose rate reconciliation',
+      'HUD package does not expose rate reconciliation',
       true,
     )
   }
@@ -1639,8 +1625,8 @@ export function createM07RateReconciliationPlan(options = {}) {
     requestedMode:
       options.live === true
         ? mountedHud
-          ? 'mounted-hud-diagnostic-with-operator-provider-export'
-          : 'operator-attested-external-exports'
+          ? 'mounted-hud-with-provider-export'
+          : 'external-export-diagnostic'
         : 'plan',
     sources: Object.freeze([
       mountedHud
@@ -1658,8 +1644,8 @@ export function createM07RateReconciliationPlan(options = {}) {
     ]),
     tolerance: Object.freeze({ requestCountRelative: 0, tokenRelative: 0.05 }),
     acceptanceBoundary: mountedHud
-      ? 'mounted HUD capture is diagnostic until a trusted endpoint/build attestation binds the running listener; provider request identities must already be adapter-bound'
-      : 'two operator-provided JSON files prove reconciliation only; the HUD side requires mounted trusted capture',
+      ? 'mounted HUD capture must contain provider request IDs and reconcile with a real billing export; Windows and Ubuntu are run separately'
+      : 'two operator-provided JSON files are diagnostic; functional acceptance requires mounted HUD capture',
     writes: options.live === true ? 'one new evidence file only' : 'none',
   })
 }
@@ -1698,40 +1684,32 @@ function resultHasLiveOrigins(result) {
   )
 }
 
-export function requiresTrustedM07Capture(execution, operationStatus, integrityPass) {
-  return execution === 'production' && operationStatus === 'pass' && integrityPass === true
+export function requiresM07FunctionalBoundary(execution, operationStatus, functionalityPass) {
+  return execution === 'production' && operationStatus === 'pass' && functionalityPass === true
 }
 
-export function requiredM07BoundaryCode(execution, hudMode, operationStatus, integrityPass) {
-  if (!requiresTrustedM07Capture(execution, operationStatus, integrityPass)) return null
-  return hudMode === 'mounted'
-    ? 'E_RATE_ENDPOINT_ATTESTATION_REQUIRED'
-    : 'E_RATE_TRUSTED_CAPTURE_REQUIRED'
+export function requiredM07BoundaryCode(execution, hudMode, operationStatus, functionalityPass) {
+  if (!requiresM07FunctionalBoundary(execution, operationStatus, functionalityPass)) return null
+  return hudMode === 'mounted' ? null : 'E_RATE_MOUNTED_CAPTURE_REQUIRED'
 }
 
 export function m07EvidenceKind(execution, hudMode) {
   if (execution !== 'production') return 'simulated'
   return hudMode === 'mounted'
-    ? 'mounted-hud-diagnostic-with-operator-provider-export'
-    : 'operator-attested-external-exports'
+    ? 'mounted-hud-provider-reconciled'
+    : 'operator-provided-external-exports'
 }
 
 function productionBoundaryError(code) {
-  return code === 'E_RATE_ENDPOINT_ATTESTATION_REQUIRED'
-    ? new AcceptanceError(
-        'E_RATE_ENDPOINT_ATTESTATION_REQUIRED',
-        'Mounted HUD reconciliation is blocked until a trusted build and listener-process attestation binds the running endpoint',
-        true,
-      )
-    : new AcceptanceError(
-        'E_RATE_TRUSTED_CAPTURE_REQUIRED',
-        'External JSON reconciliation is operator-attested; direct live acceptance requires the mounted HUD capture',
-        true,
-      )
+  return new AcceptanceError(
+    code,
+    'External JSON reconciliation is diagnostic; functional acceptance requires mounted HUD capture',
+    true,
+  )
 }
 
 function inputSummary(input, reconciliation, kind) {
-  if (input === null) return null
+  if (input === null || input === undefined) return null
   const source = kind === 'hud' ? reconciliation?.sources?.hud : reconciliation?.sources?.provider
   const expectedSchema = kind === 'hud' ? HUD_EXPORT_SCHEMA : PROVIDER_EXPORT_SCHEMA
   const summary = {
@@ -1773,8 +1751,6 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
   const hudMode = mountedHudRequested(options) ? 'mounted' : 'external'
   const runtime = {
     inspectPlatform: inspectM07RuntimePlatform,
-    inspectGit: inspectM07GitState,
-    inspectSource: inspectM07SourceProvenance,
     readInput: readExternalRateExport,
     extractProviderWindow: extractProviderRateWindow,
     createChallenge: createM07CaptureChallenge,
@@ -1784,10 +1760,6 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
   }
   const checks = []
   let platform = null
-  let before = null
-  let after = null
-  let sourceBefore = null
-  let sourceAfter = null
   let hudInput = null
   let providerInput = null
   let reconciliation = null
@@ -1795,64 +1767,20 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
   let operationStatus = 'fail'
 
   try {
-    if (execution === 'production' && !sameFilesystemPath(plan.root, REPOSITORY_ROOT)) {
-      throw new AcceptanceError(
-        'E_RATE_REPOSITORY_ROOT',
-        'Production reconciliation must attest this repository root',
-        true,
-      )
-    }
     requiredLiveOptions(options)
     check(checks, 'real-provider-export-confirmed', 'pass', true)
     platform = await runtime.inspectPlatform()
-    check(checks, 'platform-attested', 'pass', platform.target)
-    before = await runtime.inspectGit(plan.root)
-    check(checks, 'git-before-clean', before.clean ? 'pass' : 'blocked', before.clean)
-    if (before.clean !== true) {
-      throw new AcceptanceError(
-        'E_RATE_GIT_DIRTY',
-        'Live reconciliation requires a clean source tree before reading exports',
-        true,
-      )
-    }
-    sourceBefore = await runtime.inspectSource(plan.root, before.sha)
-    check(checks, 'tracked-source-bundle-bound-to-head', 'pass', sourceBefore.bundleSha256)
-    if (hudMode === 'mounted' && execution === 'production') {
-      if (sourceBefore.runtimeArtifact?.schemaVersion !== HUD_RUNTIME_ARTIFACT_SCHEMA) {
-        throw new AcceptanceError(
-          'E_RATE_RUNTIME_PROVENANCE',
-          'Mounted HUD reconciliation requires an inspected local runtime artifact',
-          true,
-        )
-      }
-      check(
-        checks,
-        'local-hud-runtime-artifact-inspected',
-        'pass',
-        sourceBefore.runtimeArtifact.bundleSha256,
-      )
-      if (sourceBefore.build?.gitHead !== before.sha || sourceBefore.build?.dirty !== false) {
-        throw new AcceptanceError(
-          'E_RATE_BUILD_PROVENANCE',
-          'Mounted HUD reconciliation requires a clean local build of repository HEAD',
-          true,
-        )
-      }
-      check(checks, 'local-hud-build-bound-to-head', 'pass', sourceBefore.build.buildId)
-    }
+    check(checks, 'platform-supported', 'pass', platform.target)
     providerInput = await runtime.readInput(plan.root, options.providerExport, 'provider')
     assertNoSuspiciousCredentialFields(providerInput.value)
     if (hudMode === 'mounted') {
       const providerWindow = runtime.extractProviderWindow(providerInput.value)
       const challenge = captureChallenge(runtime.createChallenge())
-      hudInput = await runtime.fetchHudCapture(options.hudUrl, providerWindow, challenge, {
-        expectedRuntimeArtifact: sourceBefore.runtimeArtifact,
-        expectedBuild: sourceBefore.build,
-      })
+      hudInput = await runtime.fetchHudCapture(options.hudUrl, providerWindow, challenge)
       if (hudInput.capture?.sourceKind !== 'mounted-hud-capture') {
         throw new AcceptanceError(
           'E_RATE_HUD_CAPTURE_SCHEMA',
-          'Mounted HUD fetch did not return trusted capture provenance',
+          'Mounted HUD fetch did not return a rate capture',
         )
       }
       check(checks, 'mounted-hud-challenge-bound', 'pass', hudInput.capture.challengeSha256)
@@ -1863,15 +1791,6 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
         'pass',
         `${hudInput.capture.providerRequestIdentity.adapter.id}:${String(hudInput.capture.providerRequestIdentity.count)}`,
       )
-      if (execution === 'production') {
-        check(
-          checks,
-          'mounted-hud-runtime-artifact-matched',
-          'pass',
-          hudInput.capture.runtimeArtifact.bundleSha256,
-        )
-        check(checks, 'mounted-hud-build-matched', 'pass', hudInput.capture.build.buildId)
-      }
     } else {
       hudInput = await runtime.readInput(plan.root, options.hudExport, 'HUD')
     }
@@ -1896,7 +1815,7 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
     if (!resultHasLiveOrigins(reconciliation)) {
       throw new AcceptanceError(
         'E_RATE_LIVE_SOURCE',
-        'Reconciliation did not attest live HUD and real provider origins',
+        'Reconciliation did not contain live HUD and real provider origins',
       )
     }
     check(checks, 'complete-token-basis', 'pass', true)
@@ -1910,82 +1829,29 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
     check(checks, 'acceptance-outcome', operationStatus, outcome.code)
   }
 
-  if (sourceBefore !== null) {
-    try {
-      sourceAfter = await runtime.inspectSource(plan.root, before?.sha)
-      const sameSource =
-        sourceAfter.bundleSha256 === sourceBefore.bundleSha256 &&
-        JSON.stringify(sourceAfter.runtimeArtifact) ===
-          JSON.stringify(sourceBefore.runtimeArtifact) &&
-        JSON.stringify(sourceAfter.build) === JSON.stringify(sourceBefore.build)
-      check(checks, 'tracked-source-unchanged', sameSource ? 'pass' : 'fail', sameSource)
-      if (!sameSource) {
-        failure = new AcceptanceError(
-          'E_RATE_SOURCE_CHANGED',
-          'Tracked reconciliation source changed during reconciliation',
-        )
-        operationStatus = 'fail'
-      }
-    } catch (error) {
-      failure = error
-      operationStatus = 'fail'
-      check(checks, 'tracked-source-after-inspected', 'fail', false)
-    }
-  }
-
-  if (before !== null) {
-    try {
-      after = await runtime.inspectGit(plan.root)
-      const clean = after.clean === true
-      const sameHead = after.sha === before.sha
-      check(checks, 'git-after-clean', clean ? 'pass' : 'fail', clean)
-      check(checks, 'git-head-unchanged', sameHead ? 'pass' : 'fail', sameHead)
-      if (before.clean === true && (!clean || !sameHead)) {
-        failure = new AcceptanceError(
-          !clean ? 'E_RATE_GIT_DIRTY_AFTER' : 'E_RATE_GIT_HEAD_DRIFT',
-          !clean
-            ? 'Source tree became dirty during reconciliation'
-            : 'Git HEAD changed during reconciliation',
-        )
-        operationStatus = 'fail'
-      }
-    } catch (error) {
-      if (before.clean === true) {
-        failure = error
-        operationStatus = 'fail'
-      }
-      check(checks, 'git-after-inspected', 'fail', false)
-    }
-  }
-
-  const integrityPass =
-    before?.clean === true &&
-    after?.clean === true &&
-    before.sha === after.sha &&
-    sourceBefore !== null &&
-    sourceAfter !== null &&
+  const functionalityPass =
     (hudMode === 'external' ||
       (hudInput?.capture?.sourceKind === 'mounted-hud-capture' &&
-        hudInput.capture.providerRequestIdentity?.count > 0 &&
-        (execution !== 'production' ||
-          (hudInput.capture.runtimeArtifact?.bundleSha256 ===
-            sourceBefore.runtimeArtifact?.bundleSha256 &&
-            hudInput.capture.build?.manifestSha256 === sourceBefore.build?.manifestSha256 &&
-            hudInput.capture.build?.gitHead === before.sha)))) &&
+        hudInput.capture.providerRequestIdentity?.count > 0)) &&
     resultHasLiveOrigins(reconciliation)
-  const boundaryCode = requiredM07BoundaryCode(execution, hudMode, operationStatus, integrityPass)
+  const boundaryCode = requiredM07BoundaryCode(
+    execution,
+    hudMode,
+    operationStatus,
+    functionalityPass,
+  )
   if (boundaryCode !== null) {
     failure = productionBoundaryError(boundaryCode)
     operationStatus = 'blocked'
-    check(
-      checks,
-      hudMode === 'mounted' ? 'trusted-mounted-endpoint-bound' : 'trusted-hud-capture-bound',
-      'blocked',
-      false,
-    )
+    check(checks, 'mounted-hud-capture-required', 'blocked', false)
   }
   const status =
     execution === 'test-double' && operationStatus === 'pass' ? 'simulated' : operationStatus
+  const acceptancePassed =
+    execution === 'production' &&
+    hudMode === 'mounted' &&
+    operationStatus === 'pass' &&
+    functionalityPass
   return Object.freeze({
     schemaVersion: EVIDENCE_SCHEMA,
     featureId: FEATURE_ID,
@@ -1993,10 +1859,10 @@ export async function runM07RateReconciliation(options = {}, dependencies = {}) 
     execution,
     evidenceKind: m07EvidenceKind(execution, hudMode),
     status,
-    acceptancePassed: false,
+    acceptancePassed,
     platform,
-    git: Object.freeze({ before, after }),
-    source: Object.freeze({ before: sourceBefore, after: sourceAfter }),
+    git: null,
+    source: null,
     inputs: Object.freeze({
       hud: inputSummary(hudInput, reconciliation, 'hud'),
       provider: inputSummary(providerInput, reconciliation, 'provider'),

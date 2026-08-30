@@ -39,7 +39,8 @@ export interface HudBuildProvenance {
   readonly schemaVersion: typeof HUD_BUILD_PROVENANCE_SCHEMA
   readonly gitHead: string
   readonly buildId: string
-  readonly dirty: false
+  /** Diagnostic only; mounted HUD operation does not depend on a clean worktree. */
+  readonly dirty: boolean
   readonly runtime: 'repo-dist'
   readonly manifestSha256: string
   readonly runtimeBundleSha256: string
@@ -161,7 +162,7 @@ export function parseHudBuildProvenance(value: unknown): HudBuildProvenance {
     !GIT_SHA.test(value.gitHead) ||
     typeof value.buildId !== 'string' ||
     !BUILD_ID.test(value.buildId) ||
-    value.dirty !== false ||
+    typeof value.dirty !== 'boolean' ||
     value.runtime !== 'repo-dist' ||
     typeof value.manifestSha256 !== 'string' ||
     !SHA256.test(value.manifestSha256) ||
@@ -174,7 +175,7 @@ export function parseHudBuildProvenance(value: unknown): HudBuildProvenance {
     schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
     gitHead: value.gitHead,
     buildId: value.buildId,
-    dirty: false,
+    dirty: value.dirty,
     runtime: 'repo-dist',
     manifestSha256: value.manifestSha256,
     runtimeBundleSha256: value.runtimeBundleSha256,

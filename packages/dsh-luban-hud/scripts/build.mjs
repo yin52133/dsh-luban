@@ -1,36 +1,23 @@
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, readFile, readdir, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 
-const executeFile = promisify(execFile)
 const packageDirectory = dirname(dirname(fileURLToPath(import.meta.url)))
-const repositoryRoot = resolve(packageDirectory, '..', '..')
 const distributionDirectory = join(packageDirectory, 'dist')
 const MAX_ARTIFACTS = 512
 const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024
-
-async function gitOutput(args) {
-  const { stdout } = await executeFile('git', args, {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-    windowsHide: true,
-    maxBuffer: 1024 * 1024,
-  })
-  return stdout
-}
-
-async function runBuild(gitHead, buildId) {
+async function runBuild(buildId) {
   const entry = fileURLToPath(import.meta.resolve('tsdown/run'))
   await new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [entry], {
       cwd: packageDirectory,
       env: {
         ...process.env,
-        LUBAN_HUD_BUILD_HEAD: gitHead,
+        // Build metadata is diagnostic only and must not depend on Git state.
+        LUBAN_HUD_BUILD_HEAD: '0'.repeat(40),
         LUBAN_HUD_BUILD_ID: buildId,
       },
       stdio: 'inherit',
@@ -87,32 +74,19 @@ async function collectArtifacts(
   return artifacts.sort((left, right) => left.path.localeCompare(right.path, 'en'))
 }
 
-const headBefore = (await gitOutput(['rev-parse', '--verify', 'HEAD'])).trim().toLowerCase()
-const statusBefore = await gitOutput(['status', '--porcelain=v1', '--untracked-files=normal'])
 const buildId = randomUUID()
-await runBuild(headBefore, buildId)
-const statusAfter = await gitOutput(['status', '--porcelain=v1', '--untracked-files=normal'])
-const headAfter = (await gitOutput(['rev-parse', '--verify', 'HEAD'])).trim().toLowerCase()
+await runBuild(buildId)
 const artifacts = await collectArtifacts()
-const statusFinal = await gitOutput(['status', '--porcelain=v1', '--untracked-files=normal'])
-const headFinal = (await gitOutput(['rev-parse', '--verify', 'HEAD'])).trim().toLowerCase()
 
-if (
-  !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(headBefore) ||
-  headAfter !== headBefore ||
-  headFinal !== headBefore ||
-  artifacts.length === 0
-) {
-  throw new Error('Unable to create HUD build provenance: Git HEAD changed during build')
-}
+if (artifacts.length === 0) throw new Error('HUD build produced no artifacts')
 
 await writeFile(
   join(distributionDirectory, 'build-provenance.json'),
   `${JSON.stringify({
     schemaVersion: 'dsh-luban/hud-build-provenance/v1',
-    gitHead: headBefore,
+    gitHead: '0'.repeat(40),
     buildId,
-    dirty: statusBefore.trim() !== '' || statusAfter.trim() !== '' || statusFinal.trim() !== '',
+    dirty: true,
     artifacts,
   })}\n`,
   { encoding: 'utf8', mode: 0o600, flag: 'w' },

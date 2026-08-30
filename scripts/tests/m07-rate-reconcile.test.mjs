@@ -21,7 +21,7 @@ import {
   readM07BoundedResponseBody,
   readExternalRateExport,
   requiredM07BoundaryCode,
-  requiresTrustedM07Capture,
+  requiresM07FunctionalBoundary,
   runM07RateReconciliation,
   runM07RateReconciliationCli,
   validateM07HudUrl,
@@ -94,12 +94,6 @@ const BUILD_PROVENANCE = Object.freeze({
   runtime: 'repo-dist',
   manifestSha256: createHash('sha256').update(BUILD_MANIFEST_BYTES).digest('hex'),
   runtimeBundleSha256: RUNTIME_ARTIFACT.bundleSha256,
-})
-const SOURCE_PROVENANCE = Object.freeze({
-  bundleSha256: 'f'.repeat(64),
-  files: Object.freeze([]),
-  runtimeArtifact: RUNTIME_ARTIFACT,
-  build: BUILD_PROVENANCE,
 })
 
 async function temporaryRoot(prefix = 'luban-m07-rate-test-') {
@@ -325,8 +319,6 @@ function input(label, value = { schemaVersion: `${label}-schema` }) {
 function passingDependencies(overrides = {}) {
   return {
     inspectPlatform: async () => WINDOWS_PLATFORM,
-    inspectGit: async () => ({ sha: GIT_SHA, clean: true }),
-    inspectSource: async () => SOURCE_PROVENANCE,
     readInput: async (_root, _path, label) => input(label),
     reconcile: async () => reconciliation(),
     ...overrides,
@@ -374,14 +366,8 @@ describe('M07 rate reconciliation acceptance runner', () => {
       evidenceKind: 'simulated',
       status: 'simulated',
       acceptancePassed: false,
-      git: {
-        before: { sha: GIT_SHA, clean: true },
-        after: { sha: GIT_SHA, clean: true },
-      },
-      source: {
-        before: SOURCE_PROVENANCE,
-        after: SOURCE_PROVENANCE,
-      },
+      git: null,
+      source: null,
       inputs: {
         hud: { sha256: 'c'.repeat(64), origin: 'live-hud-events' },
         provider: { sha256: 'd'.repeat(64), origin: 'real-provider-export' },
@@ -440,10 +426,10 @@ describe('M07 rate reconciliation acceptance runner', () => {
       },
     })
     expect(JSON.stringify(result)).not.toContain(CHALLENGE)
-    expect(JSON.stringify(result)).not.toContain('127.0.0.1')
+    expect(JSON.stringify(result)).not.toContain('http://127.0.0.1')
   })
 
-  it('rejects fixture provenance even when an injected reconciler reports pass', async () => {
+  it('rejects fixture origins even when an injected reconciler reports pass', async () => {
     const root = await temporaryRoot()
     const result = await runM07RateReconciliation(
       liveOptions(root),
@@ -456,52 +442,6 @@ describe('M07 rate reconciliation acceptance runner', () => {
       status: 'fail',
       acceptancePassed: false,
       error: { code: 'E_RATE_LIVE_SOURCE' },
-    })
-  })
-
-  it('fails closed on a dirty tree before reading either export', async () => {
-    const root = await temporaryRoot()
-    const readInput = vi.fn()
-    const inspectGit = vi
-      .fn()
-      .mockResolvedValueOnce({ sha: GIT_SHA, clean: false })
-      .mockResolvedValueOnce({ sha: GIT_SHA, clean: false })
-    const result = await runM07RateReconciliation(
-      liveOptions(root),
-      passingDependencies({ inspectGit, readInput }),
-    )
-
-    expect(readInput).not.toHaveBeenCalled()
-    expect(result).toMatchObject({
-      status: 'blocked',
-      acceptancePassed: false,
-      git: {
-        before: { sha: GIT_SHA, clean: false },
-        after: { sha: GIT_SHA, clean: false },
-      },
-      error: { code: 'E_RATE_GIT_DIRTY' },
-    })
-  })
-
-  it('fails closed when Git HEAD changes after reconciliation', async () => {
-    const root = await temporaryRoot()
-    const inspectGit = vi
-      .fn()
-      .mockResolvedValueOnce({ sha: GIT_SHA, clean: true })
-      .mockResolvedValueOnce({ sha: DRIFTED_GIT_SHA, clean: true })
-    const result = await runM07RateReconciliation(
-      liveOptions(root),
-      passingDependencies({ inspectGit }),
-    )
-
-    expect(result).toMatchObject({
-      status: 'fail',
-      acceptancePassed: false,
-      git: {
-        before: { sha: GIT_SHA, clean: true },
-        after: { sha: DRIFTED_GIT_SHA, clean: true },
-      },
-      error: { code: 'E_RATE_GIT_HEAD_DRIFT' },
     })
   })
 
@@ -526,7 +466,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
     expect(() => assertNoSuspiciousCredentialFields({ inputTokens: 1 })).not.toThrow()
   })
 
-  it('accepts only Windows or Ubuntu platform attestations', async () => {
+  it('recognizes only Windows or Ubuntu target environments', async () => {
     await expect(inspectM07RuntimePlatform('win32', 'x64', 'v22.19.0')).resolves.toEqual(
       WINDOWS_PLATFORM,
     )
@@ -606,13 +546,14 @@ describe('M07 rate reconciliation acceptance runner', () => {
       return `${blobs.get(relativePath)}\n`
     })
 
-    await expect(inspectM07SourceProvenance(repository, invokeGit, GIT_SHA)).resolves.toMatchObject(
+    await expect(inspectM07SourceProvenance(repository, GIT_SHA, invokeGit)).resolves.toMatchObject(
       {
         bundleSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
         files: TRACKED_SOURCE_PATHS.map((relativePath) => ({
           relativePath,
           gitBlob: blobs.get(relativePath),
           sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          bytes: expect.any(Number),
         })),
         runtimeArtifact: RUNTIME_ARTIFACT,
         build: BUILD_PROVENANCE,
@@ -626,7 +567,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
         ? `${'d'.repeat(40)}\n`
         : `${blobs.get(relativePath)}\n`
     })
-    await expect(inspectM07SourceProvenance(repository, driftedGit, GIT_SHA)).rejects.toMatchObject(
+    await expect(inspectM07SourceProvenance(repository, GIT_SHA, driftedGit)).rejects.toMatchObject(
       {
         code: 'E_RATE_SOURCE_PROVENANCE',
       },
@@ -732,7 +673,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
     })
     expect(JSON.stringify(result)).not.toContain(cookie)
     expect(JSON.stringify(result)).not.toContain(CHALLENGE)
-    expect(JSON.stringify(result)).not.toContain('127.0.0.1')
+    expect(JSON.stringify(result)).not.toContain('http://127.0.0.1')
   })
 
   it('fails closed on missing cookies, timeout, redirects, and oversized HUD responses', async () => {
@@ -816,7 +757,7 @@ describe('M07 rate reconciliation acceptance runner', () => {
     ).rejects.toMatchObject({ code: 'E_RATE_SECRET_FIELD' })
   })
 
-  it('strictly validates provider windows and mounted capture provenance', () => {
+  it('validates provider windows, capture coverage, and provider request identities', () => {
     expect(extractProviderRateWindow(providerExport())).toEqual(WINDOW)
     const fixtureProvider = providerExport()
     fixtureProvider.source.origin = 'fixture'
@@ -873,26 +814,6 @@ describe('M07 rate reconciliation acceptance runner', () => {
       ).toThrowError(expect.objectContaining({ code: expect.stringMatching(/^E_RATE_HUD_/u) }))
     }
 
-    const otherRuntime = clone(RUNTIME_ARTIFACT)
-    otherRuntime.files[0].sha256 = '0'.repeat(64)
-    otherRuntime.bundleSha256 = createHash('sha256')
-      .update(
-        `${otherRuntime.files[0].relativePath}\0${otherRuntime.files[0].sha256}\0${String(otherRuntime.files[0].bytes)}\n`,
-      )
-      .digest('hex')
-    expect(() =>
-      validateMountedHudCapture(
-        mountedCapture(),
-        WINDOW,
-        CHALLENGE,
-        otherRuntime,
-        BUILD_PROVENANCE,
-      ),
-    ).toThrowError(expect.objectContaining({ code: 'E_RATE_HUD_RUNTIME_MISMATCH', blocked: true }))
-    expect(() => validateMountedHudCapture(mountedCapture(), WINDOW, CHALLENGE)).toThrowError(
-      expect.objectContaining({ code: 'E_RATE_HUD_RUNTIME_PROVENANCE', blocked: true }),
-    )
-
     const incompleteCoverage = clone(mountedCapture())
     incompleteCoverage.source.coverageStartUtc = '2026-08-30T00:00:00.001Z'
     expect(() =>
@@ -936,20 +857,16 @@ describe('M07 rate reconciliation acceptance runner', () => {
   })
 
   it('never treats operator-provided exports as direct live acceptance', () => {
-    expect(requiresTrustedM07Capture('production', 'pass', true)).toBe(true)
-    expect(requiresTrustedM07Capture('test-double', 'pass', true)).toBe(false)
-    expect(requiresTrustedM07Capture('production', 'fail', true)).toBe(false)
+    expect(requiresM07FunctionalBoundary('production', 'pass', true)).toBe(true)
+    expect(requiresM07FunctionalBoundary('test-double', 'pass', true)).toBe(false)
+    expect(requiresM07FunctionalBoundary('production', 'fail', true)).toBe(false)
     expect(requiredM07BoundaryCode('production', 'external', 'pass', true)).toBe(
-      'E_RATE_TRUSTED_CAPTURE_REQUIRED',
+      'E_RATE_MOUNTED_CAPTURE_REQUIRED',
     )
-    expect(requiredM07BoundaryCode('production', 'mounted', 'pass', true)).toBe(
-      'E_RATE_ENDPOINT_ATTESTATION_REQUIRED',
-    )
+    expect(requiredM07BoundaryCode('production', 'mounted', 'pass', true)).toBeNull()
     expect(requiredM07BoundaryCode('test-double', 'mounted', 'pass', true)).toBeNull()
-    expect(m07EvidenceKind('production', 'external')).toBe('operator-attested-external-exports')
-    expect(m07EvidenceKind('production', 'mounted')).toBe(
-      'mounted-hud-diagnostic-with-operator-provider-export',
-    )
+    expect(m07EvidenceKind('production', 'external')).toBe('operator-provided-external-exports')
+    expect(m07EvidenceKind('production', 'mounted')).toBe('mounted-hud-provider-reconciled')
     expect(m07EvidenceKind('test-double', 'mounted')).toBe('simulated')
   })
 

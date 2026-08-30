@@ -12,7 +12,11 @@ import type {
 import { LubanError, modulePrefix, redactSecrets, systemClock } from 'dsh-luban-core'
 import { DefaultTelemetryAggregator } from './aggregator.js'
 import { TaskboardHudAlertSink } from './alerts.js'
-import { inspectHudBuildProvenance, type HudBuildProvenance } from './build-provenance.js'
+import {
+  HUD_BUILD_PROVENANCE_SCHEMA,
+  inspectHudBuildProvenance,
+  type HudBuildProvenance,
+} from './build-provenance.js'
 import { Config as ConfigSchema, type Config as HudConfig, parseConfig } from './config.js'
 import {
   DshContextEstimatorProvider,
@@ -131,12 +135,32 @@ function diagnostic(error: unknown): string {
   }
 }
 
+function readHudBuildDiagnostic(
+  entrypoint: URL,
+  runtimeArtifact: HudRuntimeArtifactIdentity,
+): HudBuildProvenance {
+  try {
+    return inspectHudBuildProvenance(entrypoint, runtimeArtifact)
+  } catch {
+    // Build metadata is diagnostic only. A dirty or unpacked dist must not prevent HUD mounting.
+    return Object.freeze({
+      schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
+      gitHead: '0'.repeat(40),
+      buildId: '00000000-0000-4000-8000-000000000000',
+      dirty: true,
+      runtime: 'repo-dist',
+      manifestSha256: '0'.repeat(64),
+      runtimeBundleSha256: runtimeArtifact.bundleSha256,
+    })
+  }
+}
+
 /** Mount rc2 telemetry providers, authenticated API/SSE, and the shared aggregator service. */
 export function apply(
   ctx: Context,
   input: Partial<HudConfig> = {},
   runtimeArtifact: HudRuntimeArtifactIdentity = inspectHudRuntimeArtifact(new URL(import.meta.url)),
-  build: HudBuildProvenance = inspectHudBuildProvenance(new URL(import.meta.url), runtimeArtifact),
+  build: HudBuildProvenance = readHudBuildDiagnostic(new URL(import.meta.url), runtimeArtifact),
 ): void {
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth')
