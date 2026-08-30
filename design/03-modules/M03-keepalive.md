@@ -15,6 +15,7 @@
 | v0.7 | 2026-08-30 | Codex | 增加 Windows 注销/重启分阶段实机验收 |
 | v0.8 | 2026-08-30 | Codex | 收敛为保活、恢复与实机功能验收 |
 | v0.9 | 2026-08-30 | Codex | 按 heartbeat、boot marker、checkpoint 与 owned cleanup 收口验收口径 |
+| v1.0 | 2026-08-30 | Codex | 移除计划任务权限级别证明，只保留保活与恢复功能证据 |
 
 ## 1. 概述与目标
 
@@ -138,7 +139,7 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
 
 - Linux HAL 以严格 `luban-*` 命名空间管理 tmux 创建、精确探测、附加、列表和销毁；
   shell-command 经过 POSIX 单引号编码，宿主命令均使用参数数组、超时和取消信号。
-- Windows HAL 使用当前账户的 ONSTART Scheduled Task 与 `LIMITED` 权限，保留原始 DSH
+- Windows HAL 使用当前账户的 ONSTART Scheduled Task，保留原始 DSH
   `--patch` 参数；命令行按 `CommandLineToArgvW` 规则编码，不经过 Node shell。
 - 原子账本记录 session spec、归属和里程碑检查点；启动时只恢复账本拥有的缺失会话，
   账本损坏时仅报告孤儿而不删除或重建。

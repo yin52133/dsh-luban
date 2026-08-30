@@ -11,6 +11,7 @@
 | v0.5 | 2026-08-30 | Codex | 增加 M12 多包发布恢复账本模型 |
 | v0.6 | 2026-08-30 | Codex | 细化发布事件、恢复位置与逐包发布状态 |
 | v0.7 | 2026-08-30 | Codex | 增加 M01-F008 账号归属模型并将发布账本收敛为失败恢复模型 |
+| v0.8 | 2026-08-30 | Codex | 明确角色字段仅作兼容操作提示，不构成复杂权限或安全边界 |
 
 > 本文档定义跨模块公共数据结构与 `checklist.json` 的 schema。模块专属字段在各模块文档「数据模型」章节补充。通用字段约定（version 乐观锁、epoch ms、Actor、LubanError）见 [api-overview.md](api-overview.md) §2。
 
@@ -23,7 +24,7 @@ export type AccountId = string;
 export interface AccountContext {
   accountId: AccountId;
   username: string;
-  role: 'admin' | 'operator' | 'observer';
+  role: 'admin' | 'operator' | 'observer'; // 兼容现有账户管理 UI；业务隔离只看 accountId
 }
 
 export interface AccountOwned {
@@ -88,7 +89,7 @@ export interface UserRecord {
   id: AccountId;
   username: string;
   passwordHash: string;              // argon2id（哈希+盐合一编码）
-  role: 'admin' | 'operator' | 'observer';
+  role: 'admin' | 'operator' | 'observer'; // 兼容提示，不扩展为业务 RBAC
   createdAt: number;
 }
 export interface SessionToken {
@@ -135,7 +136,7 @@ export interface Plan extends AccountOwned {
 export interface SharedSession extends AccountOwned {
   id: SessionId; host: HostId; ownerTaskId?: TaskId;
   lockHolder?: Actor | null;         // 当前操作者（互斥）
-  roles: Record<ActorId, 'owner' | 'operator' | 'observer'>;
+  roles: Record<ActorId, 'owner' | 'operator' | 'observer'>; // 同账号内的控制锁状态，不是跨账号权限
   healthy: boolean;                  // 来自 M03
 }
 ```

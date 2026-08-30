@@ -12,6 +12,7 @@
 | v0.4 | 2026-08-30 | Codex | 启动时核对 DSH upstream 地址与端口 |
 | v0.5 | 2026-08-30 | Codex | 回填 canonical 登录入口本机验证 |
 | v0.6 | 2026-08-30 | Codex | 收敛为简单账号登录与账号上下文隔离，废弃安全加固目标 |
+| v0.7 | 2026-08-30 | Codex | 将来源地址降为临时诊断字段，不作为锁定、限速或审计验收 |
 
 ## 1. 概述与目标
 
@@ -65,6 +66,7 @@ sequenceDiagram
 ```typescript
 /** AuthService —— L2 核心服务，供 M05/M02 等复用身份 */
 export interface AuthService {
+  /** sourceIp 只用于当前请求诊断，不参与锁定、限速或业务授权。 */
   verify(user: string, password: string, sourceIp: string): Promise<VerifyResult>;
   issueSession(user: string): Promise<SessionToken>;
   revoke(sessionId: string): Promise<void>;
@@ -87,13 +89,13 @@ export interface VerifyResult {
 }
 
 export type AuthEvent =
-  | { type: 'login'; user: string; sourceIp: string }
+  | { type: 'login'; user: string; sourceIp: string } // 短期诊断，不作为持久安全审计
   | { type: 'logout'; user: string };
 ```
 
 ## 5. 数据模型
 
-见 `04-interfaces/data-models.md#auth`。要点：账户文件只存 `argon2id` 哈希与盐；token 为随机 256bit，服务端存会话表（含过期与来源）。
+见 `04-interfaces/data-models.md#auth`。要点：账户文件只存 `argon2id` 哈希与盐；token 为随机 256bit，服务端会话表以账号归属和过期时间为功能字段。来源地址仅作临时运行诊断，不是锁定、限速或长期审计需求。
 
 ## 6. 配置设计（cordis patch 的 `config:` 段）
 

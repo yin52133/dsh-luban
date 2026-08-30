@@ -12,6 +12,7 @@
 | v0.4 | 2026-08-30 | Codex | 补齐 canonical/junction 路径身份与 Cordis 验证 |
 | v0.5 | 2026-08-30 | Codex | 补齐驳回反馈进入持久会话及重放的直接证据 |
 | v0.6 | 2026-08-30 | Codex | 非功能口径改为稳定性，并补充账号默认隔离 |
+| v0.7 | 2026-08-30 | Codex | 将文档访问口径改为 accountId 隔离，不要求 OS 权限加固 |
 
 ## 1. 概述与目标
 
@@ -107,7 +108,7 @@ M04-F001 ~ M04-F004 共 4 项，与 `checklist.json` 一一对应。
 
 ## 11. 实现与验证记录
 
-- `PlanRepository` 以原子 JSON 索引为事实源，在 workspace 内生成私有权限 Markdown 投影；
+- `PlanRepository` 以原子 JSON 索引为事实源，在 workspace 内生成按 `accountId` 隔离、经认证端点访问的 Markdown 投影；
   路径必须留在目标 workspace；同日同 slug 不覆盖既有文档，乐观版本冲突会明确返回错误。
 - `FilePlanService` 实现完整状态机、四要素校验、审批历史、会话当前 plan 以及可选
   `lubanTaskStore` 联动；批准 `todo` 关联任务时推进为 `doing`。

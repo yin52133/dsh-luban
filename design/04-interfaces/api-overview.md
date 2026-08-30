@@ -8,6 +8,7 @@
 | v0.2 | 2026-08-30 | Codex | 统一插件 HTTP 路由为 `/luban-<module>/...` |
 | v0.3 | 2026-08-30 | Codex | 登记 HUD 对健康事件与可选 TaskStore 的松耦合消费 |
 | v0.4 | 2026-08-30 | Codex | 增加 M01-F008 账号上下文隔离约定并收敛基础认证契约 |
+| v0.5 | 2026-08-30 | Codex | 将角色字段收敛为兼容提示，账号隔离仅以 accountId 为边界 |
 
 ## 1. 契约一览与依赖方向
 
@@ -69,7 +70,8 @@ flowchart LR
 
 - **账号上下文（M01-F008）**：M01 将登录 cookie 解析为
   `AccountContext { accountId, username, role }`。业务服务接收已经解析的账号上下文，所有账号数据的
-  查询、写入、事件与文件引用均按 `accountId` 隔离，不得把一个账号的记录返回或写入另一个账号。
+  查询、写入、事件与文件引用均只按 `accountId` 隔离，不得把一个账号的记录返回或写入另一个账号。
+  `role` 仅兼容现有账户管理界面，不扩展为复杂 RBAC，也不是业务数据的安全边界。
 - **Actor**：操作者统一为用户 actor 或 agent actor；用户 actor 的 `id` 为 `AccountId`，agent actor
   同时携带所属 `accountId` 与会话 id，使任务、计划、会话和附件能保持同一账号归属。
 - **乐观锁**：一切可变实体带 `version: number`，更新必须带 `expectedVersion`，冲突返回 409 语义错误。
@@ -98,7 +100,7 @@ flowchart LR
 | `luban.task.claimed` | accountId、taskId、actor(agent 会话)、hostScope | M02 | M03、M07 |
 | `luban.night.status` | accountId、windowActive、quotaUsed、circuit | M02 | HUD、看板 |
 | `luban.keepalive.health` | accountId、sessionId、alive、有界诊断摘要 | M03 | 看板告警、HUD |
-| `luban.session.lock` | accountId、sessionId、holder、role | M05 | 看板、HUD |
+| `luban.session.lock` | accountId、sessionId、holder、同账号控制锁状态 | M05 | 看板、HUD |
 | `luban.telemetry.snapshot` | TelemetrySnapshot（节流 1s） | M07 | 扩展插件 |
 | `luban.compaction.done` | sessionId、strategy、前后 token | M08 | HUD、审计 |
 | `luban.channel.data` | endpointId、kind、方向 | M10 | 监视 UI |
