@@ -24,6 +24,7 @@ interface MountedRoot {
 
 interface LoopbackHarness {
   readonly origin: string
+  readonly ledgerPath: string
   readonly store: JsonTaskStore
   readonly claims: DefaultAgentClaimService
   readonly close: () => Promise<void>
@@ -56,7 +57,8 @@ const clock: Clock = { now: (): number => Date.UTC(2026, 7, 30, 12) }
 
 async function createLoopbackHarness(): Promise<LoopbackHarness> {
   const directory = await mkdtemp(join(tmpdir(), 'luban-taskboard-ui-'))
-  const store = new JsonTaskStore(createLedgerStore(join(directory, 'ledger.json'), clock), clock)
+  const ledgerPath = join(directory, 'ledger.json')
+  const store = new JsonTaskStore(createLedgerStore(ledgerPath, clock), clock)
   const claims = new DefaultAgentClaimService(store, 'ubuntu', true)
   const scheduler = new DefaultNightScheduler({
     store,
@@ -96,6 +98,7 @@ async function createLoopbackHarness(): Promise<LoopbackHarness> {
 
   return {
     origin: `http://127.0.0.1:${String(address.port)}`,
+    ledgerPath,
     store,
     claims,
     close: async (): Promise<void> => {
@@ -345,7 +348,7 @@ afterEach((): void => {
 })
 
 describe('Taskboard React integration', (): void => {
-  it('renders an auto-completed task as a visible review item until human acceptance', async (): Promise<void> => {
+  it('persists a React drag through the loopback API and restores it from the ledger', async (): Promise<void> => {
     const harness = await createLoopbackHarness()
     const hostFetch = globalThis.fetch.bind(globalThis)
     const browserFetch = installBrowserFetch(harness.origin, hostFetch)
@@ -403,11 +406,26 @@ describe('Taskboard React integration', (): void => {
 
         await act(async (): Promise<void> => {
           const card = requiredElement(mounted.container, `[data-task-id="${task.id}"]`)
-          const button = [...card.querySelectorAll<HTMLButtonElement>('button')].find(
-            (candidate): boolean => candidate.textContent === 'Move',
-          )
-          if (button === undefined) throw new Error('Review acceptance button was not rendered')
-          button.click()
+          const doneColumn = [
+            ...mounted.container.querySelectorAll<HTMLElement>('.luban-board__column'),
+          ].find((column): boolean => column.querySelector('h3 span')?.textContent === 'Done')
+          if (doneColumn === undefined) throw new Error('Done column was not rendered')
+          const values = new Map<string, string>()
+          const dataTransfer = {
+            effectAllowed: 'none',
+            setData(type: string, value: string): void {
+              values.set(type, value)
+            },
+            getData(type: string): string {
+              return values.get(type) ?? ''
+            },
+          }
+          const dragStart = new Event('dragstart', { bubbles: true, cancelable: true })
+          Object.defineProperty(dragStart, 'dataTransfer', { value: dataTransfer })
+          card.dispatchEvent(dragStart)
+          const drop = new Event('drop', { bubbles: true, cancelable: true })
+          Object.defineProperty(drop, 'dataTransfer', { value: dataTransfer })
+          doneColumn.dispatchEvent(drop)
           await browserFetch.settle()
         })
         await waitForUi((): void => {
@@ -417,6 +435,14 @@ describe('Taskboard React integration', (): void => {
           )
           expect(card.querySelector('.luban-board__auto')).toBeNull()
         })
+      })
+
+      const reopened = new JsonTaskStore(createLedgerStore(harness.ledgerPath, clock), clock)
+      expect(await reopened.get(task.id)).toMatchObject({
+        id: task.id,
+        status: 'done',
+        version: 4,
+        autoDone: false,
       })
     } finally {
       await harness.close()
