@@ -8,6 +8,7 @@
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：注册表/控制权交接/状态同步/权限 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 注册表、认证联邦、SSE 与安全验证证据 |
+| v0.3 | 2026-08-30 | Codex | 补齐双 loopback peer 联邦与控制权链路验证 |
 
 ## 1. 概述与目标
 
@@ -114,8 +115,9 @@ M05-F001 ~ M05-F004 共 4 项，与 `checklist.json` 一一对应。
   peer refresh single-flight，dispose/remove 会终止流并释放历史。
 - Session ID 在配置的主机间必须全局唯一；跨 registry origin 的碰撞会 fail closed，保留既有条目
   并报告 `session-id-collision`，避免将 stream 或 mutation 路由到错误主机。
-- 本地 Prettier、严格类型、ESLint、构建、35 项 M05 测试、release metadata 与 pack dry-run
-  通过；真实 Windows/Ubuntu 双主机断线、接管和 TLS/LAN profile 仍保留为目标环境验收。
+- 两个真实 loopback HTTP peer 已跑通 federation 注册、身份预检、控制权请求/批准和输出同步；
+  本地 Prettier、严格类型、ESLint、构建、37 项 M05 测试、release metadata 与 pack dry-run
+  通过。真实 Windows/Ubuntu 双主机断线、接管和 TLS/LAN profile 仍保留为目标环境验收。
 
 ## 11. 开放问题
 

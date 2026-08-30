@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 遥测口径、SSE、降级与验证证据 |
 | v0.3 | 2026-08-30 | Codex | 增加会话定向新鲜采样，消除多 agent 缓存串扰 |
 | v0.4 | 2026-08-30 | Codex | 接入 M03 健康状态与 M02 critical 去重告警 |
+| v0.5 | 2026-08-30 | Codex | 补齐 ReactDOM 可见性与 loopback CLI 热刷新验证 |
 
 ## 1. 概述与目标
 
@@ -132,8 +133,9 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
   `keepalive N down`，CLI 首行同步显示异常会话 id；字段缺失时保持旧 envelope 兼容。
 - 可选 `lubanTaskStore` 在服务后置出现时动态接通；critical episode 通过串行 active-tag 查询去重，
   恢复后才开启下一 episode，TaskStore 失败只写脱敏诊断且不影响遥测。
-- 本地 Prettier、严格类型、ESLint、构建、27 项 M07 测试通过；其中真实 Cordis mount 覆盖
-  keepalive 事件、后置 TaskStore、认证响应、客户端行为，另有卸载竞态与并发去重单测。
+- 真实 ReactDOM/jsdom 覆盖 partial provider、warn/danger/critical 展示和页面隐藏时 SSE
+  close/reopen；loopback CLI 验证 provider 热刷新。本地 Prettier、严格类型、ESLint、构建、31 项
+  M07 测试通过；真实 Cordis mount 另覆盖 keepalive、后置 TaskStore、认证响应与卸载竞态。
 
 ## 11. 目标环境验收
 

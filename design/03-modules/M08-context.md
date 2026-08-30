@@ -9,6 +9,7 @@ Codex 式上下文工程的本地实现：阈值触发自动压缩 + 旧上下�
 | v0.1 | 2026-08-29 | Maintainers | 初稿：策略接口/自动压缩/虚拟文件/审计/协同 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 回合边界、可审计归档与降级实现验证 |
 | v0.3 | 2026-08-30 | Codex | 补齐会话定向遥测与卸载期间维护任务收口 |
+| v0.4 | 2026-08-30 | Codex | 补齐版本化前后 surface 快照索引与夜间连续性链路验证 |
 
 ## 1. 概述与目标
 
@@ -116,9 +117,14 @@ M08-F001 ~ M08-F005 共 5 项，与 `checklist.json` 一一对应。
   原始持久事件日志保持不变。
 - workspace 内归档先脱敏再原子写入，以内容摘要唯一命名并建立 SHA-256 索引；重复重试幂等，
   多轮复用同一临时序号时仍保留各代文件，可按范围取最新或按索引路径精确回放。
+- 每条新审计记录都在 strategy 执行前后抓取真实 live Session surface，保存 event sequence、segment
+  和 token 总量索引；旧记录缺少该字段时解码为显式 `legacy`，不伪造 after identity，也不改变
+  `CompactionStrategy`/`CompactionResult` 契约。
 - 主策略失败重试一次，再降级为仅归档；day/night profile 可独立选策略、阈值和预算，
   `/luban-context` 提供认证审计、索引、回放和 scope API。
 - idle coordinator 通过 `snapshotFor(sessionId)` 强制读取准确且不走 HUD 缓存的会话快照；卸载竞态覆盖
   auth 等待、engine 前取消、已运行 engine 排空与卸载后拒绝新任务。
-- 本地 Prettier、ESLint、严格类型检查、构建、17 项测试、发布元数据与 npm pack 白名单审计通过；
-  测试覆盖真实 rc2 Session surface，未调用外部模型或服务。
+- 另有 1 项跨模块集成场景使用确定性中英双语长会话语料跑通
+  `DefaultNightScheduler → DshAgentNightExecutor → Cordis → M08` 生产链及 archive/audit/replay；
+  本地 Prettier、ESLint、严格类型检查、构建、22 项 M08 包测试、发布元数据与 npm pack
+  白名单审计通过，未调用外部模型或服务。

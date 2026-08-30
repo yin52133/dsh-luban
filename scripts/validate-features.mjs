@@ -5,9 +5,28 @@ import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 const checklist = JSON.parse(await readFile(resolve(root, 'checklist.json'), 'utf8'))
-const statuses = new Set(['todo', 'doing', 'review', 'done', 'blocked', 'dropped'])
+const expectedStatuses = ['todo', 'doing', 'review', 'done', 'blocked', 'dropped']
+const statuses = new Set(expectedStatuses)
 const findings = []
 const counts = Object.fromEntries([...statuses].map((status) => [status, 0]))
+
+const legendStatuses = new Set(Object.keys(checklist.statusLegend ?? {}))
+for (const status of expectedStatuses) {
+  if (!legendStatuses.has(status)) findings.push(`statusLegend is missing ${status}`)
+}
+for (const status of legendStatuses) {
+  if (!statuses.has(status)) findings.push(`statusLegend has unsupported status ${status}`)
+}
+
+function rollupStatus(features) {
+  const active = features.filter((feature) => feature.status !== 'dropped')
+  if (active.length === 0) return 'dropped'
+  if (active.some((feature) => feature.status === 'blocked')) return 'blocked'
+  if (active.some((feature) => feature.status === 'doing')) return 'doing'
+  if (active.some((feature) => feature.status === 'todo')) return 'todo'
+  if (active.some((feature) => feature.status === 'review')) return 'review'
+  return 'done'
+}
 
 for (const feature of checklist.features ?? []) {
   if (!statuses.has(feature.status)) {
@@ -27,19 +46,19 @@ for (const feature of checklist.features ?? []) {
 }
 
 for (const requirement of checklist.requirements ?? []) {
+  if (!statuses.has(requirement.status)) {
+    findings.push(`${String(requirement.id)} has invalid status ${String(requirement.status)}`)
+    continue
+  }
   const features = (checklist.features ?? []).filter(
-    (feature) => feature.requirement === requirement.id && feature.status !== 'dropped',
+    (feature) => feature.requirement === requirement.id,
   )
   if (features.length === 0) continue
-  const allDone = features.every((feature) => feature.status === 'done')
-  const allReviewable = features.every(
-    (feature) => feature.status === 'review' || feature.status === 'done',
-  )
-  if (requirement.status === 'done' && !allDone) {
-    findings.push(`${String(requirement.id)} is done before every feature is done`)
-  }
-  if (requirement.status === 'review' && !allReviewable) {
-    findings.push(`${String(requirement.id)} is review before every feature is reviewable`)
+  const expected = rollupStatus(features)
+  if (requirement.status !== expected) {
+    findings.push(
+      `${String(requirement.id)} status ${String(requirement.status)} does not match feature rollup ${expected}`,
+    )
   }
 }
 

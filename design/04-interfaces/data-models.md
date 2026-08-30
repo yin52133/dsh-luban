@@ -5,6 +5,8 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：任务/认证/保活/遥测等公共结构 + checklist.json schema |
+| v0.2 | 2026-08-30 | Codex | 增加 claim lease 身份及压缩前后 surface 快照兼容类型 |
+| v0.3 | 2026-08-30 | Codex | 明确 checklist 状态类型、需求汇总规则与里程碑派生状态 |
 
 > 本文档定义跨模块公共数据结构与 `checklist.json` 的 schema。模块专属字段在各模块文档「数据模型」章节补充。通用字段约定（version 乐观锁、epoch ms、Actor、LubanError）见 [api-overview.md](api-overview.md) §2。
 
@@ -26,7 +28,10 @@ export interface Task {
   acceptance?: string;               // 验收标准 markdown（agent 领单前置条件）
   tags: string[];                    // 如 auto-ok / browser
   version: number;                   // 乐观锁
-  claim?: { actor: Actor; sessionId: SessionId; claimedAt: number } | null;
+  claim?: {
+    actor: Actor; sessionId: SessionId; claimedAt: number;
+    leaseId?: string;                // 新 claim 必有；仅旧账本解码时可缺省
+  } | null;
   outputs: TaskOutput[];             // 产出引用（笔记/commit/产物路径）
   autoDone?: boolean;                // 夜间自动完成，待人复核
   nightRunId?: string;
@@ -139,10 +144,22 @@ export interface CompactionPlan {
   archive: ContextSegment[];         // 外置虚拟文件
   budgetTokens: number; strategyId: string;
 }
+export interface CompactionSurfaceSnapshotIndexEntry {
+  eventSeq: number;                      // 持久 Session event identity
+  segment: ContextSegment;               // 该 event 在此时刻映射的可见分段
+}
+export interface CompactionSurfaceSnapshotIndex {
+  totalTokens: number;
+  entries: CompactionSurfaceSnapshotIndexEntry[];
+}
+export type CompactionSurfaceSnapshots =
+  | { kind: 'captured'; before: CompactionSurfaceSnapshotIndex; after: CompactionSurfaceSnapshotIndex }
+  | { kind: 'legacy' };                  // 旧审计不伪造前后 identity
 export interface CompactionAuditRecord {
   sessionId: SessionId; at: number; strategyId: string;
   beforeTokens: number; afterTokens: number;
   archiveFiles: string[]; plan: CompactionPlan;
+  surfaceSnapshots: CompactionSurfaceSnapshots;
 }
 ```
 
@@ -209,18 +226,19 @@ export interface ReleaseRecord {
 ## 13. checklist.json Schema（checklist-json-v1）
 
 ```typescript
+export type ChecklistStatus = 'todo' | 'doing' | 'review' | 'done' | 'blocked' | 'dropped';
 export interface ChecklistFile {
   meta: { project: string; description: string; version: string; updatedAt: string; idRules: string };
-  statusLegend: Record<'todo' | 'doing' | 'review' | 'done' | 'blocked' | 'dropped', string>;
+  statusLegend: Record<ChecklistStatus, string>;
   milestones: { id: string; name: string; goal: string; order: number; featureIds: string[] }[];
-  requirements: { id: string; title: string; modules: string[]; status: string }[];
+  requirements: { id: string; title: string; modules: string[]; status: ChecklistStatus }[];
   features: {
     id: string;                      // M<NN>-F<NNN>
     requirement: string;             // R<NN>
     module: string;                  // M<NN>
     title: string; priority: 'P0' | 'P1' | 'P2' | 'P3';
     milestone: string;               // MS<N>，与 milestones[].featureIds 一致
-    status: 'todo' | 'doing' | 'review' | 'done' | 'blocked' | 'dropped';
+    status: ChecklistStatus;
     designDoc: string; updatedAt: string;
     notes?: string[];
   }[];
@@ -228,3 +246,5 @@ export interface ChecklistFile {
 ```
 
 不变式（校验脚本强制）：features.id 唯一；feature.milestone 与 milestones[].featureIds 双向一致；feature.requirement ∈ requirements；feature.module 与 id 前缀一致；里程碑并集 = 全部 features。
+
+需求状态由其非 `dropped` 功能点汇总，优先级为 `blocked > doing > todo > review > done`；全部功能点均废弃时才为 `dropped`。里程碑不重复存储 `status`，展示端按同一优先级从 `featureIds` 派生，避免形成第二状态事实源。

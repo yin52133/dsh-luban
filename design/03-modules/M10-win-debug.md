@@ -9,6 +9,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：串口/烧录/GDB/adb-fastboot/桌面自动化/远程/通道层 |
 | v0.2 | 2026-08-30 | Codex | 回填安全通道层、工具模板与会话注入实现验证           |
 | v0.3 | 2026-08-30 | Codex | 补齐设备占用预检与 rc2 MCP 工具注册/调用闭环       |
+| v0.4 | 2026-08-30 | Codex | 补齐串口生命周期与真实 MCP/TCP 本机集成验证        |
 
 ## 1. 概述与目标
 
@@ -120,7 +121,8 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
 - 七类 `ChannelAdapter` 统一实现开关、读写、命令、生命周期和事件契约；Windows 平台守卫在非
   Windows 主机 fail closed，网络通道虽使用可移植抽象但不会跨平台挂载本插件。
 - 可选 `serialport` HAL 提供 COM 枚举、参数化打开、有界数据流和非重入热插拔轮询；缺少原生模块时
-  返回明确安装指引，不影响其他通道加载。
+  返回明确安装指引，不影响其他通道加载。打开支持 timeout/abort，迟到连接会被关闭；热插拔 stop
+  排空在途轮询并用 generation 阻止卸载后发布。
 - Settings 面板提供实时滚动、时间戳、文本/正则过滤、高亮和范围选择；片段经正则打码、有界截取、
   原子落盘后，以文件路径、摘录、通道元数据和时间窗注入 rc2 会话。
 - OpenOCD、J-Link、esptool、STM32CubeProgrammer、adb 与 fastboot 内置模板使用固定可执行文件、
@@ -130,8 +132,10 @@ M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
 - `dsh-tools` rc2 已公开 `ctx.tools.register(ToolDefinition)`；启用 Desktop MCP 时，插件把本地
   allowlist 中每个名称注册为真实 DSH tool。首次调用或显式启动时通过 MCP 2024-11-05 stdio
   完成 `initialize -> tools/list -> tools/call`，服务端未发布 allowlist 任一项即拒绝连接；协议
-  消息、stderr、生命周期和取消均有界。测试使用内存 stdio 进程，没有启动真实 MCP。
+  消息、stderr、生命周期和取消均有界。集成测试启动真实 Node stdio MCP 子进程完成
+  initialize/list/call/stop，并以真实 loopback TCP server 验证网络串口读写关闭。
 - `/luban-win-debug` REST/SSE 要求 M01 会话与 CSRF，限制请求体、事件和输出；客户端使用 DSH rc2
   lazy-CJS 加载器，服务注册为 `ctx.lubanWinDebug`。
-- 本地 Prettier、ESLint、严格类型检查、构建、56 项测试、发布元数据和 npm pack 白名单审计通过；
-  测试使用 fake provider/runner/connector，未连接真实设备、网络或外部工具进程。
+- 本机原生 `serialport` 枚举读取到 Microsoft COM3/COM4（只读，未打开端口）。本地 Prettier、
+  ESLint、严格类型检查、构建、62 项 M10 测试、发布元数据和 npm pack 白名单审计通过；
+  未连接真实目标板、调试器或外部网络设备。

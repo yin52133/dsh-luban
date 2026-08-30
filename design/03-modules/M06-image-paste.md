@@ -9,6 +9,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：捕获/落盘/注入/预览清理 四功能 |
 | v0.2 | 2026-08-30 | Codex | 回填 rc2 注入、附件安全边界与验证证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐 Settings 挂载、paste/drop 路由与多文件边界验证 |
+| v0.4 | 2026-08-30 | Codex | 补齐 ReactDOM 客户端与真实 Sharp resize 验证 |
 
 ## 1. 概述与目标
 
@@ -113,8 +114,9 @@ M06-F001 ~ M06-F004 共 4 项，与 `checklist.json` 一一对应。
   可只上传或立即注入 Markdown/绝对路径引用。
 - 附件索引记录 SHA-256、压缩报告与 `referencedBy`。注入在 per-image/session mutex 内先登记引用，
   `followup` 失败则回滚；被引用附件无论年龄都不会被自动或手动删除。
-- 本地 Prettier、严格类型、ESLint、构建、58 项 M06 测试、真实 Sharp 截断 JPEG 探针、Cordis
-  route/timer 卸载测试、release metadata 与 pack dry-run 通过。
+- 客户端测试使用真实 ReactDOM/jsdom 覆盖 paste/drop、预览、删除、cleanup 与刷新；真实 Sharp
+  resize/整图解码探针验证截断输入 fail closed。本地 Prettier、严格类型、ESLint、构建、61 项
+  M06 测试、Cordis route/timer 卸载、release metadata 与 pack dry-run 通过。
 
 ## 11. 目标环境验收
 

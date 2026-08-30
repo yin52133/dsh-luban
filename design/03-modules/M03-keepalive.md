@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 回填双平台 HAL、持久恢复与检查点实现验证 |
 | v0.3 | 2026-08-30 | Codex | 接通异常健康事件到 M07 HUD 的脱敏实时投影 |
 | v0.4 | 2026-08-30 | Codex | 增加可恢复里程碑执行器与跳过已完成步骤验证 |
+| v0.5 | 2026-08-30 | Codex | 补齐卸载排空与 Windows 原生只读探针验证 |
 
 ## 1. 概述与目标
 
@@ -136,8 +137,10 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   测试覆盖中段恢复、完成后重入、步骤失败不推进和启动前取消。
 - 巡检发布 `luban.keepalive.health`，可选 `lubanTaskStore` 告警去重；M07 通过 Cordis
   事件松耦合消费，健康变化立即进入认证 snapshot/SSE，并在 Web 状态栏与 CLI 首行显示。
-  有限任务可通过 `release()` 销毁会话并清除账本，供 M09 worker 完成后收口。
+  有限任务可通过 `release()` 销毁会话并清除账本，供 M09 worker 完成后收口；插件卸载会
+  排空在途巡检与告警 sink，返回后不再写入 TaskStore 或发布健康事件。
 - 真实 Cordis mount 测试覆盖 HUD 先加载、异常/恢复事件、认证 REST 投影、客户端提示与卸载；
   detail 中的凭据型文本不会进入响应。
-- 本地 Prettier、ESLint、严格类型检查、构建、16 项测试、发布元数据与 npm pack 白名单审计通过；
-  外部 tmux/schtasks 边界均使用 fake runner，未创建真实系统会话或计划任务。
+- 本机 `schtasks.exe` 只读列表探针已通过且未创建计划任务；命令构造和写操作继续由 fake runner
+  隔离验证。本地 Prettier、ESLint、严格类型检查、构建、24 项测试、发布元数据与 npm pack
+  白名单审计通过；真实 tmux、注销与重启恢复仍需目标主机验收。

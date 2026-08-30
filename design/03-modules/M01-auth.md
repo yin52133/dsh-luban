@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 采用认证 sidecar 保护 DSH 全部 Web 暴露面   |
 | v0.3 | 2026-08-30 | Codex | 回填 sidecar、Argon2id、代理安全与 Cordis 验证证据 |
 | v0.4 | 2026-08-30 | Codex | 启动时强制核验 DSH loopback 监听与 upstream 端口 |
+| v0.5 | 2026-08-30 | Codex | 回填持久 secret 扫描与 canonical 登录入口本机验证 |
 
 ## 1. 概述与目标
 
@@ -137,8 +138,10 @@ M01-F001 ~ M01-F007 共 7 项，与 `checklist.json` 一一对应（脚本校验
   与 sidecar upstream 完全一致，避免误配后从 LAN 绕过认证或代理到其他本地服务。
 - `tests/cordis.integration.test.ts` 使用真实 Cordis Context 验证 `ctx.lubanAuth` 提供与 effect
   卸载；其余 7 个测试文件覆盖首启、登录/过期/登出、锁定/限速、账户角色与审计。
-- 本地严格类型、ESLint、Prettier、构建、31 项测试及 pack 白名单均通过；Windows/Ubuntu
-  workflow 保留目标环境复核，公网部署仍必须由外层 TLS 终结。
+- 持久账户与审计文件联合 secret scan 验证口令、session secret 与 CSRF 原文不落盘；本机 Edge
+  已渲染唯一正向入口 `/luban-auth/login`，旧 `/luban/auth/login` 仅保留为拒绝性测试语料。
+- 本地严格类型、ESLint、Prettier、构建、32 项测试及 pack 白名单均通过；完整浏览器登录、
+  Windows ACL、Ubuntu workflow 与真实 TLS 反代仍保留目标环境复核。
 
 ## 11. 开放问题
 

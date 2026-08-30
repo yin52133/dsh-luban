@@ -10,6 +10,8 @@ Ubuntu 编译服务器的 dsh 常驻与操作模式：systemd 托管启动、编
 | v0.2 | 2026-08-30 | Codex | 回填持久构建队列、资源门禁与认证产物实现验证 |
 | v0.3 | 2026-08-30 | Codex | 补齐失败日志会话注入与重启后 SSE baseline 验证 |
 | v0.4 | 2026-08-30 | Codex | 补齐探针超时与真实子进程终止/排空边界验证 |
+| v0.5 | 2026-08-30 | Codex | 增加 workspace/collect/artifact junction 身份门禁 |
+| v0.6 | 2026-08-30 | Codex | 收口队列 drain、告警与启停并发生命周期 |
 
 ## 1. 概述与目标
 
@@ -105,9 +107,11 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
   告警；失败摘要可由
   Settings 页面注入当前 DSH 会话，客户端契约测试覆盖会话选择、日志 API 路由与 queued prompt。
 - 产物收集跳过符号链接，按完成时间保留；`/luban-server-mode` 认证 API/SSE 提供有界重放与
-  baseline；服务重启后旧浏览器游标高于新序列时立即返回新 baseline。下载同时要求 M01 会话和
-  短期 HMAC 签名。
-- 本地 Prettier、ESLint、严格类型检查、构建、29 项测试通过；资源测试包含本机文件系统探测，
+  baseline；workspace、collect、artifact discover/secure/prune 均校验 canonical realpath 与目录
+  身份，junction/symlink 换位或逃逸时 fail closed。服务重启后旧浏览器游标高于新序列时立即返回
+  新 baseline；下载同时要求 M01 会话和短期 HMAC 签名。
+- 本地 Prettier、ESLint、严格类型检查、构建、37 项测试通过；队列测试覆盖 completion 主动唤醒、
+  drain/告警排空、start/dispose 串行化及 launch ledger transition 停机竞态；资源测试包含本机文件系统探测，
   进程测试使用当前 `process.execPath` 验证超时/取消后 PID 已退出和 stdout/stderr 已排空，并以 fake child
   验证 spawn 同步失败、永不 close、TERM/KILL 最终边界、abort/timeout 首因及清理。未安装 systemd
   unit、运行外部编译器或下载真实产物。

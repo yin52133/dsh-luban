@@ -12,6 +12,7 @@
 | v0.4 | 2026-08-30 | Codex | 将账本备份从最近 7 次写入修正为按本地日历日保留 |
 | v0.5 | 2026-08-30 | Codex | 夜间 agent 独立模型/工具作用域与显式验收结果改为 fail-closed |
 | v0.6 | 2026-08-30 | Codex | 增加触屏/键盘迁移控件及拖放校验与同步防重入锁 |
+| v0.7 | 2026-08-30 | Codex | 回填 loopback CLI/SSE 与 claim lease 原子身份验证 |
 
 ## 1. 概述与目标
 
@@ -89,13 +90,16 @@ export interface TaskStore {
 }
 
 /** AgentClaimService —— agent 领单 */
+export interface ClaimMutationOptions {
+  expectedClaim?: TaskClaim; // 防止旧执行实例写入已被重领的新 claim
+}
 export interface AgentClaimService {
   /** 原子认领：过滤 → CAS 置 doing → 绑定会话；并发安全 */
   claim(filter: ClaimFilter, session: ClaimSession): Promise<ClaimResult>;
   /** 执行完毕回写产出并转 review */
-  reportProgress(id: TaskId, progress: TaskProgress): Promise<void>;
-  complete(id: TaskId, output: TaskOutput, opts: { autoDone: boolean }): Promise<Task>;
-  fail(id: TaskId, reason: string): Promise<void>;
+  reportProgress(id: TaskId, progress: TaskProgress, opts?: ClaimMutationOptions): Promise<void>;
+  complete(id: TaskId, output: TaskOutput, opts: ClaimMutationOptions & { autoDone: boolean }): Promise<Task>;
+  fail(id: TaskId, reason: string, opts?: ClaimMutationOptions): Promise<void>;
 }
 
 /** NightScheduler —— M02-F005 */
@@ -174,8 +178,13 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
 - SSE 将事件序号视为单进程游标；`Last-Event-ID` 落后于有界重放窗口或领先于当前
   进程序号（例如服务重启后）时，立即返回持久化任务全集 baseline，窗口内旧序号
   继续按原顺序增量重放。
+- 真实 loopback JSON ledger/API 已跑通 `taskctl` 的 add/list/claim/update/transition/done 完整
+  mutation 生命周期；两个并发 loopback SSE 客户端同时收到 baseline 与 live task 事件。
 - `AtomicJsonStore` 仍使用跨进程锁、同目录临时文件、fsync 与原子 rename；备份槽位只在
   本地日历日变化时轮转，同一天的高频写入不会挤掉历史日快照，默认保留最近 7 个写入日。
+- 每次认领生成唯一 `leaseId`；progress/complete/fail 在同一次 ledger update 锁内比对
+  actor/session/claimedAt/leaseId。夜间 scheduler 和浏览器自动化始终传递启动时捕获的 claim，
+  即使同一 agent/session 在同一毫秒 A→B 重领，A 的陈旧写入也全部 `E_VERSION_CONFLICT`。
 - `tests/task-store.test.ts` 覆盖状态机、版本冲突、并发原子认领、回写复核、失败与
   幂等导入；`tests/scheduler.test.ts` 覆盖时间窗、限额、白名单、熔断次日恢复、独立
   model/tool scope、结果工具成功日志以及缺报告/验收失败/异常 turn 的 fail-closed；
@@ -184,7 +193,7 @@ M02-F001 ~ M02-F010 共 10 项，与 `checklist.json` 一一对应。
   `expectedVersion`、伪造/陈旧 payload 拒绝、快速双提交/拖放互斥、busy/error/lock 清理
   语义与 CLI 同源调用。
 - 发布包生成 Host ESM、`taskctl` 与 rc2 lazy-CJS `client.js`/`client.d.ts`；夜间模式
-  继续默认关闭，真实无人值守执行需在目标 profile 进行部署验收后才启用。
+  继续默认关闭。33 项 M02 测试通过；真实无人值守执行仍需在目标 profile 进行部署验收后才启用。
 
 ## 11. 开放问题
 

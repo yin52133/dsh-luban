@@ -10,6 +10,7 @@
 | v0.2 | 2026-08-30 | Codex | 固化 browser-use 版本并采用 uv 管理本地桥接环境 |
 | v0.3 | 2026-08-30 | Codex | 记录 JSONL 桥接、模板发布、鉴权 API 与看板联动实现验证 |
 | v0.4 | 2026-08-30 | Codex | 收紧自动任务域名白名单，拒绝裸 `*` wildcard |
+| v0.5 | 2026-08-30 | Codex | 收口 bridge 子进程退出与 task claim 轮换竞态 |
 
 ## 1. 概述与目标
 
@@ -98,17 +99,23 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
 ## 10. 实现与验证记录
 
 - TypeScript Host 通过有界串行队列管理 `uv run --locked` JSONL 子进程；协议覆盖启动、
-  进度、截图、结构化结果、取消、超时和稳定错误码，敏感环境变量仅按名称白名单传递。
+  进度、截图、结构化结果、取消、超时和稳定错误码，敏感环境变量仅按名称白名单传递。每个
+  listener 与 child state 绑定；shutdown 响应后继续等待真实 `close`，超时按 TERM→KILL 收口，
+  旧 child 的迟到事件不能影响 replacement，listener/stdin/stdout/stderr 最终全部释放。
 - Python 3.12 桥接项目固定 `browser-use==0.13.8` 并提交 `uv.lock`；发布构建将桥接项目和
   内置 YAML 模板复制到 `dist/`，运行环境落在用户数据目录而非全局 Python。
 - `/luban-browser` HTTP/SSE API 复用 `lubanAuth`，会话入口统一为 `/luban-auth/login`；
   自动任务仅响应已由 agent 认领且带 `browser`、`auto-ok` 和唯一模板标签的看板卡片。
-- 本地 ESLint、严格类型、构建、15 项 TypeScript 测试、11 项 `uv --locked` Python 测试、
-  compileall、ESM 导入及 npm pack 白名单均通过；测试使用假进程/引擎，未访问真实网站、
-  浏览器或模型提供商。
+- 自动任务按 claim `leaseId` 分代去重并串行；同毫秒 A→B 重领时 A 的 progress/complete/fail
+  全部被账本拒绝，B 仍继续 queue/progress/artifact 并进入 `review(autoDone)`。
+- 本地 ESLint、严格类型、构建、19 项 M11 包测试、6 项 M11 跨模块集成与 13 项 `uv --locked`
+  Python 测试、Ruff、compileall、ESM 导入及 npm pack 白名单均通过。真实 uv JSONL 子进程已完成
+  ping→shutdown→exit 0 且剥离模型凭据；本机 browser-use/Chrome 已加载 loopback DOM，并验证
+  临时复制 profile 清理，未访问外部网站或模型提供商。
 - M11-F002/M11-F003 域名策略复核：TS 配置、YAML 模板和任务解析拒绝裸 `*`，自动任务
   仍要求非空白名单；Python 桥接在执行前再次拒绝，精确域名与 `*.example.com` 继续可用。
 
 ## 11. 开放问题
 
 - browser-use 在 ubuntu 无桌面环境下的 headless 稳定性实测；若依赖 playwright，其浏览器下载与离线部署方式写入部署文档。
+- 仍需在 Windows/Ubuntu 目标 profile 用真实登录态、人工可见标签页和长期任务完成端到端验收。
