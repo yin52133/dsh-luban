@@ -247,4 +247,13 @@ export interface ChecklistFile {
 
 不变式（校验脚本强制）：features.id 唯一；feature.milestone 与 milestones[].featureIds 双向一致；feature.requirement ∈ requirements；feature.module 与 id 前缀一致；里程碑并集 = 全部 features。
 
+功能状态以对应模块文档「功能清单」中的明确验收口径为准：
+
+- `todo`：尚未开始实现。
+- `doing`：实现或验证仍在进行，尚未达到可验收状态。
+- `review`：实现已经完成，验收条件当前可执行，但尚无覆盖完整验收口径的直接证据。
+- `done`：已有测试、集成运行或人工验收的直接证据覆盖明确验收口径。目标环境抽查、长期压测等超出该口径的附加加固项可以保留在 `notes`，但不得据此把功能降回 `review` 或 `blocked`。
+- `blocked`：明确验收口径本身因缺少目标环境、设备、授权或外部依赖而无法继续；`notes` 必须同时写明当前阻塞条件与解阻条件。
+- `dropped`：设计明确废弃，记录保留且不删除。
+
 需求状态由其非 `dropped` 功能点汇总，优先级为 `blocked > doing > todo > review > done`；全部功能点均废弃时才为 `dropped`。里程碑不重复存储 `status`，展示端按同一优先级从 `featureIds` 派生，避免形成第二状态事实源。
