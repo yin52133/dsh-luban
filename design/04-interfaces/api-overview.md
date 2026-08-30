@@ -105,7 +105,7 @@ flowchart LR
 | `luban.compaction.done` | sessionId、strategy、前后 token | M08 | HUD、审计 |
 | `luban.channel.data` | endpointId、kind、方向 | M10 | 监视 UI |
 | `luban.build.job` | jobId、状态迁移 | M09 | 看板 |
-| `luban.browser.progress` | runId、step、截图引用 | M11 | 会话/看板 |
+| `luban.browser.progress` | accountId、runId、step、截图引用 | M11 | 会话/看板 |
 
 ## 4. Web API 组织约定
 

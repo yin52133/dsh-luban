@@ -1,4 +1,4 @@
-import type { Actor, HostId, SessionId, TaskId, Unsubscribe } from './common.js'
+import type { AccountId, Actor, HostId, SessionId, TaskId, Unsubscribe } from './common.js'
 import type { TelemetrySnapshot } from './models.js'
 
 export interface LubanEventMap {
@@ -47,6 +47,7 @@ export interface LubanEventMap {
     readonly to: string
   }
   readonly 'luban.browser.progress': {
+    readonly accountId: AccountId
     readonly runId: string
     readonly step: number
     readonly screenshot?: string

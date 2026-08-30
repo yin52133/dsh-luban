@@ -138,6 +138,10 @@ export class BrowserTaskboardAutomation {
     if (!task.tags.includes('auto-ok')) {
       throw new BrowserError('E_BROWSER_POLICY', 'Automatic browser tasks require the auto-ok tag')
     }
+    const accountId = task.accountId
+    if (accountId === undefined) {
+      throw new BrowserError('E_BROWSER_POLICY', 'Automatic browser tasks require an account owner')
+    }
     const templateTags = task.tags.filter((tag) => tag.startsWith(TEMPLATE_TAG))
     if (templateTags.length !== 1) {
       throw new BrowserError(
@@ -159,14 +163,16 @@ export class BrowserTaskboardAutomation {
       { expectedClaim },
     )
     const queued = this.#queue.enqueue({
+      accountId,
       task: {
+        accountId,
         templateId,
         goal: task.description.trim() === '' ? task.title : task.description,
       },
       params,
       automatic: true,
     })
-    const completed = await this.#queue.wait(queued.id)
+    const completed = await this.#queue.wait(queued.id, accountId)
     if (completed.status !== 'succeeded' || completed.result?.status !== 'ok') {
       return {
         ok: false,

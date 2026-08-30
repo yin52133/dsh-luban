@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {
+  AccountId,
   AgentClaimService,
   AuthService,
   BrowserAdapter,
@@ -23,7 +24,12 @@ declare module '@deepseek-ai/cordis' {
   }
 
   interface Events {
-    'luban.browser.progress'(runId: string, step: number, screenshot: string | undefined): void
+    'luban.browser.progress'(
+      runId: string,
+      step: number,
+      screenshot: string | undefined,
+      accountId: AccountId,
+    ): void
   }
 }
 
@@ -48,12 +54,24 @@ export function apply(ctx: Context, config: Config = {}): void {
   )
   ctx.effect(
     () =>
-      service.subscribe((event): void => {
+      service.subscribeAll((event): void => {
         const detail = event.event
         if (detail?.type === 'progress') {
-          ctx.emit('luban.browser.progress', detail.runId, detail.step, undefined)
+          ctx.emit(
+            'luban.browser.progress',
+            detail.runId,
+            detail.step,
+            undefined,
+            event.job.accountId,
+          )
         } else if (detail?.type === 'screenshot') {
-          ctx.emit('luban.browser.progress', detail.runId, event.job.progressStep, detail.path)
+          ctx.emit(
+            'luban.browser.progress',
+            detail.runId,
+            event.job.progressStep,
+            detail.path,
+            event.job.accountId,
+          )
         }
       }),
     'luban-browser: progress event relay',

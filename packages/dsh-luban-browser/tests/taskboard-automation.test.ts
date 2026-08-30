@@ -10,11 +10,13 @@ import type {
   TaskOutput,
   TaskProgress,
 } from 'dsh-luban-core'
-import { asActorId, asSessionId, asTaskId } from 'dsh-luban-core'
+import { asAccountId, asActorId, asSessionId, asTaskId } from 'dsh-luban-core'
 import { LubanError } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { BrowserTaskboardAutomation } from '../src/taskboard-automation.js'
 import type { BrowserJobRequest, BrowserJobSnapshot, BrowserQueue } from '../src/types.js'
+
+const ACCOUNT = asAccountId('alice')
 
 describe('BrowserTaskboardAutomation', () => {
   it('requires all safety tags and writes a successful artifact through claims', async () => {
@@ -129,6 +131,7 @@ describe('BrowserTaskboardAutomation', () => {
       enqueueCount += 1
       return {
         id: `R-${String(enqueueCount)}`,
+        accountId: request.accountId,
         status: 'queued',
         task: request.task,
         automatic: true,
@@ -144,6 +147,7 @@ describe('BrowserTaskboardAutomation', () => {
       list: vi.fn(() => []),
       wait: vi.fn((id: string) => (id === 'R-1' ? firstWait.promise : Promise.resolve(successful))),
       subscribe: vi.fn(() => (): void => undefined),
+      subscribeAll: vi.fn(() => (): void => undefined),
     }
     const progress = vi.fn(
       (_id: TaskId, value: TaskProgress, options?: ClaimMutationOptions): Promise<void> =>
@@ -207,6 +211,7 @@ describe('BrowserTaskboardAutomation', () => {
 function task(tags: readonly string[], leaseId = 'lease-1', version = 1): Task {
   return {
     id: asTaskId('T-1'),
+    accountId: ACCOUNT,
     title: 'Research part',
     description: 'Find the datasheet',
     status: 'doing',
@@ -247,6 +252,7 @@ function nightTask(tags: readonly string[]): Task {
 function completedJob(id: string, resultStatus: 'ok' | 'failed' = 'ok'): BrowserJobSnapshot {
   return {
     id,
+    accountId: ACCOUNT,
     status: 'succeeded',
     task: { goal: 'Find the datasheet' },
     automatic: true,
@@ -255,6 +261,7 @@ function completedJob(id: string, resultStatus: 'ok' | 'failed' = 'ok'): Browser
     progressStep: 1,
     screenshots: ['/artifact/result.png'],
     result: {
+      accountId: ACCOUNT,
       runId: id,
       status: resultStatus,
       screenshots: ['/artifact/result.png'],
@@ -272,6 +279,7 @@ function fakeQueue(resultStatus: 'ok' | 'failed' = 'ok'): {
   const completed = completedJob('R-1', resultStatus)
   const enqueue = vi.fn((_request: BrowserJobRequest): BrowserJobSnapshot => ({
     id: completed.id,
+    accountId: ACCOUNT,
     status: 'queued',
     task: completed.task,
     automatic: true,
@@ -288,6 +296,7 @@ function fakeQueue(resultStatus: 'ok' | 'failed' = 'ok'): {
       list: vi.fn(() => [completed]),
       wait: vi.fn(() => Promise.resolve(completed)),
       subscribe: vi.fn(() => (): void => undefined),
+      subscribeAll: vi.fn(() => (): void => undefined),
     },
   }
 }

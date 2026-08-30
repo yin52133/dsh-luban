@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
+  AccountId,
   BrowserAdapter,
   BrowserEvent,
   BrowserProfile,
@@ -10,6 +11,7 @@ import type {
   BrowserTaskSpec,
   BrowserTemplate,
 } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { AsyncQueue } from './async-queue.js'
 import type { ResolvedConfig } from './config.js'
 import { isUnrestrictedDomainPattern } from './domain-policy.js'
@@ -27,6 +29,7 @@ import type {
 
 interface MutableJob {
   readonly id: string
+  readonly accountId: AccountId
   readonly task: BrowserTaskSpec
   readonly params: Readonly<Record<string, string>>
   readonly automatic: boolean
@@ -77,7 +80,8 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
   }
 
   public async *run(task: BrowserTaskSpec): AsyncIterable<BrowserEvent> {
-    const snapshot = this.enqueue({ task })
+    const accountId = task.accountId ?? asAccountId('luban-browser-system')
+    const snapshot = this.enqueue({ accountId, task })
     const job = this.#jobs.get(snapshot.id)
     if (job === undefined)
       throw new BrowserError('E_BROWSER_NOT_FOUND', 'Browser job was not found')
@@ -104,10 +108,11 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
     if (activeCount >= this.#config.maxPending) {
       throw new BrowserError('E_BROWSER_QUEUE_FULL', 'Browser task queue is full', true)
     }
-    const task = cloneTask(request.task)
+    const task = cloneTask(request.task, request.accountId)
     validateTask(task)
     const job: MutableJob = {
       id: randomUUID(),
+      accountId: request.accountId,
       task,
       params: Object.freeze({ ...(request.params ?? {}) }),
       automatic: request.automatic ?? false,
@@ -130,9 +135,11 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
     return snapshotOf(job)
   }
 
-  public cancel(id: string): Promise<boolean> {
+  public cancel(id: string, accountId: AccountId): Promise<boolean> {
     const job = this.#jobs.get(id)
-    if (job === undefined || isTerminal(job.status)) return Promise.resolve(false)
+    if (job?.accountId !== accountId || isTerminal(job.status)) {
+      return Promise.resolve(false)
+    }
     if (job.status === 'queued') {
       const index = this.#pending.indexOf(job)
       if (index >= 0) this.#pending.splice(index, 1)
@@ -143,22 +150,23 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
     return Promise.resolve(true)
   }
 
-  public get(id: string): BrowserJobSnapshot | null {
+  public get(id: string, accountId: AccountId): BrowserJobSnapshot | null {
     const job = this.#jobs.get(id)
-    return job === undefined ? null : snapshotOf(job)
+    return job?.accountId !== accountId ? null : snapshotOf(job)
   }
 
-  public list(): readonly BrowserJobSnapshot[] {
+  public list(accountId: AccountId): readonly BrowserJobSnapshot[] {
     return Object.freeze(
       [...this.#jobs.values()]
+        .filter((job) => job.accountId === accountId)
         .sort((left, right) => right.createdAt - left.createdAt)
         .map(snapshotOf),
     )
   }
 
-  public wait(id: string): Promise<BrowserJobSnapshot> {
+  public wait(id: string, accountId: AccountId): Promise<BrowserJobSnapshot> {
     const job = this.#jobs.get(id)
-    if (job === undefined) {
+    if (job?.accountId !== accountId) {
       return Promise.reject(new BrowserError('E_BROWSER_NOT_FOUND', 'Browser job was not found'))
     }
     if (isTerminal(job.status)) return Promise.resolve(snapshotOf(job))
@@ -167,7 +175,17 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
     })
   }
 
-  public subscribe(listener: (event: BrowserJobEvent) => void): () => void {
+  public subscribe(accountId: AccountId, listener: (event: BrowserJobEvent) => void): () => void {
+    const scoped = (event: BrowserJobEvent): void => {
+      if (event.job.accountId === accountId) listener(event)
+    }
+    this.#listeners.add(scoped)
+    return (): void => {
+      this.#listeners.delete(scoped)
+    }
+  }
+
+  public subscribeAll(listener: (event: BrowserJobEvent) => void): () => void {
     this.#listeners.add(listener)
     return (): void => {
       this.#listeners.delete(listener)
@@ -218,22 +236,28 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
     job.startedAt = this.#now()
     job.controller = new AbortController()
     this.#publish(job)
+    let browserStarted = false
     try {
       const task = await this.#resolveTask(job)
       await this.#bridge.start(task.profile)
+      browserStarted = true
+      const artifactsDir = join(this.#config.artifactsDir, accountStorageSegment(job.accountId))
+      await mkdir(artifactsDir, { recursive: true, mode: 0o700 })
       let result: BrowserResult | undefined
-      for await (const event of this.#bridge.run(
-        task,
-        this.#config.artifactsDir,
-        job.controller.signal,
-      )) {
-        if (event.type === 'progress') job.progressStep = Math.max(job.progressStep, event.step)
-        if (event.type === 'screenshot' && !job.screenshots.includes(event.path)) {
-          job.screenshots.push(event.path)
+      for await (const event of this.#bridge.run(task, artifactsDir, job.controller.signal)) {
+        const accountEvent: BrowserEvent =
+          event.type === 'result'
+            ? { type: 'result', result: { ...event.result, accountId: job.accountId } }
+            : event
+        if (accountEvent.type === 'progress') {
+          job.progressStep = Math.max(job.progressStep, accountEvent.step)
         }
-        if (event.type === 'result') result = event.result
-        job.events.push(event)
-        this.#publish(job, event)
+        if (accountEvent.type === 'screenshot' && !job.screenshots.includes(accountEvent.path)) {
+          job.screenshots.push(accountEvent.path)
+        }
+        if (accountEvent.type === 'result') result = accountEvent.result
+        job.events.push(accountEvent)
+        this.#publish(job, accountEvent)
       }
       if (result === undefined) {
         throw new BrowserError('E_BROWSER_PROTOCOL', 'Browser bridge returned no result')
@@ -260,6 +284,15 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
       job.events.push(event)
       this.#publish(job, event)
     } finally {
+      if (browserStarted) {
+        try {
+          await this.#bridge.stop()
+        } catch (error: unknown) {
+          const failure = asBrowserError(error)
+          job.error = failure
+          job.status = 'failed'
+        }
+      }
       job.controller = undefined
       job.finishedAt = this.#now()
       job.events.close()
@@ -331,9 +364,10 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
       1,
       template === null ? 3600 : templateTimeout,
     )
-    const profile = this.#resolveProfile(template?.profile)
+    const profile = this.#resolveProfile(template?.profile, job.accountId)
     return {
       runId: job.id,
+      accountId: job.accountId,
       goal,
       ...(startUrl === undefined ? {} : { startUrl }),
       maxSteps,
@@ -347,17 +381,29 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
   #resolveProfile(
     templateProfile:
       { readonly mode: 'isolated' | 'persistent'; readonly name?: string } | undefined,
+    accountId: AccountId,
   ): BrowserProfile {
+    const accountDirectory = accountStorageSegment(accountId)
     if (templateProfile?.mode === 'persistent') {
       return {
         ...this.#config.profile,
-        userDataDir: join(this.#config.profilesDir, templateProfile.name ?? 'default'),
+        userDataDir: join(
+          this.#config.profilesDir,
+          accountDirectory,
+          templateProfile.name ?? 'default',
+        ),
       }
     }
     if (templateProfile?.mode === 'isolated') {
       return Object.fromEntries(
         Object.entries(this.#config.profile).filter(([key]) => key !== 'userDataDir'),
       )
+    }
+    if (this.#config.profile.userDataDir !== undefined) {
+      return {
+        ...this.#config.profile,
+        userDataDir: join(this.#config.profile.userDataDir, accountDirectory),
+      }
     }
     return this.#config.profile
   }
@@ -414,6 +460,7 @@ export class BrowserService implements BrowserAdapter, BrowserQueue {
 function snapshotOf(job: MutableJob): BrowserJobSnapshot {
   return Object.freeze({
     id: job.id,
+    accountId: job.accountId,
     status: job.status,
     task: job.task,
     automatic: job.automatic,
@@ -427,8 +474,9 @@ function snapshotOf(job: MutableJob): BrowserJobSnapshot {
   })
 }
 
-function cloneTask(task: BrowserTaskSpec): BrowserTaskSpec {
+function cloneTask(task: BrowserTaskSpec, accountId: AccountId): BrowserTaskSpec {
   return Object.freeze({
+    accountId,
     ...(task.templateId === undefined ? {} : { templateId: task.templateId }),
     goal: task.goal,
     ...(task.startUrl === undefined ? {} : { startUrl: task.startUrl }),
@@ -448,6 +496,11 @@ function cloneTask(task: BrowserTaskSpec): BrowserTaskSpec {
           }),
         }),
   })
+}
+
+function accountStorageSegment(accountId: AccountId): string {
+  const encoded = Buffer.from(String(accountId), 'utf8').toString('base64url')
+  return `account-${encoded}`
 }
 
 function validateTask(task: BrowserTaskSpec): void {

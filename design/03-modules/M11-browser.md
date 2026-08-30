@@ -16,6 +16,7 @@
 | v0.8 | 2026-08-30 | Codex | 补齐 Windows/Ubuntu 结果聚合与 disposable profile |
 | v0.9 | 2026-08-30 | Codex | 固定 uv/Python 版本并收口桥接环境生命周期 |
 | v0.10 | 2026-08-30 | Codex | 收口为真实浏览器/provider 与双平台功能验收 |
+| v0.11 | 2026-08-30 | Codex | 浏览器任务、事件、产物与持久 profile 按登录账号隔离 |
 
 ## 1. 概述与目标
 
@@ -111,6 +112,11 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
 - Python 3.12 桥接项目固定 `browser-use==0.13.8` 并提交 `uv.lock`；发布构建将桥接项目和
   内置 YAML 模板复制到 `dist/`，运行环境落在用户数据目录而非全局 Python。
 - `/luban-browser` HTTP/SSE API 复用 `lubanAuth`，会话入口统一为 `/luban-auth/login`；
+  job 的 list/get/cancel/status 和 SSE replay/live 都以认证得到的 `accountId` 为范围。HTTP body 不能
+  声明或覆盖账号；跨账号 ID 查询统一表现为不存在。
+- 新建 browser job 与结果都携带 `accountId`；自动看板任务沿用其 `task.accountId`，无账号归属的旧任务
+  不自动执行。截图写入账号子目录，persistent browser profile 采用账号/模板两级目录；每个 job 结束
+  都停止当前 browser session，避免后续账号复用上一个账号的浏览器上下文。
   自动任务仅响应已由 agent 认领且带 `browser`、`auto-ok` 和唯一模板标签的看板卡片。
 - 自动任务按 claim `leaseId` 分代去重并串行；同毫秒 A→B 重领时 A 的 progress/complete/fail
   全部被账本拒绝，B 仍继续 queue/progress/artifact 并进入 `review(autoDone)`。

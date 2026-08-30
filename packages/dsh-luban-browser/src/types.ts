@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   BrowserEvent,
   BrowserProfile,
   BrowserResult,
@@ -21,6 +22,7 @@ export interface LubanBrowserTemplate extends BrowserTemplate {
 }
 
 export interface BrowserJobRequest {
+  readonly accountId: AccountId
   readonly task: BrowserTaskSpec
   readonly params?: Readonly<Record<string, string>>
   /** Internal scheduler flag. HTTP callers cannot set this field. */
@@ -35,6 +37,7 @@ export interface BrowserJobError {
 
 export interface BrowserJobSnapshot {
   readonly id: string
+  readonly accountId: AccountId
   readonly status: BrowserJobStatus
   readonly task: BrowserTaskSpec
   readonly automatic: boolean
@@ -56,6 +59,7 @@ export interface BrowserJobEvent {
 
 export interface ResolvedBrowserTask {
   readonly runId: string
+  readonly accountId: AccountId
   readonly goal: string
   readonly startUrl?: string
   readonly maxSteps: number
@@ -78,9 +82,10 @@ export interface BrowserBridge {
 
 export interface BrowserQueue {
   enqueue(request: BrowserJobRequest): BrowserJobSnapshot
-  cancel(id: string): Promise<boolean>
-  get(id: string): BrowserJobSnapshot | null
-  list(): readonly BrowserJobSnapshot[]
-  wait(id: string): Promise<BrowserJobSnapshot>
-  subscribe(listener: (event: BrowserJobEvent) => void): () => void
+  cancel(id: string, accountId: AccountId): Promise<boolean>
+  get(id: string, accountId: AccountId): BrowserJobSnapshot | null
+  list(accountId: AccountId): readonly BrowserJobSnapshot[]
+  wait(id: string, accountId: AccountId): Promise<BrowserJobSnapshot>
+  subscribe(accountId: AccountId, listener: (event: BrowserJobEvent) => void): () => void
+  subscribeAll(listener: (event: BrowserJobEvent) => void): () => void
 }

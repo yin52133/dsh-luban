@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService, BrowserTaskSpec, BrowserTemplate } from 'dsh-luban-core'
+import type { AccountId, AuthService, BrowserTaskSpec, BrowserTemplate } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { BrowserError } from './errors.js'
 import { authRequest } from './security.js'
 import type {
@@ -17,30 +18,33 @@ interface TemplateSource {
   templates(): Promise<readonly BrowserTemplate[]>
 }
 
+type BrowserJobDraft = Omit<BrowserJobRequest, 'accountId'>
+
 export class BrowserHttpApi {
   readonly #queue: BrowserQueue
   readonly #templates: TemplateSource
   readonly #auth: AuthService
   readonly #events: BrowserJobEvent[] = []
-  readonly #clients = new Set<ServerResponse>()
+  readonly #clients = new Map<ServerResponse, AccountId>()
   readonly #unsubscribe: () => void
 
   public constructor(queue: BrowserQueue, templates: TemplateSource, auth: AuthService) {
     this.#queue = queue
     this.#templates = templates
     this.#auth = auth
-    this.#unsubscribe = queue.subscribe((event): void => this.#broadcast(event))
+    this.#unsubscribe = queue.subscribeAll((event): void => this.#broadcast(event))
   }
 
   public readonly handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
-      if (!(await this.#authenticate(req, res))) return
+      const accountId = await this.#authenticate(req, res)
+      if (accountId === null) return
       const url = new URL(req.url ?? PREFIX, `http://${req.headers.host ?? 'localhost'}`)
       const path = normalizePath(url.pathname)
       const method = req.method ?? 'GET'
 
       if (method === 'GET' && (path === '' || path === '/status')) {
-        const jobs = this.#queue.list()
+        const jobs = this.#queue.list(accountId)
         sendJson(res, 200, {
           status: 'ok',
           queue: {
@@ -55,17 +59,17 @@ export class BrowserHttpApi {
         return
       }
       if (method === 'GET' && path === '/jobs') {
-        sendJson(res, 200, { jobs: this.#queue.list() })
+        sendJson(res, 200, { jobs: this.#queue.list(accountId) })
         return
       }
       if (method === 'POST' && path === '/jobs') {
         const body = await readJson(req)
-        const job = this.#queue.enqueue(decodeJobRequest(body))
+        const job = this.#queue.enqueue({ accountId, ...decodeJobRequest(body) })
         sendJson(res, 202, { job })
         return
       }
       if (method === 'GET' && path === '/events') {
-        this.#openEvents(req, res)
+        this.#openEvents(req, res, accountId)
         return
       }
       const match = /^\/jobs\/([0-9a-f-]+)(\/cancel)?$/u.exec(path)
@@ -74,18 +78,18 @@ export class BrowserHttpApi {
         if (id === undefined)
           throw new BrowserError('E_BROWSER_NOT_FOUND', 'Browser job was not found')
         if (method === 'GET' && match[2] === undefined) {
-          const job = this.#queue.get(id)
+          const job = this.#queue.get(id, accountId)
           if (job === null)
             throw new BrowserError('E_BROWSER_NOT_FOUND', 'Browser job was not found')
           sendJson(res, 200, { job })
           return
         }
         if (method === 'POST' && match[2] === '/cancel') {
-          const cancelled = await this.#queue.cancel(id)
-          if (!cancelled && this.#queue.get(id) === null) {
+          const cancelled = await this.#queue.cancel(id, accountId)
+          if (!cancelled && this.#queue.get(id, accountId) === null) {
             throw new BrowserError('E_BROWSER_NOT_FOUND', 'Browser job was not found')
           }
-          sendJson(res, 200, { cancelled, job: this.#queue.get(id) })
+          sendJson(res, 200, { cancelled, job: this.#queue.get(id, accountId) })
           return
         }
       }
@@ -112,13 +116,20 @@ export class BrowserHttpApi {
 
   public close(): void {
     this.#unsubscribe()
-    for (const response of this.#clients) response.end()
+    for (const response of this.#clients.keys()) response.end()
     this.#clients.clear()
   }
 
-  async #authenticate(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  async #authenticate(req: IncomingMessage, res: ServerResponse): Promise<AccountId | null> {
     const decision = await this.#auth.middleware()(authRequest(req))
-    if (decision.allowed) return true
+    if (decision.allowed) {
+      if (decision.account !== undefined) return decision.account.accountId
+      if (decision.user !== undefined) return asAccountId(decision.user)
+      sendJson(res, 401, {
+        error: { code: 'E_AUTH_REQUIRED', message: 'Authentication required' },
+      })
+      return null
+    }
     if (decision.redirectTo !== undefined) {
       res.writeHead(decision.status, { Location: decision.redirectTo, 'Cache-Control': 'no-store' })
       res.end()
@@ -133,10 +144,10 @@ export class BrowserHttpApi {
         },
       })
     }
-    return false
+    return null
   }
 
-  #openEvents(req: IncomingMessage, res: ServerResponse): void {
+  #openEvents(req: IncomingMessage, res: ServerResponse, accountId: AccountId): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -147,10 +158,10 @@ export class BrowserHttpApi {
     const lastId = Number(req.headers['last-event-id'] ?? 0)
     if (Number.isSafeInteger(lastId) && lastId >= 0) {
       for (const event of this.#events) {
-        if (event.sequence > lastId) writeEvent(res, event)
+        if (event.sequence > lastId && event.job.accountId === accountId) writeEvent(res, event)
       }
     }
-    this.#clients.add(res)
+    this.#clients.set(res, accountId)
     res.once('close', (): void => {
       this.#clients.delete(res)
     })
@@ -159,14 +170,17 @@ export class BrowserHttpApi {
   #broadcast(event: BrowserJobEvent): void {
     this.#events.push(event)
     if (this.#events.length > EVENT_HISTORY_SIZE) this.#events.shift()
-    for (const response of [...this.#clients]) {
-      if (!response.destroyed) writeEvent(response, event)
-      else this.#clients.delete(response)
+    for (const [response, accountId] of [...this.#clients]) {
+      if (response.destroyed) {
+        this.#clients.delete(response)
+      } else if (event.job.accountId === accountId) {
+        writeEvent(response, event)
+      }
     }
   }
 }
 
-function decodeJobRequest(value: unknown): BrowserJobRequest {
+function decodeJobRequest(value: unknown): BrowserJobDraft {
   if (!isRecord(value) || !isRecord(value.task)) {
     throw new BrowserError('E_BROWSER_INVALID_TASK', 'Request body must contain task')
   }
