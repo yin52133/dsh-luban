@@ -33,11 +33,13 @@ export class TaskboardBuildAlertSink implements BuildAlertSink {
   public async jobFailed(job: BuildJob): Promise<void> {
     const tag = `build:${job.id}`
     const existing = await this.#store.query({
+      ...(job.accountId === undefined ? {} : { accountId: job.accountId }),
       statuses: ['backlog', 'todo', 'doing', 'review'],
       tags: [tag],
     })
     if (existing.length > 0) return
     await this.#store.create({
+      ...(job.accountId === undefined ? {} : { accountId: job.accountId }),
       title: `Build failed: ${job.templateId}`,
       description: job.errorLogExcerpt?.slice(-4_000) ?? 'Build worker failed without an excerpt',
       status: 'todo',

@@ -2,7 +2,8 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { ArtifactRef, BuildJob, ResourceReport } from 'dsh-luban-core'
+import type { AccountSessionRegistry, ArtifactRef, BuildJob, ResourceReport } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BuildAlertSink } from '../src/alerts.js'
 import { ArtifactManager } from '../src/artifacts.js'
@@ -212,6 +213,7 @@ async function fixture(
     readonly probe?: FakeProbe
     readonly alerts?: CapturingAlerts
     readonly storeFactory?: (filePath: string) => BuildLedgerStore
+    readonly accountSessions?: AccountSessionRegistry
   } = {},
 ): Promise<QueueFixture> {
   const directory = join(tmpdir(), `luban-queue-${randomUUID()}`)
@@ -243,6 +245,7 @@ async function fixture(
     ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
     retainRuns: options.retainRuns ?? 10,
     alerts,
+    ...(options.accountSessions === undefined ? {} : { accountSessions: options.accountSessions }),
     now: (): number => ++timestamp,
     onError: (error: unknown): void => {
       errors.push(error)
@@ -261,6 +264,32 @@ afterEach(async (): Promise<void> => {
 })
 
 describe('BuildQueue', (): void => {
+  it('partitions jobs by account and binds the managed build session', async (): Promise<void> => {
+    const bindings: string[] = []
+    const accountSessions: AccountSessionRegistry = {
+      bind(accountId, sessionId): Promise<void> {
+        bindings.push(`${accountId}:${sessionId}`)
+        return Promise.resolve()
+      },
+      ownerOf: () => Promise.resolve(null),
+    }
+    const { queue, workspace } = await fixture({ accountSessions })
+    const alice = asAccountId('alice')
+    const bob = asAccountId('bob')
+    const job = await queue.enqueue({
+      accountId: alice,
+      templateId: TEMPLATE.id,
+      params: { workspace, mode: 'ok' },
+    })
+    await queue.start()
+    await queue.waitForIdle()
+
+    expect((await queue.queue(alice)).map((item) => item.id)).toEqual([job.id])
+    expect(await queue.queue(bob)).toEqual([])
+    await expect(queue.get(job.id, bob)).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+    expect(bindings).toEqual([`alice:luban-server-build-${job.id}`])
+  })
+
   it('persists jobs, honors concurrency, registers artifacts, and captures failed logs', async (): Promise<void> => {
     const { alerts, executor, queue, workspace } = await fixture({
       maxConcurrent: 2,

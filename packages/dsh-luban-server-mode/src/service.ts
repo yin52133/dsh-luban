@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   ArtifactRef,
   BuildJob,
   BuildJobInput,
@@ -33,24 +34,24 @@ export class DefaultServerModeService implements ServerModeService {
     return this.#queue.enqueue(input)
   }
 
-  public queue(): Promise<readonly BuildJob[]> {
-    return this.#queue.queue()
+  public queue(accountId?: AccountId): Promise<readonly BuildJob[]> {
+    return this.#queue.queue(accountId)
   }
 
-  public artifacts(jobId: string): Promise<readonly ArtifactRef[]> {
-    return this.#queue.artifacts(jobId)
+  public artifacts(jobId: string, accountId?: AccountId): Promise<readonly ArtifactRef[]> {
+    return this.#queue.artifacts(jobId, accountId)
   }
 
-  public resourceReport(): Promise<ResourceReport> {
-    return this.#queue.resourceReport()
+  public resourceReport(accountId?: AccountId): Promise<ResourceReport> {
+    return this.#queue.resourceReport(accountId)
   }
 
-  public get(jobId: string): Promise<BuildJob> {
-    return this.#queue.get(jobId)
+  public get(jobId: string, accountId?: AccountId): Promise<BuildJob> {
+    return this.#queue.get(jobId, accountId)
   }
 
-  public errorExcerpt(jobId: string): Promise<string | null> {
-    return this.#queue.errorExcerpt(jobId)
+  public errorExcerpt(jobId: string, accountId?: AccountId): Promise<string | null> {
+    return this.#queue.errorExcerpt(jobId, accountId)
   }
 
   public templates(): readonly BuildTemplateConfig[] {

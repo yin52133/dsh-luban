@@ -119,6 +119,7 @@ export function apply(ctx: Context, input: Partial<ServerModeConfig> = {}): void
     ...(optionalTaskStore === undefined
       ? {}
       : { alerts: new TaskboardBuildAlertSink(optionalTaskStore) }),
+    accountSessions: ctx.lubanAuth.accountSessions,
     publish: (event): void => publishBuildEvent(ctx, event),
     onError: (error: unknown): void => ctx.logger.warn(error),
   })

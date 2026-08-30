@@ -1,8 +1,8 @@
 import { createReadStream } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { pipeline } from 'node:stream/promises'
-import type { AuthService, BuildJobInput } from 'dsh-luban-core'
-import { isLubanError, LubanError, modulePrefix } from 'dsh-luban-core'
+import type { AccountId, AuthService, BuildJobInput } from 'dsh-luban-core'
+import { asAccountId, isLubanError, LubanError, modulePrefix } from 'dsh-luban-core'
 import { type ArtifactLinkSigner, type ArtifactManager, attachmentName } from './artifacts.js'
 import type { BuildQueueEvent } from './queue.js'
 import type { DefaultServerModeService } from './service.js'
@@ -61,7 +61,7 @@ async function authenticate(
   request: IncomingMessage,
   path: string,
   auth: AuthCarrier,
-): Promise<void> {
+): Promise<AccountId> {
   const decision = await auth.middleware()({
     path,
     method: request.method ?? 'GET',
@@ -69,7 +69,8 @@ async function authenticate(
     cookie: firstHeader(request.headers.cookie),
     sourceIp: sourceIp(request),
   })
-  if (!decision.allowed) throw new AuthRejected(decision.status)
+  if (!decision.allowed || decision.user === undefined) throw new AuthRejected(decision.status)
+  return decision.account?.accountId ?? asAccountId(decision.user)
 }
 
 async function jsonBody(request: IncomingMessage): Promise<unknown> {
@@ -121,7 +122,7 @@ function errorStatus(error: LubanError): number {
 
 class BuildEventStream {
   readonly #service: DefaultServerModeService
-  readonly #clients = new Set<ServerResponse>()
+  readonly #clients = new Map<ServerResponse, AccountId>()
   readonly #events: EventEnvelope[] = []
   readonly #unsubscribe: () => void
   readonly #heartbeat: ReturnType<typeof setInterval>
@@ -131,7 +132,7 @@ class BuildEventStream {
     this.#service = service
     this.#unsubscribe = service.subscribe((event): void => this.publish(event))
     this.#heartbeat = setInterval((): void => {
-      for (const response of [...this.#clients]) {
+      for (const response of this.#clients.keys()) {
         if (!response.write(': heartbeat\n\n')) this.#remove(response)
       }
     }, 15_000)
@@ -146,10 +147,18 @@ class BuildEventStream {
     }
     this.#events.push(envelope)
     if (this.#events.length > 256) this.#events.shift()
-    for (const response of [...this.#clients]) this.#write(response, envelope)
+    for (const [response, accountId] of this.#clients) {
+      if (event.type === 'resource' || event.job.accountId === accountId) {
+        this.#write(response, envelope)
+      }
+    }
   }
 
-  public async connect(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  public async connect(
+    request: IncomingMessage,
+    response: ServerResponse,
+    accountId: AccountId,
+  ): Promise<void> {
     const header = request.headers['last-event-id']
     const requested = Number.parseInt(
       Array.isArray(header) ? (header[0] ?? '') : (header ?? ''),
@@ -163,19 +172,26 @@ class BuildEventStream {
               id: this.#sequence,
               event: 'baseline' as const,
               data: {
-                jobs: await this.#service.queue(),
-                resource: await this.#service.resourceReport(),
+                jobs: await this.#service.queue(accountId),
+                resource: await this.#service.resourceReport(accountId),
               },
             },
           ]
-        : this.#events.filter((event): boolean => event.id > requested)
+        : this.#events.filter(
+            (event): boolean =>
+              event.id > requested &&
+              (event.event === 'resource' ||
+                ((event.data as BuildQueueEvent).type === 'job' &&
+                  (event.data as Extract<BuildQueueEvent, { readonly type: 'job' }>).job
+                    .accountId === accountId)),
+          )
     response.statusCode = 200
     securityHeaders(response)
     response.setHeader('content-type', 'text/event-stream; charset=utf-8')
     response.setHeader('connection', 'keep-alive')
     response.setHeader('x-accel-buffering', 'no')
     response.flushHeaders()
-    this.#clients.add(response)
+    this.#clients.set(response, accountId)
     response.once('close', (): void => this.#remove(response))
     response.write('retry: 2000\n\n')
     for (const event of pending) this.#write(response, event)
@@ -184,7 +200,7 @@ class BuildEventStream {
   public dispose(): void {
     clearInterval(this.#heartbeat)
     this.#unsubscribe()
-    for (const response of [...this.#clients]) response.end()
+    for (const response of this.#clients.keys()) response.end()
     this.#clients.clear()
   }
 
@@ -231,11 +247,11 @@ export class ServerModeHttpApi {
       if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) {
         throw new LubanError('E_NOT_FOUND', 'Route not found')
       }
-      await authenticate(request, url.pathname, this.#auth)
+      const accountId = await authenticate(request, url.pathname, this.#auth)
       const path = url.pathname.slice(PREFIX.length) || '/'
       const method = request.method ?? 'GET'
       if (method === 'GET' && path === '/events') {
-        await this.#events.connect(request, response)
+        await this.#events.connect(request, response, accountId)
         return
       }
       if (method === 'GET' && path === '/templates') {
@@ -243,17 +259,20 @@ export class ServerModeHttpApi {
         return
       }
       if (method === 'GET' && path === '/jobs') {
-        sendJson(response, 200, { jobs: await this.#service.queue() })
+        sendJson(response, 200, { jobs: await this.#service.queue(accountId) })
         return
       }
       if (method === 'POST' && path === '/jobs') {
         sendJson(response, 202, {
-          job: await this.#service.enqueue(buildInput(await jsonBody(request))),
+          job: await this.#service.enqueue({
+            ...buildInput(await jsonBody(request)),
+            accountId,
+          }),
         })
         return
       }
       if (method === 'GET' && path === '/resources') {
-        sendJson(response, 200, await this.#service.resourceReport())
+        sendJson(response, 200, await this.#service.resourceReport(accountId))
         return
       }
       const match = /^\/jobs\/([^/]+)(?:\/(artifacts|error-log)(?:\/(.+))?)?$/u.exec(path)
@@ -264,14 +283,14 @@ export class ServerModeHttpApi {
       const action = match[2]
       const encodedName = match[3]
       if (method === 'GET' && action === undefined) {
-        sendJson(response, 200, { job: await this.#service.get(jobId) })
+        sendJson(response, 200, { job: await this.#service.get(jobId, accountId) })
         return
       }
       if (method === 'GET' && action === 'error-log' && encodedName === undefined) {
-        sendJson(response, 200, { excerpt: await this.#service.errorExcerpt(jobId) })
+        sendJson(response, 200, { excerpt: await this.#service.errorExcerpt(jobId, accountId) })
         return
       }
-      const artifacts = await this.#service.artifacts(jobId)
+      const artifacts = await this.#service.artifacts(jobId, accountId)
       if (method === 'GET' && action === 'artifacts' && encodedName === undefined) {
         sendJson(response, 200, {
           artifacts: artifacts.map((artifact) => {

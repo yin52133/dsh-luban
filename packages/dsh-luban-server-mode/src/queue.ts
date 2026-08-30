@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import type { BuildJob, BuildJobInput, ResourceReport, Unsubscribe } from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+import type {
+  AccountId,
+  AccountSessionRegistry,
+  BuildJob,
+  BuildJobInput,
+  ResourceReport,
+  Unsubscribe,
+} from 'dsh-luban-core'
+import { LubanError, asSessionId } from 'dsh-luban-core'
 import type { BuildAlertSink } from './alerts.js'
 import type { ArtifactManager } from './artifacts.js'
 import type { BuildTemplateConfig } from './config.js'
@@ -35,6 +42,7 @@ export interface BuildQueueOptions {
   readonly probeTimeoutMs?: number
   readonly retainRuns: number
   readonly alerts?: BuildAlertSink
+  readonly accountSessions?: AccountSessionRegistry
   readonly now?: () => number
   readonly publish?: (event: BuildQueueEvent) => void
   readonly onError?: (error: unknown) => void
@@ -102,6 +110,7 @@ export class BuildQueue {
   readonly #probeTimeoutMs: number
   readonly #retainRuns: number
   readonly #alerts: BuildAlertSink | undefined
+  readonly #accountSessions: AccountSessionRegistry | undefined
   readonly #now: () => number
   readonly #publish: ((event: BuildQueueEvent) => void) | undefined
   readonly #onError: (error: unknown) => void
@@ -137,6 +146,7 @@ export class BuildQueue {
     }
     this.#retainRuns = options.retainRuns
     this.#alerts = options.alerts
+    this.#accountSessions = options.accountSessions
     this.#now = options.now ?? Date.now
     this.#publish = options.publish
     this.#onError = options.onError ?? ((): void => undefined)
@@ -187,6 +197,7 @@ export class BuildQueue {
     const id = randomUUID()
     const job: BuildJob = {
       id,
+      ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
       templateId: template.id,
       params: { ...input.params },
       status: 'queued',
@@ -214,31 +225,38 @@ export class BuildQueue {
     return job
   }
 
-  public async queue(): Promise<readonly BuildJob[]> {
+  public async queue(accountId?: AccountId): Promise<readonly BuildJob[]> {
     const records = Object.values((await this.#store.read()).records)
     return records
+      .filter((record): boolean => accountId === undefined || record.job.accountId === accountId)
       .sort((left, right): number => left.createdAt - right.createdAt)
       .map((record): BuildJob => record.job)
   }
 
-  public async get(jobId: string): Promise<BuildJob> {
-    return (await this.#store.require(jobId)).job
+  public async get(jobId: string, accountId?: AccountId): Promise<BuildJob> {
+    const job = (await this.#store.require(jobId)).job
+    if (accountId !== undefined && job.accountId !== accountId) {
+      throw new LubanError('E_NOT_FOUND', `build job ${jobId} was not found`)
+    }
+    return job
   }
 
-  public async artifacts(jobId: string): Promise<BuildJob['artifacts']> {
-    return (await this.#store.require(jobId)).job.artifacts
+  public async artifacts(jobId: string, accountId?: AccountId): Promise<BuildJob['artifacts']> {
+    return (await this.get(jobId, accountId)).artifacts
   }
 
-  public async errorExcerpt(jobId: string): Promise<string | null> {
-    return (await this.#store.require(jobId)).job.errorLogExcerpt ?? null
+  public async errorExcerpt(jobId: string, accountId?: AccountId): Promise<string | null> {
+    return (await this.get(jobId, accountId)).errorLogExcerpt ?? null
   }
 
   public templates(): readonly BuildTemplateConfig[] {
     return [...this.#templates.values()]
   }
 
-  public async resourceReport(): Promise<ResourceReport> {
-    const depth = (await this.queue()).filter((job): boolean => job.status === 'queued').length
+  public async resourceReport(accountId?: AccountId): Promise<ResourceReport> {
+    const depth = (await this.queue(accountId)).filter(
+      (job): boolean => job.status === 'queued',
+    ).length
     try {
       const sample = await sampleWithTimeout(this.#probe, this.#probeTimeoutMs)
       const paused =
@@ -407,6 +425,9 @@ export class BuildQueue {
     const template = this.#templates.get(job.templateId)
     let result
     try {
+      if (job.accountId !== undefined && job.sessionId !== undefined) {
+        await this.#accountSessions?.bind(job.accountId, asSessionId(job.sessionId))
+      }
       if (template === undefined)
         throw new LubanError('E_INVALID_INPUT', 'build template was removed')
       result = await this.#executor.execute(

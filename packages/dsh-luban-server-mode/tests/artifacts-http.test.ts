@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AuthService } from 'dsh-luban-core'
+import { asAccountId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ArtifactLinkSigner, ArtifactManager, attachmentName } from '../src/artifacts.js'
 import type { BuildTemplateConfig } from '../src/config.js'
@@ -58,7 +59,9 @@ function auth(): Pick<AuthService, 'middleware'> {
         Promise.resolve(
           request.cookie === 'session=ok'
             ? { allowed: true, status: 200, user: 'alice' }
-            : { allowed: false, status: 401 },
+            : request.cookie === 'session=bob'
+              ? { allowed: true, status: 200, user: 'bob' }
+              : { allowed: false, status: 401 },
         )
     },
   }
@@ -158,7 +161,11 @@ describe('ServerModeHttpApi', (): void => {
       checkIntervalMs: 60_000,
       retainRuns: 10,
     })
-    const done = await queue.enqueue({ templateId: TEMPLATE.id, params: { workspace } })
+    const done = await queue.enqueue({
+      accountId: asAccountId('alice'),
+      templateId: TEMPLATE.id,
+      params: { workspace },
+    })
     const run = artifacts.jobDirectory(done.id)
     await mkdir(join(run, 'nested'), { recursive: true })
     await writeFile(join(run, 'nested', 'firmware.bin'), 'signed artifact', 'utf8')
@@ -211,11 +218,14 @@ describe('ServerModeHttpApi', (): void => {
     const origin = `http://127.0.0.1:${String(address.port)}`
     const base = `${origin}/luban-server-mode`
     const cookie = { cookie: 'session=ok' }
+    const bobCookie = { cookie: 'session=bob' }
 
     expect((await fetch(`${base}/jobs`)).status).toBe(401)
     const jobs = await fetch(`${base}/jobs`, { headers: cookie })
     expect(jobs.status).toBe(200)
     expect(await jobs.json()).toMatchObject({ jobs: [{ id: done.id, status: 'done' }] })
+    expect(await (await fetch(`${base}/jobs`, { headers: bobCookie })).json()).toEqual({ jobs: [] })
+    expect((await fetch(`${base}/jobs/${done.id}`, { headers: bobCookie })).status).toBe(404)
 
     const artifactList = await fetch(`${base}/jobs/${done.id}/artifacts`, { headers: cookie })
     const artifactBody = (await artifactList.json()) as {
@@ -228,12 +238,39 @@ describe('ServerModeHttpApi', (): void => {
     const downloaded = await fetch(`${origin}${link}`, { headers: cookie })
     expect(downloaded.status).toBe(200)
     expect(await downloaded.text()).toBe('signed artifact')
+    expect((await fetch(`${origin}${link}`, { headers: bobCookie })).status).toBe(404)
     const tampered = new URL(`${origin}${link}`)
     tampered.searchParams.set('signature', 'bad')
     expect((await fetch(tampered, { headers: cookie })).status).toBe(403)
 
     const log = await fetch(`${base}/jobs/${done.id}/error-log`, { headers: cookie })
     expect(await log.json()).toEqual({ excerpt: 'diagnostic excerpt' })
+    expect((await fetch(`${base}/jobs/${done.id}/error-log`, { headers: bobCookie })).status).toBe(
+      404,
+    )
+
+    const bobCreated = await fetch(`${base}/jobs`, {
+      method: 'POST',
+      headers: { ...bobCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'alice',
+        templateId: TEMPLATE.id,
+        params: { workspace },
+      }),
+    })
+    expect(bobCreated.status).toBe(202)
+    expect(await bobCreated.json()).toMatchObject({ job: { accountId: 'bob' } })
+    expect(await (await fetch(`${base}/jobs`, { headers: cookie })).json()).toMatchObject({
+      jobs: [{ id: done.id, accountId: 'alice' }],
+    })
+    const bobStream = await fetch(`${base}/events`, { headers: bobCookie })
+    if (bobStream.body === null) throw new Error('Bob SSE response has no body')
+    const bobReader = bobStream.body.getReader()
+    const bobChunk = new TextDecoder().decode((await bobReader.read()).value)
+    expect(bobChunk).toContain('event: baseline')
+    expect(bobChunk).toContain('"accountId":"bob"')
+    expect(bobChunk).not.toContain(done.id)
+    await bobReader.cancel()
     const stream = await fetch(`${base}/events`, { headers: cookie })
     expect(stream.headers.get('content-type')).toContain('text/event-stream')
     await stream.body?.cancel()

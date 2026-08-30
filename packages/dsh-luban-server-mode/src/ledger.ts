@@ -1,5 +1,5 @@
 import type { ArtifactRef, BuildJob, BuildJobStatus, JsonCodec } from 'dsh-luban-core'
-import { AtomicJsonStore, LubanError } from 'dsh-luban-core'
+import { AtomicJsonStore, LubanError, asAccountId } from 'dsh-luban-core'
 
 export interface BuildRecord {
   readonly job: BuildJob
@@ -63,6 +63,7 @@ function job(value: unknown, name: string): BuildJob {
   if (!Array.isArray(row.artifacts)) throw new TypeError(`${name}.artifacts must be an array`)
   return {
     id: text(row.id, `${name}.id`),
+    ...(typeof row.accountId === 'string' ? { accountId: asAccountId(row.accountId) } : {}),
     templateId: text(row.templateId, `${name}.templateId`),
     params: params(row.params, `${name}.params`),
     status: status(row.status, `${name}.status`),

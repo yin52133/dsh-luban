@@ -413,6 +413,8 @@ export interface CompactionEngine {
 }
 
 export interface BuildJobInput {
+  /** Set by the authenticated service boundary, never by the request body. */
+  readonly accountId?: AccountId
   readonly templateId: string
   readonly params: Readonly<Record<string, string>>
 }
@@ -421,8 +423,8 @@ export interface ServerModeService {
   install(options: { readonly user: string; readonly profile: 'ubuntu-server' }): Promise<void>
   uninstall(): Promise<void>
   enqueue(job: BuildJobInput): Promise<BuildJob>
-  queue(): Promise<readonly BuildJob[]>
-  artifacts(jobId: string): Promise<readonly ArtifactRef[]>
+  queue(accountId?: AccountId): Promise<readonly BuildJob[]>
+  artifacts(jobId: string, accountId?: AccountId): Promise<readonly ArtifactRef[]>
   resourceReport(): Promise<ResourceReport>
 }
 
