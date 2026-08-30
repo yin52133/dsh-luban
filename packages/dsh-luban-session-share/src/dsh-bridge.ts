@@ -37,6 +37,7 @@ export type DshSessionBridgeOptions = {
   readonly agents: AgentRegistry
   readonly registry: SharedSessionRegistry
   readonly host: HostId
+  readonly onError?: (error: unknown) => void
 } & (
   | { readonly accountSessions: AccountSessionRegistry; readonly owner?: Actor }
   | { readonly accountSessions?: undefined; readonly owner: Actor }
@@ -97,10 +98,12 @@ export class DshSessionBridge {
   readonly #host: HostId
   readonly #owner: Actor | undefined
   readonly #accountSessions: AccountSessionRegistry | undefined
+  readonly #onError: (error: unknown) => void
   readonly #managed = new Map<string, ManagedSession>()
   readonly #shared = new Map<SessionId, Agent>()
   readonly #registering = new Map<SessionId, Promise<void>>()
   readonly #turnOutput = new Map<SessionId, TurnOutputBuffer>()
+  #rootRefresh: Promise<void> | undefined
   #disposed = false
 
   public constructor(options: DshSessionBridgeOptions) {
@@ -109,6 +112,14 @@ export class DshSessionBridge {
     this.#host = options.host
     this.#owner = options.owner
     this.#accountSessions = options.accountSessions
+    this.#onError =
+      options.onError ??
+      ((error: unknown): void => {
+        process.emitWarning(
+          error instanceof Error ? error.message : 'Unable to resolve DSH session ownership',
+          { code: 'LUBAN_SESSION_OWNER' },
+        )
+      })
     if (this.#owner === undefined && this.#accountSessions === undefined) {
       throw new LubanError('E_INVALID_INPUT', 'A session owner resolver is required')
     }
@@ -142,10 +153,7 @@ export class DshSessionBridge {
           })
         })
         .catch((error: unknown): void => {
-          process.emitWarning(
-            error instanceof Error ? error.message : 'Unable to resolve DSH session ownership',
-            { code: 'LUBAN_SESSION_OWNER' },
-          )
+          this.#onError(error)
         })
         .finally((): void => {
           if (this.#registering.get(id) === operation) this.#registering.delete(id)
@@ -240,7 +248,7 @@ export class DshSessionBridge {
 
   public async syncTasks(tasks: readonly Task[]): Promise<void> {
     if (this.#disposed) return
-    await this.#refreshAccountOwnership()
+    await this.refreshRootSessions()
     const links = new Map<SessionId, TaskId>()
     for (const task of tasks) {
       if (task.claim !== undefined && task.claim !== null) {
@@ -253,6 +261,17 @@ export class DshSessionBridge {
     for (const id of this.#shared.keys()) {
       this.#registry.setOwnerTask(id, links.get(id) ?? null)
     }
+  }
+
+  /** Retry unresolved root-session ownership without overlapping refresh passes. */
+  public refreshRootSessions(): Promise<void> {
+    if (this.#disposed || this.#accountSessions === undefined) return Promise.resolve()
+    if (this.#rootRefresh !== undefined) return this.#rootRefresh
+    const refresh = this.#refreshAccountOwnership().finally((): void => {
+      if (this.#rootRefresh === refresh) this.#rootRefresh = undefined
+    })
+    this.#rootRefresh = refresh
+    return refresh
   }
 
   async #refreshAccountOwnership(): Promise<void> {

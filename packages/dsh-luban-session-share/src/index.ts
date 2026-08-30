@@ -100,12 +100,17 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
     accountId: asAccountId(config.ownerUser),
     displayName: config.ownerUser,
   }
+  const reportOwnerError = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error)
+    ctx.logger.warn(`luban-session-share: session owner lookup failed: ${message}`)
+  }
   const bridge = new DshSessionBridge({
     agents: ctx.agents,
     registry,
     host,
     owner,
     accountSessions: auth.accountSessions,
+    onError: reportOwnerError,
   })
   bridge.initialize([])
   const api = new SessionShareHttpApi(registry, auth, config.replayLimit)
@@ -156,6 +161,7 @@ export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): vo
     )
     const unregisterKeepalive = keepalive.onEvent((event): void => bridge.keepaliveEvent(event))
     const refresh = (): void => {
+      void bridge.refreshRootSessions().catch(reportOwnerError)
       void registry.refreshPeers().then((issues): void => {
         for (const issue of issues) ctx.logger.warn(`luban-session-share: ${issue}`)
       })

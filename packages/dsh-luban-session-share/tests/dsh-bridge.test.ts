@@ -52,6 +52,59 @@ describe('rc2 DSH bridge', (): void => {
     expect(registry.getView(session('S-legacy'))).toBeUndefined()
   })
 
+  it.each(['rejects', 'returns null'] as const)(
+    'retries an unregistered root on the next refresh after owner lookup %s',
+    async (initialResult): Promise<void> => {
+      const agent = {
+        id: 'S-owner-retry',
+        session: { id: 'S-owner-retry', header: {} },
+        status: 'idle',
+      } as unknown as Agent
+      const agents = {
+        roots: (): Agent[] => [agent],
+        get: (): Agent => agent,
+      } as unknown as AgentRegistry
+      const ownerError = new Error('M01 owner lookup temporarily unavailable')
+      const onError = vi.fn()
+      let lookup = 0
+      const ownerOf = vi.fn((): Promise<AccountId | null> => {
+        lookup += 1
+        if (lookup === 1) {
+          return initialResult === 'rejects' ? Promise.reject(ownerError) : Promise.resolve(null)
+        }
+        return Promise.resolve(asAccountId('alice'))
+      })
+      const registry = new SharedSessionRegistry({
+        localHost: host('ubuntu'),
+        takeoverTimeoutMs: 1_000,
+        replayLimit: 16,
+      })
+      const bridge = new DshSessionBridge({
+        agents,
+        registry,
+        host: host('ubuntu'),
+        accountSessions: {
+          bind: (): Promise<void> => Promise.resolve(),
+          ownerOf,
+        },
+        onError,
+      })
+
+      bridge.initialize([])
+      const refresh = bridge.refreshRootSessions()
+      expect(bridge.refreshRootSessions()).toBe(refresh)
+      await refresh
+
+      expect(ownerOf).toHaveBeenCalledTimes(2)
+      expect(registry.getView(session('S-owner-retry'))).toMatchObject({
+        accountId: 'alice',
+        owner: { accountId: 'alice', id: 'alice' },
+      })
+      if (initialResult === 'rejects') expect(onError).toHaveBeenCalledExactlyOnceWith(ownerError)
+      else expect(onError).not.toHaveBeenCalled()
+    },
+  )
+
   it('does not register a session after the bridge is disposed', async (): Promise<void> => {
     const agent = {
       id: 'S-disposed-owner-lookup',
