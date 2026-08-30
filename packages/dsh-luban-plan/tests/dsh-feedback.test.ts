@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { AgentRegistry, Inbox, type Agent } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { asActorId, asSessionId } from 'dsh-luban-core'
+import type { AccountSessionRegistry } from 'dsh-luban-core'
+import { asAccountId, asActorId, asSessionId } from 'dsh-luban-core'
 import { describe, expect, it } from 'vitest'
 import { DshPlanFeedbackSink } from '../src/dsh-feedback.js'
 import { PlanRepository } from '../src/repository.js'
@@ -57,17 +58,24 @@ describe('DshPlanFeedbackSink', () => {
     const unregisterOther = context.agents.register(otherAgent)
 
     try {
+      const accountId = asAccountId('reviewer')
+      const accountSessions: AccountSessionRegistry = {
+        bind: (): Promise<void> => Promise.resolve(),
+        ownerOf: (): Promise<typeof accountId> => Promise.resolve(accountId),
+      }
       const sessionId = asSessionId(targetSession.id)
       const service = new FilePlanService({
         repository: new PlanRepository(join(directory, 'plans.json'), 'docs/plans', {
           now: (): number => 1,
         }),
+        accountSessions,
         protectedTools: [],
         exemptTools: [],
         sink: new DshPlanFeedbackSink(context.agents),
       })
       await service.initialize()
       const submitted = await service.submit({
+        accountId,
         workspace: directory,
         slug: 'feedback-proof',
         sessionId,
@@ -85,7 +93,12 @@ describe('DshPlanFeedbackSink', () => {
           comment: 'Add rollback verification',
           expectedVersion: submitted.version,
         },
-        { kind: 'user', id: asActorId('reviewer'), displayName: 'Reviewer' },
+        {
+          kind: 'user',
+          id: asActorId('reviewer'),
+          accountId,
+          displayName: 'Reviewer',
+        },
       )
 
       expect(context.agents.get(targetSession.id)).toBe(targetAgent)
@@ -108,7 +121,12 @@ describe('DshPlanFeedbackSink', () => {
         status: 'rejected',
         decision: 'reject',
         comment: 'Add rollback verification',
-        reviewer: { kind: 'user', id: 'reviewer', displayName: 'Reviewer' },
+        reviewer: {
+          kind: 'user',
+          id: 'reviewer',
+          accountId: 'reviewer',
+          displayName: 'Reviewer',
+        },
         filePath: rejected.filePath,
         version: rejected.version,
       })

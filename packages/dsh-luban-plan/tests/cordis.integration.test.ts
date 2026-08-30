@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { ToolExecution, ToolGuard } from '@deepseek-ai/dsh-tools'
 import type { AuthService } from 'dsh-luban-core'
-import { asActorId, asSessionId } from 'dsh-luban-core'
+import { asAccountId, asActorId, asSessionId } from 'dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import plugin from '../src/index.js'
 
@@ -34,9 +34,19 @@ describe('plan Cordis lifecycle', (): void => {
       },
     } as unknown as Context['tools'])
     context.provide('agents', { get: vi.fn() } as unknown as Context['agents'])
+    const accountId = asAccountId('reviewer')
     context.provide('lubanAuth', {
       middleware: (): ReturnType<AuthService['middleware']> => () =>
-        Promise.resolve({ allowed: true, status: 200, user: 'reviewer' }),
+        Promise.resolve({
+          allowed: true,
+          status: 200,
+          user: 'reviewer',
+          account: { accountId, username: 'reviewer', role: 'operator' },
+        }),
+      accountSessions: {
+        bind: (): Promise<void> => Promise.resolve(),
+        ownerOf: (): Promise<typeof accountId> => Promise.resolve(accountId),
+      },
     } as unknown as AuthService)
 
     const fiber = context.plugin(plugin, {
@@ -48,6 +58,7 @@ describe('plan Cordis lifecycle', (): void => {
     expect(registeredGuard).toBeTypeOf('function')
     const sessionId = asSessionId('session-guard')
     const plan = await context.lubanPlan.submit({
+      accountId,
       workspace,
       slug: 'guarded-change',
       sessionId,
@@ -67,7 +78,7 @@ describe('plan Cordis lifecycle', (): void => {
     const approved = await context.lubanPlan.decide(
       plan.id,
       { decision: 'approve', expectedVersion: plan.version },
-      { kind: 'user', id: asActorId('reviewer') },
+      { kind: 'user', id: asActorId('reviewer'), accountId },
     )
     expect(approved.status).toBe('approved')
     expect(registeredGuard?.(execution)).toBeUndefined()

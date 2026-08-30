@@ -1,5 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Actor, AuthService, PlanSections, PlanStatus } from 'dsh-luban-core'
+import type {
+  AccountContext,
+  AccountId,
+  AuthService,
+  PlanSections,
+  PlanStatus,
+} from 'dsh-luban-core'
 import {
   LubanError,
   asActorId,
@@ -9,7 +15,7 @@ import {
   isLubanError,
   modulePrefix,
 } from 'dsh-luban-core'
-import type { PlanFeedbackEvent, PlanServiceWithFeedback } from './service.js'
+import type { AccountActor, PlanFeedbackEvent, PlanServiceWithFeedback } from './service.js'
 import { bundledTemplate } from './template.js'
 
 const PREFIX = modulePrefix('plan')
@@ -114,6 +120,7 @@ function errorStatus(error: LubanError): number {
     case 'E_AUTH_REQUIRED':
       return 401
     case 'E_NOT_FOUND':
+    case 'E_ACCOUNT_SCOPE_MISMATCH':
       return 404
     case 'E_VERSION_CONFLICT':
       return 409
@@ -128,11 +135,16 @@ function errorStatus(error: LubanError): number {
   }
 }
 
-async function requireActor(
+interface RequestIdentity {
+  readonly account: AccountContext
+  readonly actor: AccountActor
+}
+
+async function requireIdentity(
   request: IncomingMessage,
   path: string,
   auth: AuthService,
-): Promise<Actor> {
+): Promise<RequestIdentity> {
   const decision = await auth.middleware()({
     path,
     method: request.method ?? 'GET',
@@ -140,12 +152,20 @@ async function requireActor(
     cookie: request.headers.cookie,
     sourceIp: request.socket.remoteAddress ?? 'unknown',
   })
-  if (!decision.allowed || decision.user === undefined) {
+  if (!decision.allowed || decision.user === undefined || decision.account === undefined) {
     throw new LubanError('E_AUTH_REQUIRED', 'Authentication is required', {
       details: { status: decision.status },
     })
   }
-  return { kind: 'user', id: asActorId(decision.user), displayName: decision.user }
+  return {
+    account: decision.account,
+    actor: {
+      kind: 'user',
+      id: asActorId(decision.user),
+      accountId: decision.account.accountId,
+      displayName: decision.user,
+    },
+  }
 }
 
 interface EventEnvelope {
@@ -155,16 +175,16 @@ interface EventEnvelope {
 
 /** Bounded plan feedback stream used by the review page and reconnecting agents. */
 export class PlanEventStream {
-  readonly #clients = new Set<ServerResponse>()
-  readonly #events: EventEnvelope[] = []
+  readonly #clients = new Map<ServerResponse, AccountId>()
+  readonly #events = new Map<AccountId, EventEnvelope[]>()
   readonly #unsubscribe: () => void
   readonly #heartbeat: ReturnType<typeof setInterval>
   #sequence = 0
 
   public constructor(service: PlanServiceWithFeedback) {
-    this.#unsubscribe = service.subscribeFeedback(undefined, (event): void => this.publish(event))
+    this.#unsubscribe = service.subscribeSystemFeedback((event): void => this.publish(event))
     this.#heartbeat = setInterval((): void => {
-      for (const response of [...this.#clients]) {
+      for (const response of this.#clients.keys()) {
         if (!response.write(': heartbeat\n\n')) this.#remove(response)
       }
     }, 15_000)
@@ -173,12 +193,19 @@ export class PlanEventStream {
 
   public publish(event: PlanFeedbackEvent): void {
     const envelope = { id: ++this.#sequence, event }
-    this.#events.push(envelope)
-    if (this.#events.length > 256) this.#events.shift()
-    for (const response of [...this.#clients]) this.#write(response, envelope)
+    let events = this.#events.get(event.accountId)
+    if (events === undefined) {
+      events = []
+      this.#events.set(event.accountId, events)
+    }
+    events.push(envelope)
+    if (events.length > 256) events.shift()
+    for (const [response, accountId] of this.#clients) {
+      if (accountId === event.accountId) this.#write(response, envelope)
+    }
   }
 
-  public connect(request: IncomingMessage, response: ServerResponse): void {
+  public connect(request: IncomingMessage, response: ServerResponse, accountId: AccountId): void {
     const header = request.headers['last-event-id']
     const requested = Number.parseInt(
       Array.isArray(header) ? (header[0] ?? '') : (header ?? ''),
@@ -191,9 +218,9 @@ export class PlanEventStream {
     response.setHeader('x-accel-buffering', 'no')
     response.flushHeaders()
     response.write('retry: 2000\n\n')
-    this.#clients.add(response)
+    this.#clients.set(response, accountId)
     response.once('close', (): void => this.#remove(response))
-    for (const envelope of this.#events.filter(
+    for (const envelope of (this.#events.get(accountId) ?? []).filter(
       (item): boolean => !Number.isSafeInteger(requested) || item.id > requested,
     )) {
       this.#write(response, envelope)
@@ -203,8 +230,9 @@ export class PlanEventStream {
   public dispose(): void {
     clearInterval(this.#heartbeat)
     this.#unsubscribe()
-    for (const response of [...this.#clients]) response.end()
+    for (const response of this.#clients.keys()) response.end()
     this.#clients.clear()
+    this.#events.clear()
   }
 
   #write(response: ServerResponse, envelope: EventEnvelope): void {
@@ -239,11 +267,12 @@ export class PlanHttpApi {
       if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) {
         throw new LubanError('E_NOT_FOUND', 'Route not found')
       }
-      const actor = await requireActor(request, url.pathname, this.#auth)
+      const identity = await requireIdentity(request, url.pathname, this.#auth)
+      const { accountId } = identity.account
       const path = url.pathname.slice(PREFIX.length) || '/'
       const method = request.method ?? 'GET'
       if (method === 'GET' && path === '/events') {
-        this.#events.connect(request, response)
+        this.#events.connect(request, response, accountId)
         return
       }
       if (method === 'GET' && path === '/template') {
@@ -253,7 +282,10 @@ export class PlanHttpApi {
       if (method === 'GET' && path === '/plans') {
         const taskId = url.searchParams.get('taskId')
         sendJson(response, 200, {
-          plans: await this.#service.listFor(taskId === null ? undefined : asTaskId(taskId)),
+          plans: await this.#service.listFor(
+            taskId === null ? undefined : asTaskId(taskId),
+            accountId,
+          ),
         })
         return
       }
@@ -261,6 +293,7 @@ export class PlanHttpApi {
         const body = record(await jsonBody(request))
         sendJson(response, 201, {
           plan: await this.#service.submit({
+            accountId,
             workspace: requiredString(body.workspace, 'workspace'),
             slug: requiredString(body.slug, 'slug'),
             sections: sections(body.sections),
@@ -276,6 +309,7 @@ export class PlanHttpApi {
         const body = record(await jsonBody(request))
         sendJson(response, 201, {
           plan: await this.#service.saveDraft({
+            accountId,
             workspace: requiredString(body.workspace, 'workspace'),
             slug: requiredString(body.slug, 'slug'),
             sections: draftSections(body.sections),
@@ -292,13 +326,13 @@ export class PlanHttpApi {
       const id = asPlanId(decodeURIComponent(match[1]))
       const action = match[2]
       if (method === 'GET' && action === undefined) {
-        const plan = await this.#service.get(id)
+        const plan = await this.#service.get(id, accountId)
         if (plan === null) throw new LubanError('E_NOT_FOUND', `Plan ${id} was not found`)
         sendJson(response, 200, { plan })
         return
       }
       if (method === 'GET' && action === 'document') {
-        sendText(response, 200, await this.#service.getDocument(id))
+        sendText(response, 200, await this.#service.getDocument(id, accountId))
         return
       }
       const body = record(await jsonBody(request))
@@ -314,7 +348,7 @@ export class PlanHttpApi {
               ...(typeof body.comment === 'string' ? { comment: body.comment } : {}),
               expectedVersion: expectedVersion(body.expectedVersion),
             },
-            actor,
+            identity.actor,
           ),
         })
         return
@@ -323,7 +357,12 @@ export class PlanHttpApi {
         const to = requiredString(body.to, 'to') as PlanStatus
         if (!PLAN_STATUSES.has(to)) throw new LubanError('E_INVALID_INPUT', 'to status is invalid')
         sendJson(response, 200, {
-          plan: await this.#service.transition(id, to, expectedVersion(body.expectedVersion)),
+          plan: await this.#service.transition(
+            id,
+            to,
+            expectedVersion(body.expectedVersion),
+            accountId,
+          ),
         })
         return
       }
@@ -333,6 +372,7 @@ export class PlanHttpApi {
             id,
             sections(body.sections),
             expectedVersion(body.expectedVersion),
+            accountId,
           ),
         })
         return

@@ -1,12 +1,15 @@
 import type {
+  AccountActor,
+  AccountId,
+  AccountPlanInput,
+  AccountSessionRegistry,
   Actor,
   Plan,
   PlanDecision,
   PlanGuard,
   PlanId,
-  PlanInput,
-  PlanSections,
   PlanService,
+  PlanSections,
   PlanStatus,
   SessionId,
   TaskStore,
@@ -20,6 +23,7 @@ import { validateSections } from './template.js'
 
 export interface PlanFeedbackEvent {
   readonly type: 'luban.plan.feedback'
+  readonly accountId: AccountId
   readonly planId: PlanId
   readonly taskId?: Plan['taskId']
   readonly sessionId?: SessionId
@@ -36,16 +40,25 @@ export interface PlanFeedbackSink {
   deliver(event: PlanFeedbackEvent): void | Promise<void>
 }
 
+export type { AccountActor, AccountPlanInput } from 'dsh-luban-core'
+
 export interface PlanServiceWithFeedback extends PlanService {
   initialize(): Promise<void>
-  saveDraft(input: PlanInput): Promise<Plan>
-  revise(id: PlanId, sections: PlanSections, expectedVersion: number): Promise<Plan>
+  saveDraft(input: AccountPlanInput): Promise<Plan>
+  revise(
+    id: PlanId,
+    sections: PlanSections,
+    expectedVersion: number,
+    accountId: AccountId,
+  ): Promise<Plan>
   currentForSession(sessionId: SessionId): Plan | null
   subscribeFeedback(
+    accountId: AccountId,
     sessionId: SessionId | undefined,
     listener: (event: PlanFeedbackEvent) => void,
   ): Unsubscribe
-  getDocument(id: PlanId): Promise<string>
+  subscribeSystemFeedback(listener: (event: PlanFeedbackEvent) => void): Unsubscribe
+  getDocument(id: PlanId, accountId: AccountId): Promise<string>
 }
 
 const TRANSITIONS: Readonly<Record<PlanStatus, readonly PlanStatus[]>> = Object.freeze({
@@ -60,6 +73,7 @@ const TRANSITIONS: Readonly<Record<PlanStatus, readonly PlanStatus[]>> = Object.
 
 function publicPlan(plan: StoredPlan): Plan {
   return {
+    ...(plan.accountId === undefined ? {} : { accountId: plan.accountId }),
     id: plan.id,
     ...(plan.taskId === undefined ? {} : { taskId: plan.taskId }),
     ...(plan.sessionId === undefined ? {} : { sessionId: plan.sessionId }),
@@ -75,14 +89,17 @@ function publicPlan(plan: StoredPlan): Plan {
 export class FilePlanService implements PlanServiceWithFeedback {
   readonly #repository: PlanRepository
   readonly #guard: ApprovalPlanGuard
+  readonly #accountSessions: AccountSessionRegistry
   readonly #taskStore: () => TaskStore | undefined
   readonly #sink: PlanFeedbackSink | undefined
   readonly #plans = new Map<PlanId, StoredPlan>()
   readonly #sessionPlans = new Map<SessionId, PlanId>()
-  readonly #listeners = new Map<string, Set<(event: PlanFeedbackEvent) => void>>()
+  readonly #listeners = new Map<AccountId, Map<string, Set<(event: PlanFeedbackEvent) => void>>>()
+  readonly #systemListeners = new Set<(event: PlanFeedbackEvent) => void>()
 
   public constructor(options: {
     readonly repository: PlanRepository
+    readonly accountSessions: AccountSessionRegistry
     readonly protectedTools: readonly string[]
     readonly exemptTools: readonly string[]
     readonly taskStore?: TaskStore
@@ -91,6 +108,7 @@ export class FilePlanService implements PlanServiceWithFeedback {
   }) {
     this.#repository = options.repository
     this.#guard = new ApprovalPlanGuard(options.protectedTools, options.exemptTools)
+    this.#accountSessions = options.accountSessions
     this.#taskStore = options.taskStoreProvider ?? ((): TaskStore | undefined => options.taskStore)
     this.#sink = options.sink
   }
@@ -98,35 +116,45 @@ export class FilePlanService implements PlanServiceWithFeedback {
   public async initialize(): Promise<void> {
     this.#plans.clear()
     this.#sessionPlans.clear()
-    for (const plan of await this.#repository.all()) this.#remember(plan)
+    for (const plan of await this.#repository.all()) {
+      const sessionIsOwned =
+        plan.accountId !== undefined &&
+        plan.sessionId !== undefined &&
+        (await this.#accountSessions.ownerOf(plan.sessionId)) === plan.accountId
+      this.#remember(plan, sessionIsOwned)
+    }
   }
 
-  public async submit(input: PlanInput): Promise<Plan> {
+  public async submit(input: AccountPlanInput): Promise<Plan> {
     validateSections(input.sections)
+    await this.#validateReferences(input)
     const stored = await this.#repository.create(input)
     this.#remember(stored)
     await this.#publish(stored)
     return publicPlan(stored)
   }
 
-  public async saveDraft(input: PlanInput): Promise<Plan> {
+  public async saveDraft(input: AccountPlanInput): Promise<Plan> {
+    await this.#validateReferences(input)
     const stored = await this.#repository.create({ ...input, status: 'draft' })
     this.#remember(stored)
     await this.#publish(stored)
     return publicPlan(stored)
   }
 
-  public async decide(id: PlanId, decision: PlanDecision, reviewer: Actor): Promise<Plan> {
+  public async decide(id: PlanId, decision: PlanDecision, reviewer: AccountActor): Promise<Plan> {
     if (decision.decision === 'reject' && decision.comment?.trim() === '') {
       throw new LubanError('E_INVALID_INPUT', 'A rejection comment cannot be blank')
     }
     if (decision.decision === 'reject' && decision.comment === undefined) {
       throw new LubanError('E_INVALID_INPUT', 'A rejection comment is required')
     }
+    await this.#assertSessionOwned(id, reviewer.accountId)
     const stored = await this.#repository.update(
       id,
       decision.expectedVersion,
       (current): StoredPlan => {
+        this.#assertOwned(current, reviewer.accountId)
         if (current.status !== 'in-review') {
           throw new LubanError(
             'E_INVALID_TRANSITION',
@@ -161,8 +189,15 @@ export class FilePlanService implements PlanServiceWithFeedback {
     return publicPlan(stored)
   }
 
-  public async transition(id: PlanId, to: PlanStatus, expectedVersion: number): Promise<Plan> {
+  public async transition(
+    id: PlanId,
+    to: PlanStatus,
+    expectedVersion: number,
+    accountId: AccountId,
+  ): Promise<Plan> {
+    await this.#assertSessionOwned(id, accountId)
     const stored = await this.#repository.update(id, expectedVersion, (current): StoredPlan => {
+      this.#assertOwned(current, accountId)
       if (!TRANSITIONS[current.status].includes(to)) {
         throw new LubanError(
           'E_INVALID_TRANSITION',
@@ -178,9 +213,16 @@ export class FilePlanService implements PlanServiceWithFeedback {
     return publicPlan(stored)
   }
 
-  public async revise(id: PlanId, sections: PlanSections, expectedVersion: number): Promise<Plan> {
+  public async revise(
+    id: PlanId,
+    sections: PlanSections,
+    expectedVersion: number,
+    accountId: AccountId,
+  ): Promise<Plan> {
     validateSections(sections)
+    await this.#assertSessionOwned(id, accountId)
     const stored = await this.#repository.update(id, expectedVersion, (current): StoredPlan => {
+      this.#assertOwned(current, accountId)
       if (current.status !== 'rejected' && current.status !== 'revising') {
         throw new LubanError(
           'E_INVALID_TRANSITION',
@@ -201,15 +243,21 @@ export class FilePlanService implements PlanServiceWithFeedback {
     return publicPlan(stored)
   }
 
-  public get(id: PlanId): Promise<Plan | null> {
+  public get(id: PlanId, accountId: AccountId): Promise<Plan | null> {
     const plan = this.#plans.get(id)
-    return Promise.resolve(plan === undefined ? null : publicPlan(plan))
+    return Promise.resolve(plan?.accountId === accountId ? publicPlan(plan) : null)
   }
 
-  public listFor(taskId?: Plan['taskId']): Promise<readonly Plan[]> {
+  public listFor(
+    taskId: Plan['taskId'] | undefined,
+    accountId: AccountId,
+  ): Promise<readonly Plan[]> {
     return Promise.resolve(
       [...this.#plans.values()]
-        .filter((plan): boolean => taskId === undefined || plan.taskId === taskId)
+        .filter(
+          (plan): boolean =>
+            plan.accountId === accountId && (taskId === undefined || plan.taskId === taskId),
+        )
         .sort((left, right): number => right.updatedAt - left.updatedAt)
         .map(publicPlan),
     )
@@ -222,35 +270,51 @@ export class FilePlanService implements PlanServiceWithFeedback {
   public currentForSession(sessionId: SessionId): Plan | null {
     const id = this.#sessionPlans.get(sessionId)
     const plan = id === undefined ? undefined : this.#plans.get(id)
-    return plan === undefined ? null : publicPlan(plan)
+    return plan?.accountId === undefined ? null : publicPlan(plan)
   }
 
   public subscribeFeedback(
+    accountId: AccountId,
     sessionId: SessionId | undefined,
     listener: (event: PlanFeedbackEvent) => void,
   ): Unsubscribe {
     const key = sessionId ?? '*'
-    let listeners = this.#listeners.get(key)
+    let accountListeners = this.#listeners.get(accountId)
+    if (accountListeners === undefined) {
+      accountListeners = new Map()
+      this.#listeners.set(accountId, accountListeners)
+    }
+    let listeners = accountListeners.get(key)
     if (listeners === undefined) {
       listeners = new Set()
-      this.#listeners.set(key, listeners)
+      accountListeners.set(key, listeners)
     }
     listeners.add(listener)
     return (): void => {
       listeners.delete(listener)
-      if (listeners.size === 0) this.#listeners.delete(key)
+      if (listeners.size === 0) accountListeners.delete(key)
+      if (accountListeners.size === 0) this.#listeners.delete(accountId)
     }
   }
 
-  public async getDocument(id: PlanId): Promise<string> {
+  public subscribeSystemFeedback(listener: (event: PlanFeedbackEvent) => void): Unsubscribe {
+    this.#systemListeners.add(listener)
+    return (): void => {
+      this.#systemListeners.delete(listener)
+    }
+  }
+
+  public async getDocument(id: PlanId, accountId: AccountId): Promise<string> {
     const plan = this.#plans.get(id)
-    if (plan === undefined) throw new LubanError('E_NOT_FOUND', `Plan ${id} was not found`)
+    if (plan?.accountId !== accountId) {
+      throw new LubanError('E_NOT_FOUND', `Plan ${id} was not found`)
+    }
     return this.#repository.readDocument(plan)
   }
 
-  #remember(plan: StoredPlan): void {
+  #remember(plan: StoredPlan, includeSession = true): void {
     this.#plans.set(plan.id, plan)
-    if (plan.sessionId !== undefined) {
+    if (includeSession && plan.accountId !== undefined && plan.sessionId !== undefined) {
       const existingId = this.#sessionPlans.get(plan.sessionId)
       const existing = existingId === undefined ? undefined : this.#plans.get(existingId)
       if (existing === undefined || existing.updatedAt <= plan.updatedAt) {
@@ -267,8 +331,12 @@ export class FilePlanService implements PlanServiceWithFeedback {
       readonly reviewer?: Actor
     } = {},
   ): Promise<void> {
+    if (plan.accountId === undefined) {
+      throw new LubanError('E_IO', `Plan ${plan.id} has no account ownership`)
+    }
     const event: PlanFeedbackEvent = {
       type: 'luban.plan.feedback',
+      accountId: plan.accountId,
       planId: plan.id,
       ...(plan.taskId === undefined ? {} : { taskId: plan.taskId }),
       ...(plan.sessionId === undefined ? {} : { sessionId: plan.sessionId }),
@@ -280,11 +348,13 @@ export class FilePlanService implements PlanServiceWithFeedback {
       version: plan.version,
       at: this.#repository.now(),
     }
+    const accountListeners = this.#listeners.get(plan.accountId)
     for (const key of ['*', plan.sessionId].filter(
       (value): value is string => value !== undefined,
     )) {
-      for (const listener of [...(this.#listeners.get(key) ?? [])]) listener(event)
+      for (const listener of [...(accountListeners?.get(key) ?? [])]) listener(event)
     }
+    for (const listener of [...this.#systemListeners]) listener(event)
     await this.#sink?.deliver(event)
   }
 
@@ -292,8 +362,43 @@ export class FilePlanService implements PlanServiceWithFeedback {
     const taskStore = this.#taskStore()
     if (plan.taskId === undefined || taskStore === undefined) return
     const task = await taskStore.get(plan.taskId)
-    if (task?.status === 'todo') {
+    if (task !== null && task.accountId === plan.accountId && task.status === 'todo') {
       await taskStore.transition(plan.taskId, 'doing', reviewer, `Approved plan ${plan.id}`)
+    }
+  }
+
+  async #validateReferences(input: AccountPlanInput): Promise<void> {
+    if (input.sessionId !== undefined) {
+      const owner = await this.#accountSessions.ownerOf(input.sessionId)
+      if (owner !== input.accountId) {
+        throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'Session belongs to another account')
+      }
+    }
+    const taskStore = this.#taskStore()
+    if (input.taskId !== undefined && taskStore === undefined) {
+      throw new LubanError('E_UNAVAILABLE', 'Task store is unavailable')
+    }
+    if (input.taskId !== undefined && taskStore !== undefined) {
+      const task = await taskStore.get(input.taskId)
+      if (task?.accountId !== input.accountId) {
+        throw new LubanError('E_NOT_FOUND', `Task ${input.taskId} was not found`)
+      }
+    }
+  }
+
+  #assertOwned(plan: StoredPlan, accountId: AccountId): void {
+    if (plan.accountId !== accountId) {
+      throw new LubanError('E_NOT_FOUND', `Plan ${plan.id} was not found`)
+    }
+  }
+
+  async #assertSessionOwned(id: PlanId, accountId: AccountId): Promise<void> {
+    const plan = this.#plans.get(id)
+    if (plan === undefined) throw new LubanError('E_NOT_FOUND', `Plan ${id} was not found`)
+    this.#assertOwned(plan, accountId)
+    if (plan.sessionId === undefined) return
+    if ((await this.#accountSessions.ownerOf(plan.sessionId)) !== accountId) {
+      throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'Session belongs to another account')
     }
   }
 }

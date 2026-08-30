@@ -43,6 +43,7 @@ export async function apply(ctx: Context, input: Partial<PlanConfig> = {}): Prom
   if (auth === undefined) throw new LubanError('E_UNAVAILABLE', 'lubanAuth is unavailable')
   const service = new FilePlanService({
     repository: new PlanRepository(config.stateFile, config.plansDir, systemClock),
+    accountSessions: auth.accountSessions,
     protectedTools: config.requireApprovalFor,
     exemptTools: config.autoApproveFor,
     taskStoreProvider: (): TaskStore | undefined =>

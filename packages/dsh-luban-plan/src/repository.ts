@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import type {
+  AccountId,
   Actor,
   Clock,
   JsonCodec,
@@ -27,6 +28,7 @@ import type {
 import {
   AtomicJsonStore,
   LubanError,
+  asAccountId,
   asActorId,
   asPlanId,
   asSessionId,
@@ -84,6 +86,7 @@ function actor(value: unknown, label: string): Actor {
   return {
     kind: row.kind,
     id: asActorId(text(row.id, `${label}.id`)),
+    ...(typeof row.accountId === 'string' ? { accountId: asAccountId(row.accountId) } : {}),
     ...(typeof row.displayName === 'string' ? { displayName: row.displayName } : {}),
   }
 }
@@ -128,6 +131,7 @@ function storedPlan(value: unknown, label: string): StoredPlan {
   if (!Array.isArray(row.decisions))
     throw new LubanError('E_IO', `${label}.decisions must be an array`)
   return {
+    ...(typeof row.accountId === 'string' ? { accountId: asAccountId(row.accountId) } : {}),
     id: asPlanId(text(row.id, `${label}.id`)),
     ...(typeof row.taskId === 'string' ? { taskId: asTaskId(row.taskId) } : {}),
     ...(typeof row.sessionId === 'string' ? { sessionId: asSessionId(row.sessionId) } : {}),
@@ -288,6 +292,7 @@ export class PlanRepository {
   }
 
   public async create(input: {
+    readonly accountId: AccountId
     readonly workspace: string
     readonly slug: string
     readonly sections: PlanSections
@@ -307,10 +312,12 @@ export class PlanRepository {
     await this.#assertWorkspace(workspace)
     const now = this.#clock.now()
     const slug = normalizeSlug(input.slug)
-    const filePath = `${this.#plansDir}/${dateKey(now)}-${slug}.md`
+    const id = asPlanId(`P-${dateKey(now).replaceAll('-', '')}-${randomBytes(4).toString('hex')}`)
+    const filePath = `${this.#plansDir}/${dateKey(now)}-${slug}-${id.slice(-8)}.md`
     const absoluteFile = await this.#documentPathFor(workspace, filePath, true, false)
     const plan: StoredPlan = {
-      id: asPlanId(`P-${dateKey(now).replaceAll('-', '')}-${randomBytes(4).toString('hex')}`),
+      accountId: input.accountId,
+      id,
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
       ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
       status: input.status ?? 'in-review',
@@ -357,6 +364,7 @@ export class PlanRepository {
       const next = mutate(current)
       if (
         next.id !== current.id ||
+        next.accountId !== current.accountId ||
         next.filePath !== current.filePath ||
         next.workspace !== current.workspace
       ) {

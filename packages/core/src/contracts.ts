@@ -251,6 +251,13 @@ export interface PlanInput {
   readonly sections: PlanSections
 }
 
+export interface AccountPlanInput extends PlanInput {
+  /** Injected by the authenticated service boundary, never by a request body. */
+  readonly accountId: AccountId
+}
+
+export type AccountActor = Actor & { readonly accountId: AccountId }
+
 export interface PlanDecision {
   readonly decision: 'approve' | 'reject'
   readonly comment?: string
@@ -267,11 +274,16 @@ export interface PlanGuard {
 }
 
 export interface PlanService {
-  submit(input: PlanInput): Promise<Plan>
-  decide(id: PlanId, decision: PlanDecision, reviewer: Actor): Promise<Plan>
-  transition(id: PlanId, to: PlanStatus, expectedVersion: number): Promise<Plan>
-  get(id: PlanId): Promise<Plan | null>
-  listFor(taskId?: TaskId): Promise<readonly Plan[]>
+  submit(input: AccountPlanInput): Promise<Plan>
+  decide(id: PlanId, decision: PlanDecision, reviewer: AccountActor): Promise<Plan>
+  transition(
+    id: PlanId,
+    to: PlanStatus,
+    expectedVersion: number,
+    accountId: AccountId,
+  ): Promise<Plan>
+  get(id: PlanId, accountId: AccountId): Promise<Plan | null>
+  listFor(taskId: TaskId | undefined, accountId: AccountId): Promise<readonly Plan[]>
   guard(): PlanGuard
 }
 

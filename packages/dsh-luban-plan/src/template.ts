@@ -41,6 +41,7 @@ export function renderPlanDocument(plan: Plan): string {
     '',
     `- Status: \`${plan.status}\``,
     `- Version: ${String(plan.version)}`,
+    ...(plan.accountId === undefined ? [] : [`- Account: \`${plan.accountId}\``]),
     ...(plan.taskId === undefined ? [] : [`- Task: \`${plan.taskId}\``]),
     ...(plan.sessionId === undefined ? [] : [`- Session: \`${plan.sessionId}\``]),
     '',
