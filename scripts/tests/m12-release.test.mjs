@@ -743,29 +743,150 @@ describe('M12 release policy', () => {
 })
 
 describe('M12 manual market boundary', () => {
-  it('previews locally and requires explicit named approval before writing', async () => {
+  async function marketFixture(overrides = {}) {
     const root = await temporaryRoot()
-    await json(join(root, 'packages/sample/package.json'), {
+    await json(join(root, 'packages/dsh-luban-sample/package.json'), {
       name: 'dsh-luban-sample',
       version: '1.0.0',
       description: 'Sample plugin',
-      repository: { url: 'https://example.invalid/sample.git' },
+      repository: {
+        type: 'git',
+        url: 'git+https://github.com/yin52133/dsh-luban.git',
+        directory: 'packages/dsh-luban-sample',
+      },
       engines: { dsh: '>=0.1.1-rc.1' },
+      dsh: { bundle: { patch: './cordis.patch.yml' } },
+      ...overrides,
     })
-    const preview = await prepareMarketEntry({ root, package: 'dsh-luban-sample' })
+    return root
+  }
+
+  it('previews the current upstream monorepo YAML schema without writing', async () => {
+    const root = await marketFixture()
+    const preview = await prepareMarketEntry({
+      root,
+      package: 'dsh-luban-sample',
+      category: 'dev',
+      descriptionZh: '示例插件',
+    })
     expect(preview.dryRun).toBe(true)
-    expect(preview.content).toContain('not an upstream schema declaration')
+    expect(preview.filename).toBe('yin52133__dsh-luban--packages-dsh-luban-sample.yml')
+    expect(preview.entry).toEqual({
+      url: 'https://github.com/yin52133/dsh-luban/tree/mainline/packages/dsh-luban-sample',
+      name: 'yin52133/dsh-luban#dsh-luban-sample',
+      category: 'dev',
+      description: { en: 'Sample plugin.', zh: '示例插件.' },
+    })
+    expect(preview.content).toBe(
+      [
+        'url: https://github.com/yin52133/dsh-luban/tree/mainline/packages/dsh-luban-sample',
+        'name: yin52133/dsh-luban#dsh-luban-sample',
+        'category: dev',
+        'description:',
+        '  en: "Sample plugin."',
+        '  zh: "示例插件."',
+        '',
+      ].join('\n'),
+    )
+    await expect(access(join(root, preview.filename))).rejects.toThrow()
+  })
+
+  it('requires explicit named approval and the canonical output filename', async () => {
+    const root = await marketFixture()
+    const filename = 'yin52133__dsh-luban--packages-dsh-luban-sample.yml'
     await expect(
-      prepareMarketEntry({ root, package: 'dsh-luban-sample', approve: true, output: 'entry.md' }),
+      prepareMarketEntry({
+        root,
+        package: 'dsh-luban-sample',
+        category: 'dev',
+        approve: true,
+        output: filename,
+      }),
     ).rejects.toThrow(/approved-by/)
+    await expect(
+      prepareMarketEntry({
+        root,
+        package: 'dsh-luban-sample',
+        category: 'dev',
+        approve: true,
+        approvedBy: 'maintainer',
+        output: 'entry.yml',
+      }),
+    ).rejects.toThrow(/filename/)
     const written = await prepareMarketEntry({
       root,
       package: 'dsh-luban-sample',
+      category: 'dev',
       approve: true,
       approvedBy: 'maintainer',
-      output: 'entry.md',
+      output: filename,
     })
     expect(written.dryRun).toBe(false)
-    expect(await readFile(join(root, 'entry.md'), 'utf8')).toContain('maintainer')
+    expect(await readFile(join(root, filename), 'utf8')).toContain('category: dev')
+    await expect(
+      prepareMarketEntry({
+        root,
+        package: 'dsh-luban-sample',
+        category: 'dev',
+        approve: true,
+        approvedBy: 'maintainer',
+        output: filename,
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('rejects entries that the upstream submission gate cannot accept', async () => {
+    const root = await marketFixture()
+    await expect(
+      prepareMarketEntry({ root, package: 'dsh-luban-sample', category: 'developer-tools' }),
+    ).rejects.toThrow(/category/)
+    await expect(
+      prepareMarketEntry({
+        root,
+        package: 'dsh-luban-sample',
+        category: 'dev',
+        branch: 'feature/market',
+      }),
+    ).rejects.toThrow(/branch/)
+
+    const noBundle = await marketFixture({ dsh: { client: { platform: 'web' } } })
+    await expect(
+      prepareMarketEntry({ root: noBundle, package: 'dsh-luban-sample', category: 'dev' }),
+    ).rejects.toThrow(/not an installable/u)
+
+    const wrongHost = await marketFixture({
+      repository: {
+        url: 'https://example.invalid/yin52133/dsh-luban.git',
+        directory: 'packages/dsh-luban-sample',
+      },
+    })
+    await expect(
+      prepareMarketEntry({ root: wrongHost, package: 'dsh-luban-sample', category: 'dev' }),
+    ).rejects.toThrow(/GitHub/)
+
+    const credentialed = await marketFixture({
+      repository: {
+        url: 'https://token@github.com/yin52133/dsh-luban.git',
+        directory: 'packages/dsh-luban-sample',
+      },
+    })
+    await expect(
+      prepareMarketEntry({ root: credentialed, package: 'dsh-luban-sample', category: 'dev' }),
+    ).rejects.toThrow(/credential-free/)
+
+    const wrongDirectory = await marketFixture({
+      repository: {
+        url: 'https://github.com/yin52133/dsh-luban.git',
+        directory: 'packages/another-plugin',
+      },
+    })
+    await expect(
+      prepareMarketEntry({ root: wrongDirectory, package: 'dsh-luban-sample', category: 'dev' }),
+    ).rejects.toThrow(/directory/)
+
+    const multiline = await marketFixture({ description: 'Line one\nLine two' })
+    await expect(
+      prepareMarketEntry({ root: multiline, package: 'dsh-luban-sample', category: 'dev' }),
+    ).rejects.toThrow(/one non-empty line/)
   })
 })
