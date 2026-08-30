@@ -2,6 +2,7 @@ node_modules
 dist
 coverage
 .venv
+**/.pytest_cache
 .gitleaksignore
 pnpm-lock.yaml
 uv.lock

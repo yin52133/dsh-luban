@@ -292,7 +292,10 @@ export class AuthManager {
       const current = state.sessionOwners[contextSessionId]
       if (current === account) return state
       if (current !== undefined) {
-        throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', 'The DSH session belongs to another account')
+        throw new LubanError(
+          'E_ACCOUNT_SCOPE_MISMATCH',
+          'The DSH session belongs to another account',
+        )
       }
       return {
         ...state,

@@ -35,7 +35,8 @@ describe('BrowserTaskboardAutomation', () => {
     const aliceActor = alice.claim.actor
     const { queue, enqueue, requests } = fakeQueueForAccounts()
     const claims = fakeClaims()
-    let listener: ((event: Parameters<Parameters<TaskStore['subscribe']>[0]>[0]) => void) | undefined
+    let listener:
+      ((event: Parameters<Parameters<TaskStore['subscribe']>[0]>[0]) => void) | undefined
     const query = vi.fn((): Promise<readonly Task[]> => {
       listener?.({
         type: 'transitioned',
@@ -296,10 +297,7 @@ function task(
   }
 }
 
-function fakeStore(
-  query: TaskStore['query'],
-  subscribe: TaskStore['subscribe'],
-): TaskStore {
+function fakeStore(query: TaskStore['query'], subscribe: TaskStore['subscribe']): TaskStore {
   return {
     create: vi.fn(() => Promise.reject(new Error('not implemented'))),
     update: vi.fn(() => Promise.reject(new Error('not implemented'))),
