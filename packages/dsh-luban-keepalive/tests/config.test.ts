@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseConfig } from '../src/config.js'
-import { createPlatformAdapter, name } from '../src/index.js'
+import { createPlatformAdapter, name, resolveBootRestore } from '../src/index.js'
 import type { CommandOptions, CommandResult, CommandRunner } from '../src/command-runner.js'
 import { TmuxKeepaliveAdapter } from '../src/tmux-adapter.js'
 import { WindowsTaskKeepaliveAdapter } from '../src/windows-adapter.js'
@@ -40,5 +40,13 @@ describe('keepalive config and platform guard', (): void => {
       WindowsTaskKeepaliveAdapter,
     )
     expect(() => createPlatformAdapter({ ...base, platform: 'darwin' })).toThrow(/not supported/u)
+  })
+
+  it('enables boot recovery only from config or the exact systemd sentinel', (): void => {
+    expect(resolveBootRestore(true, undefined)).toBe(true)
+    expect(resolveBootRestore(false, '1')).toBe(true)
+    for (const value of [undefined, '', '0', 'true', 'yes', ' 1 ', '01']) {
+      expect(resolveBootRestore(false, value)).toBe(false)
+    }
   })
 })

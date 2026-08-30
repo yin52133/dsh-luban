@@ -63,6 +63,11 @@ export interface AdapterFactoryOptions {
   readonly signal: AbortSignal
 }
 
+/** Resolve boot recovery without treating truthy-looking environment text as authorization. */
+export function resolveBootRestore(configured: boolean, environment: string | undefined): boolean {
+  return configured || environment === '1'
+}
+
 export function createPlatformAdapter(
   options: AdapterFactoryOptions,
 ): TmuxKeepaliveAdapter | WindowsTaskKeepaliveAdapter {
@@ -126,7 +131,7 @@ export function apply(ctx: Context, input: Partial<KeepaliveConfig> = {}): void 
   ctx.provide('lubanKeepalive', service)
   ctx.effect(() => {
     service.start()
-    if (config.bootRestore) {
+    if (resolveBootRestore(config.bootRestore, process.env.LUBAN_BOOT_RESTORE)) {
       void service.restore().catch((error: unknown): void => ctx.logger.warn(error))
     }
     return async (): Promise<void> => {

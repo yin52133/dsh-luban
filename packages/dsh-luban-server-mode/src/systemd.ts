@@ -82,7 +82,7 @@ export class UserSystemdInstaller {
       '',
       '[Service]',
       'Type=simple',
-      `ExecStart=${executable} ${systemdArg('web')} ${systemdArg('--profile')} ${systemdArg(profile)}`,
+      `ExecStart=${executable} ${systemdArg('--profile')} ${systemdArg(profile)} ${systemdArg('--no-open')}`,
       'Environment=LUBAN_BOOT_RESTORE=1',
       'Restart=on-failure',
       'RestartSec=5',

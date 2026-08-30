@@ -59,7 +59,8 @@ describe('UserSystemdInstaller', (): void => {
     await installer.install('builder', 'ubuntu-server')
 
     const unit = await readFile(installer.unitPath, 'utf8')
-    expect(unit).toContain('ExecStart="/usr/bin/env" "dsh" "web" "--profile" "ubuntu-server"')
+    expect(unit).toContain('ExecStart="/usr/bin/env" "dsh" "--profile" "ubuntu-server" "--no-open"')
+    expect(unit).not.toContain('"web" "--profile"')
     expect(unit).toContain('Environment=LUBAN_BOOT_RESTORE=1')
     expect(unit).toContain('NoNewPrivileges=true')
     expect(runner.calls.map((call) => [call.command, call.args])).toEqual([
