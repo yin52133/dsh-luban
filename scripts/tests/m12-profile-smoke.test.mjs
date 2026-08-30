@@ -7,6 +7,7 @@ import {
   evaluateLazyClient,
   isOwnedTemporaryRoot,
   m12PluginInstallArgs,
+  m12TsdownArgs,
   removeOwnedTemporaryRoot,
   runM12ProfileSmoke,
 } from '../acceptance/m12-profile-smoke.mjs'
@@ -115,12 +116,18 @@ describe('M12 real profile smoke runner', () => {
   })
 
   it('uses offline profile installation and evaluates a lazy-CJS lifecycle', () => {
+    expect(m12TsdownArgs('D:\\repo\\node_modules\\tsdown\\dist\\run.mjs')).toEqual([
+      'D:\\repo\\node_modules\\tsdown\\dist\\run.mjs',
+      '--config-loader',
+      'tsx',
+    ])
     expect(
       m12PluginInstallArgs('ubuntu-server', 'C:\\fixture\\plugin', 'C:\\fixture\\pnpm-store'),
     ).toEqual([
       'plugin',
       '--profile',
       'ubuntu-server',
+      '--ignore-workspace',
       'add',
       '--offline',
       '--config.auto-install-peers=false',

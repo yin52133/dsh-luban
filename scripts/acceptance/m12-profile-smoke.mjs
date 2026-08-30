@@ -129,19 +129,23 @@ function runCapture(command, args, options) {
 
 function requireCommand(checks, id, command, args, options) {
   const result = runCapture(command, args, options)
+  const diagnostic = [result.stderr, result.stdout]
+    .filter((value) => value.trim() !== '')
+    .join('\n')
   requireCheck(
     checks,
     id,
     result.exitCode === 0,
     result.exitCode === 0
       ? 'exit 0'
-      : `exit ${String(result.exitCode)}: ${sanitizeError(result.stderr)}`,
+      : `exit ${String(result.exitCode)}: ${sanitizeError(diagnostic)}`,
   )
   return result
 }
 
 function markerSource(runId) {
-  return `import { appendFileSync } from 'node:fs'
+  return `/// <reference types="node" />
+import { appendFileSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 
 export const name = '${PLUGIN_ID}'
@@ -194,7 +198,7 @@ async function preparePlugin(plan, temporaryRoot, checks) {
   const tsc = executablePath(plan.root, 'typescript', 'bin', 'tsc')
   await requireFile(tsdown, 'project-local tsdown')
   await requireFile(tsc, 'project-local TypeScript')
-  requireCommand(checks, 'generated-plugin-build', process.execPath, [tsdown], {
+  requireCommand(checks, 'generated-plugin-build', process.execPath, m12TsdownArgs(tsdown), {
     cwd: generated.target,
     env: process.env,
   })
@@ -208,6 +212,10 @@ async function preparePlugin(plan, temporaryRoot, checks) {
   return generated.target
 }
 
+export function m12TsdownArgs(tsdownEntry) {
+  return [tsdownEntry, '--config-loader', 'tsx']
+}
+
 export function m12PluginInstallArgs(profile, pluginRoot, storeRoot) {
   const normalized = pluginRoot.replaceAll('\\', '/')
   const normalizedStore = storeRoot.replaceAll('\\', '/')
@@ -215,6 +223,7 @@ export function m12PluginInstallArgs(profile, pluginRoot, storeRoot) {
     'plugin',
     '--profile',
     profile,
+    '--ignore-workspace',
     'add',
     '--offline',
     '--config.auto-install-peers=false',
@@ -548,20 +557,26 @@ async function executeLiveProfileSmoke(plan) {
     recordCheck(checks, 'host-hot-reenabled', 'pass', 'mount marker 2')
     await waitFor('client bundle after hot enable', () => fetchClient(firstPort), activeProcess)
 
+    await writeProfileToggle(patchPath, true)
+    await waitFor(
+      'pre-restart disposer',
+      async () => {
+        const markers = await readMarkers(markerFile, plan.runId)
+        return markers.filter((marker) => marker.event === 'disposed').length >= 2
+      },
+      activeProcess,
+    )
+    recordCheck(checks, 'host-disposed-before-restart', 'pass', 'dispose marker 2')
     const firstStop = await stopDsh(activeProcess)
     activeProcess = undefined
     requireCheck(
       checks,
-      'first-process-graceful-stop',
+      'first-process-stopped-within-timeout',
       firstStop.graceful,
       JSON.stringify(firstStop),
     )
-    await waitFor('first process disposer', async () => {
-      const markers = await readMarkers(markerFile, plan.runId)
-      return markers.filter((marker) => marker.event === 'disposed').length >= 2
-    })
-    recordCheck(checks, 'host-disposed-on-stop', 'pass', 'dispose marker 2')
 
+    await writeProfileToggle(patchPath, false)
     const secondPort = await freePort()
     activeProcess = startDsh(plan, dshEntry, dshHome, markerFile, secondPort)
     await waitFor(
@@ -580,18 +595,24 @@ async function executeLiveProfileSmoke(plan) {
     evaluateLazyClient(restartedClient, plan.runId)
     recordCheck(checks, 'host-client-restart', 'pass', 'mount marker 3 and client 200')
 
+    await writeProfileToggle(patchPath, true)
+    await waitFor(
+      'pre-final-stop disposer',
+      async () => {
+        const markers = await readMarkers(markerFile, plan.runId)
+        return markers.filter((marker) => marker.event === 'disposed').length >= 3
+      },
+      activeProcess,
+    )
+    recordCheck(checks, 'host-disposed-before-final-stop', 'pass', 'dispose marker 3')
     const secondStop = await stopDsh(activeProcess)
     activeProcess = undefined
     requireCheck(
       checks,
-      'second-process-graceful-stop',
+      'second-process-stopped-within-timeout',
       secondStop.graceful,
       JSON.stringify(secondStop),
     )
-    await waitFor('restart process disposer', async () => {
-      const markers = await readMarkers(markerFile, plan.runId)
-      return markers.filter((marker) => marker.event === 'disposed').length >= 3
-    })
     const markers = await readMarkers(markerFile, plan.runId)
     const expected = ['mounted', 'disposed', 'mounted', 'disposed', 'mounted', 'disposed']
     requireCheck(
@@ -657,7 +678,7 @@ export function createProfileSmokePlan(options = {}) {
       'temporary DSH_HOME under ignored node_modules/.cache/dsh-luban-acceptance; owned path removed in finally',
     commands: [
       'generate and build dsh-luban-acceptance',
-      `project-local dsh plugin --profile ${profile} add --offline --store-dir <isolated> file:<fixture>`,
+      `project-local dsh plugin --profile ${profile} --ignore-workspace add --offline --store-dir <isolated> file:<fixture>`,
       `project-local dsh --profile ${profile} --dump-config`,
       `project-local dsh --profile ${profile} --no-open --host 127.0.0.1 --port <ephemeral>`,
     ],

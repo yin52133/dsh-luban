@@ -3,7 +3,12 @@ packages:
   - tools/*
 
 allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': false
+  '@google/genai': false
   '@serialport/bindings-cpp': true
   argon2: true
   esbuild: true
+  koffi: false
+  node-pty: false
+  protobufjs: false
   sharp: true
