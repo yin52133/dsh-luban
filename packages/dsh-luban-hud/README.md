@@ -22,7 +22,7 @@ Install after the rc2 agent/Web runtime and `dsh-luban-auth`, then apply the bun
 dsh plugin --profile default add dsh-luban-hud
 ```
 
-The host provides `lubanTelemetry`; M08 can inject that Core contract and request one exact live session without replacing or publishing the cached HUD snapshot. If `lubanTaskStore` appears before or after HUD startup, Cordis dynamically connects the critical-alert sink; the dependency remains optional. No production dependency is added beyond `@luban/core`.
+The host provides `lubanTelemetry`; M08 can inject that Core contract and request one exact live session without replacing or publishing the cached HUD snapshot. If `lubanTaskStore` appears before or after HUD startup, Cordis dynamically connects the critical-alert sink; the dependency remains optional. No production dependency is added beyond `dsh-luban-core`.
 
 For development, run package-scoped gates from the repository root:
 

@@ -59,7 +59,7 @@ policy. Avoid SYSTEM unless the DSH profile and workspaces are intentionally acc
 Once the plugin is loaded, another Cordis plugin can keep one task alive and checkpoint it:
 
 ```ts
-import { asTaskId } from '@luban/core'
+import { asTaskId } from 'dsh-luban-core'
 
 const taskId = asTaskId('TASK-42')
 const session = await ctx.lubanKeepalive.ensureAlive({
@@ -130,8 +130,10 @@ node scripts/acceptance/m03-ubuntu-keepalive.mjs prepare --apply \
 
 Disconnect the SSH client manually, reconnect, and create a new external witness JSON using the
 `runId`, machine-id hash, prepared boot id, and `recordedAt` from
-`01-prepared.json`. Both timestamps are epoch milliseconds; `reconnectedAt` must be later than
-`disconnectedAt`.
+`01-prepared.json`. Both timestamps must be real epoch-millisecond values captured after
+`prepare`: `disconnectedAt` records the actual disconnect, and `reconnectedAt` records the later
+reconnect. The placeholders below cannot pass verification and must be replaced with those observed
+timestamps.
 
 ```json
 {
@@ -141,8 +143,8 @@ Disconnect the SSH client manually, reconnect, and create a new external witness
   "bootId": "<prepared bootId>",
   "observer": "<human operator>",
   "sshDisconnected": true,
-  "disconnectedAt": 0,
-  "reconnectedAt": 1
+  "disconnectedAt": "<actual disconnect epoch-ms after prepare>",
+  "reconnectedAt": "<actual reconnect epoch-ms after disconnectedAt>"
 }
 ```
 
@@ -185,7 +187,7 @@ labeled `simulated` and can never make either feature pass.
 
 ## Service API
 
-The Cordis service key is `lubanKeepalive` and implements `KeepaliveService` from `@luban/core`.
+The Cordis service key is `lubanKeepalive` and implements `KeepaliveService` from `dsh-luban-core`.
 Call `ensureAlive()` with a `SessionSpec`, and call `saveCheckpoint()` after each completed
 milestone. `onEvent()` is the stable integration point for HUD and recovery audit consumers. The
 concrete service also exposes `release()` so finite workers can remove a completed ledger entry.

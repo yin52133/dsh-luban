@@ -19,10 +19,10 @@ flowchart TD
     subgraph L3["L3 应用插件层（一个模块 = 一个 dsh-luban-* 包）"]
         P["M01-M12 各插件<br/>组合 L2 服务对外暴露功能"]
     end
-    subgraph L2["L2 核心服务层（@luban/core 内）"]
+    subgraph L2["L2 核心服务层（dsh-luban-core 内）"]
         S["Auth 服务 · TaskStore/调度器 · Keepalive<br/>SessionBridge · Telemetry 聚合 · Compaction 引擎"]
     end
-    subgraph L1["L1 平台适配层（@luban/core/hal）"]
+    subgraph L1["L1 平台适配层（dsh-luban-core/hal）"]
         H["串口/ssh/tmux/进程/文件/浏览器<br/>ChannelAdapter 系列 · 平台探针"]
     end
     subgraph L0["L0 运行底座（不修改、只依赖公开 API）"]
@@ -34,8 +34,8 @@ flowchart TD
 | 层 | 职责 | 形态 | 禁止事项 |
 | --- | --- | --- | --- |
 | L0 | dsh 本体、cordis、运行时、A 档原版插件、B 档外部引擎 | 外部依赖 | 不修改、不 fork、不内联其代码 |
-| L1 | 收口一切平台差异：串口、ssh、tmux、进程、文件路径、浏览器 | `@luban/core/hal` | 不出现业务语义 |
-| L2 | 纯逻辑服务：认证、任务状态机、调度、遥测聚合、压缩 | `@luban/core/services` | 不直接触 API/平台调用（经 L1） |
+| L1 | 收口一切平台差异：串口、ssh、tmux、进程、文件路径、浏览器 | `dsh-luban-core/hal` | 不出现业务语义 |
+| L2 | 纯逻辑服务：认证、任务状态机、调度、遥测聚合、压缩 | `dsh-luban-core/services` | 不直接触 API/平台调用（经 L1） |
 | L3 | dsh 插件包：把 L2 服务装配成 dsh 可挂载的功能 | `packages/dsh-luban-*` | 不绕过 L2 直接写存储 |
 | L4 | Web 组件（client-ui 槽位）、CLI、HUD 渲染 | 各插件 `client/` 段 | 不含业务规则 |
 

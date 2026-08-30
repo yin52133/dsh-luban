@@ -95,7 +95,7 @@ The DSH Settings page exposes plan submission, plan-document links, approve/reje
 
 ## Persistence and security
 
-- The local JSON index is atomically replaced with a cross-process lock and rolling backups through `@luban/core`.
+- The local JSON index is atomically replaced with a cross-process lock and rolling backups through `dsh-luban-core`.
 - Plan Markdown is written with private file modes and cannot escape the selected workspace.
 - Existing same-day slug documents are never overwritten.
 - Review routes are authenticated and return no-store/nosniff headers.

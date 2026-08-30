@@ -37,7 +37,7 @@ dsh-luban/
 │   ├── deploy/                  # 双端 profile 生成与部署脚本
 │   └── release/                 # 版本对齐、tag、npm publish 辅助
 ├── packages/
-│   ├── core/                    # @luban/core：L1 HAL + L2 服务 + 契约定义（不发布到市场）
+│   ├── core/                    # dsh-luban-core：L1 HAL + L2 服务 + 契约定义（不发布到市场）
 │   ├── dsh-luban-auth/          # M01
 │   ├── dsh-luban-taskboard/     # M02
 │   ├── dsh-luban-keepalive/     # M03
@@ -73,11 +73,11 @@ packages/dsh-luban-<name>/
 | 项 | 规范 |
 | --- | --- |
 | 插件包名 | `dsh-luban-<module>`（无 scope，与 dsh 社区惯例一致，利于市场检索） |
-| 内部核心包 | `@luban/core`（私有用途，仍随仓库发布 npm 以便插件 peer 依赖） |
+| 内部核心包 | `dsh-luban-core`（私有用途，仍随仓库发布 npm 以便插件 peer 依赖） |
 | cordis 插件 id | `luban-<module>`（patch 中的 `id:`） |
 | HTTP 路由前缀 | `/luban-<module>/...`（如 `/luban-auth/login`） |
 | 版本 | 全仓库统一版本号（fixed locking），见 06-release |
-| 依赖方向 | 插件包 → `@luban/core` → 仅外部依赖；**禁止**插件包互相依赖，跨插件协作只走 `04-interfaces` 契约与事件总线 |
+| 依赖方向 | 插件包 → `dsh-luban-core` → 仅外部依赖；**禁止**插件包互相依赖，跨插件协作只走 `04-interfaces` 契约与事件总线 |
 | 平台专属依赖 | 用 `optionalDependencies` + 运行时平台守卫（如 serialport 仅 win 使用路径加载） |
 
 ## 4. 设计阶段与本目录的对应关系

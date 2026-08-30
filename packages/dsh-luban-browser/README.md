@@ -123,7 +123,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:18080/luban-browser/jobs `
 
 M11 never imports the M02 implementation. When `taskboard.autoRun` is enabled,
 it waits for the `lubanTaskStore` and `lubanAgentClaim` Cordis services defined
-by the `@luban/core` contracts. A claimed task is eligible only when all of the
+by the `dsh-luban-core` contracts. A claimed task is eligible only when all of the
 following hold:
 
 - tags include `browser` and `auto-ok`;

@@ -10,7 +10,7 @@
 
 ## 1. 契约一览与依赖方向
 
-所有跨模块契约集中在 `@luban/core` 定义并导出；各模块（L3 插件）只 import 契约与 HAL，不互相 import（原则 P1.4/P2.1）。
+所有跨模块契约集中在 `dsh-luban-core` 定义并导出；各模块（L3 插件）只 import 契约与 HAL，不互相 import（原则 P1.4/P2.1）。
 
 ```mermaid
 flowchart LR
@@ -24,7 +24,7 @@ flowchart LR
         M10["M10 win-debug"]
         M11["M11 browser"]
     end
-    subgraph Contracts["@luban/core 契约（本章）"]
+    subgraph Contracts["dsh-luban-core 契约（本章）"]
         A["AuthService (M01)"]
         T["TaskStore / AgentClaimService / NightScheduler (M02)"]
         K["KeepaliveService (M03)"]
