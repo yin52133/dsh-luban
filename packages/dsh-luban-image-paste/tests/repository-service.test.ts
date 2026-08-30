@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { asAccountId, asSessionId } from 'dsh-luban-core'
+import { AtomicJsonStore, LubanError, asAccountId, asSessionId } from 'dsh-luban-core'
 import type { AccountSessionRegistry } from 'dsh-luban-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AttachmentRepository } from '../src/repository.js'
@@ -22,6 +22,28 @@ const OTHER_ACCOUNT = asAccountId('account-bob')
 const ALICE_ACCOUNT_SESSIONS: AccountSessionRegistry = {
   bind: () => Promise.resolve(),
   ownerOf: () => Promise.resolve(ACCOUNT),
+}
+
+interface TestLedger {
+  readonly version: 1
+  readonly images: readonly Readonly<Record<string, unknown>>[]
+}
+
+interface TestLedgerStore {
+  update(mutator: (current: TestLedger) => TestLedger | Promise<TestLedger>): Promise<TestLedger>
+}
+
+function rejectNextLedgerPublicationAfterMutation(
+  ledgerPath: string,
+): Readonly<{ mockRestore(): void }> {
+  const prototype = AtomicJsonStore.prototype as TestLedgerStore
+  return vi
+    .spyOn(prototype, 'update')
+    .mockImplementationOnce(async (mutator): Promise<TestLedger> => {
+      const current = JSON.parse(await readFile(ledgerPath, 'utf8')) as TestLedger
+      await mutator(current)
+      throw new LubanError('E_IO', 'forced ledger publication failure')
+    })
 }
 
 describe('attachment repository and ingest service', () => {
@@ -248,6 +270,53 @@ describe('attachment repository and ingest service', () => {
     const files = await readdir(repository.attachRoot)
     expect(files.filter((name) => name.startsWith('.upload-'))).toEqual([])
     expect(files.filter((name) => name.endsWith('-must-not-leak-1.png'))).toEqual([])
+  })
+
+  it('keeps delete metadata and content when ledger publication fails after mutation', async () => {
+    const image = await service().fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
+      source: 'paste',
+      nameHint: 'delete-publication-failure',
+    })
+    const publication = rejectNextLedgerPublicationAfterMutation(
+      join(repository.attachRoot, '.luban-image-index.json'),
+    )
+
+    try {
+      await expect(repository.delete(ACCOUNT, image.id)).rejects.toMatchObject({
+        code: 'E_IO',
+        message: 'forced ledger publication failure',
+      })
+    } finally {
+      publication.mockRestore()
+    }
+
+    await expect(repository.get(ACCOUNT, image.id)).resolves.toMatchObject({ id: image.id })
+    await expect(readFile(image.absPath)).resolves.toEqual(Buffer.from(PNG_BYTES))
+  })
+
+  it('keeps cleanup metadata and content when ledger publication fails after mutation', async () => {
+    const image = await service().fromBlobWithSource(new Blob([PNG_BYTES], { type: 'image/png' }), {
+      accountId: ACCOUNT,
+      source: 'drop',
+      nameHint: 'cleanup-publication-failure',
+    })
+    clock.value += 15 * 24 * 60 * 60 * 1_000
+    const publication = rejectNextLedgerPublicationAfterMutation(
+      join(repository.attachRoot, '.luban-image-index.json'),
+    )
+
+    try {
+      await expect(repository.cleanup(ACCOUNT, 14, false)).rejects.toMatchObject({
+        code: 'E_IO',
+        message: 'forced ledger publication failure',
+      })
+    } finally {
+      publication.mockRestore()
+    }
+
+    await expect(repository.get(ACCOUNT, image.id)).resolves.toMatchObject({ id: image.id })
+    await expect(readFile(image.absPath)).resolves.toEqual(Buffer.from(PNG_BYTES))
   })
 
   it('captures the CLI clipboard through an injected fake adapter', async () => {

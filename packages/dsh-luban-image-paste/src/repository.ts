@@ -461,7 +461,8 @@ export class AttachmentRepository {
 
   public async delete(accountId: AccountId, id: string): Promise<void> {
     await this.#assertRoot()
-    await this.#store.update(async (ledger): Promise<ImageLedger> => {
+    let deleted: StoredImage | undefined
+    await this.#store.update((ledger): ImageLedger => {
       const image = ledger.images.find(
         (candidate): boolean => candidate.accountId === accountId && candidate.id === id,
       )
@@ -469,10 +470,7 @@ export class AttachmentRepository {
       if (image.referencedBy.length > 0) {
         throw new LubanError('E_INVALID_TRANSITION', 'Referenced attachments cannot be deleted')
       }
-      if (await regularFile(image.absPath)) {
-        await this.#assertRoot()
-        await rm(image.absPath)
-      }
+      deleted = image
       return {
         version: 1,
         images: ledger.images.filter(
@@ -480,6 +478,13 @@ export class AttachmentRepository {
         ),
       }
     })
+    if (deleted === undefined) {
+      throw new LubanError('E_IO', `Image ${id} deletion was not committed`)
+    }
+    if (await regularFile(deleted.absPath)) {
+      await this.#assertRoot()
+      await rm(deleted.absPath)
+    }
     await this.#assertRoot()
   }
 
@@ -527,9 +532,8 @@ export class AttachmentRepository {
       return { candidates, removed: [], retainedReferenced, errors: [] }
     }
 
-    const removed: string[] = []
-    const errors: { path: string; message: string }[] = []
-    await this.#store.update(async (ledger): Promise<ImageLedger> => {
+    const committed: StoredImage[] = []
+    await this.#store.update((ledger): ImageLedger => {
       const kept: StoredImage[] = []
       for (const image of ledger.images) {
         if (
@@ -541,22 +545,27 @@ export class AttachmentRepository {
           kept.push(image)
           continue
         }
-        try {
-          if (await regularFile(image.absPath)) {
-            await this.#assertRoot()
-            await rm(image.absPath)
-          }
-          removed.push(image.relPath)
-        } catch (error: unknown) {
-          errors.push({
-            path: image.relPath,
-            message: error instanceof Error ? error.message : 'Unable to remove attachment',
-          })
-          kept.push(image)
-        }
+        committed.push(image)
       }
       return { version: 1, images: kept }
     })
+
+    const removed: string[] = []
+    const errors: { path: string; message: string }[] = []
+    for (const image of committed) {
+      try {
+        if (await regularFile(image.absPath)) {
+          await this.#assertRoot()
+          await rm(image.absPath)
+        }
+        removed.push(image.relPath)
+      } catch (error: unknown) {
+        errors.push({
+          path: image.relPath,
+          message: error instanceof Error ? error.message : 'Unable to remove attachment',
+        })
+      }
+    }
     await this.#assertRoot()
     return { candidates, removed, retainedReferenced, errors }
   }
