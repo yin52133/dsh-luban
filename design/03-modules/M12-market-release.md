@@ -13,6 +13,7 @@
 | v0.5 | 2026-08-30 | Codex | 补齐双端 profile 安全生成器及隔离配置解析验证 |
 | v0.6 | 2026-08-30 | Codex | 要求 tag 来源于 mainline，并让制品构建复用完整 TS/Python CI 门禁 |
 | v0.7 | 2026-08-30 | Codex | 增加原子 staging 发布与可加载脚手架/profile 验证 |
+| v0.8 | 2026-08-30 | Codex | 记录本地完整发布、安全与 uv 锁定门禁证据 |
 
 ## 1. 概述与目标
 
@@ -153,3 +154,6 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
 - M12 的 21 项脚手架、profile 生成、安装、安全、市场与不可变发布测试通过；真实 Ubuntu profile、
   完整插件挂载、CI tag、npm、
   GitHub Release、市场 PR 与 topic 仍需在获得明确授权后验收。
+- 全工作区 format/lint/typecheck/build、408 项包测试、22 项跨模块集成、12 包 audit、release metadata/
+  pack dry-run 全绿；临时校验 SHA-256 的 Gitleaks 8.30.1 扫描 63 个提交无泄漏，合成 token 被正确拒绝；
+  `uv --locked` 的 Ruff、13 项 Python 测试与 compileall 全绿。临时扫描器已清理，未做全局安装。

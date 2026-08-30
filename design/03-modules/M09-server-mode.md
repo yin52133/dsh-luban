@@ -12,6 +12,7 @@ Ubuntu 编译服务器的 dsh 常驻与操作模式：systemd 托管启动、编
 | v0.4 | 2026-08-30 | Codex | 补齐探针超时与真实子进程终止/排空边界验证 |
 | v0.5 | 2026-08-30 | Codex | 增加 workspace/collect/artifact junction 身份门禁 |
 | v0.6 | 2026-08-30 | Codex | 收口队列 drain、告警与启停并发生命周期 |
+| v0.7 | 2026-08-30 | Codex | 记录全工作区门禁通过与真实 Ubuntu 工具链阻塞边界 |
 
 ## 1. 概述与目标
 
@@ -115,3 +116,5 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
   进程测试使用当前 `process.execPath` 验证超时/取消后 PID 已退出和 stdout/stderr 已排空，并以 fake child
   验证 spawn 同步失败、永不 close、TERM/KILL 最终边界、abort/timeout 首因及清理。未安装 systemd
   unit、运行外部编译器或下载真实产物。
+- 全工作区 format/lint/typecheck/build、408 项包测试及 22 项跨模块集成通过；M09-F002 的本地实现已
+  收口，剩余验收阻塞于当前主机没有 Ubuntu systemd 环境及目标 MCU/交叉编译工具链。
