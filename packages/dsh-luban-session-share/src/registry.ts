@@ -265,6 +265,7 @@ export class SharedSessionRegistry implements SessionRegistry {
       return this.#network.requestTakeover(remote, id, by)
     }
     return this.#mutex.run(id, (): TakeoverResult => {
+      this.#assertActorAccount(id, by)
       this.sweepExpired()
       const stored = this.#requiredLocal(id)
       if (sameActor(stored.view.lockHolder, by)) {
@@ -314,6 +315,7 @@ export class SharedSessionRegistry implements SessionRegistry {
     if (initial === undefined) throw new LubanError('E_NOT_FOUND', 'Takeover request was not found')
     this.#assertActorAccount(initial.sessionId, by)
     return this.#mutex.run(initial.sessionId, (): TakeoverResult => {
+      this.#assertActorAccount(initial.sessionId, by)
       this.sweepExpired()
       const request = this.#requests.get(requestId)
       if (request === undefined)
@@ -376,6 +378,7 @@ export class SharedSessionRegistry implements SessionRegistry {
       return
     }
     await this.#mutex.run(id, (): void => {
+      this.#assertActorAccount(id, by)
       const stored = this.#requiredLocal(id)
       if (!sameActor(stored.view.lockHolder, by)) {
         throw new LubanError(

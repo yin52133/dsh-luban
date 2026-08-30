@@ -66,6 +66,43 @@ describe('SharedSessionRegistry', (): void => {
     ).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
   })
 
+  it('rechecks account ownership after a takeover waits for its session mutex', async (): Promise<void> => {
+    const registry = new SharedSessionRegistry({
+      localHost: host('ubuntu'),
+      takeoverTimeoutMs: 5_000,
+      replayLimit: 16,
+    })
+    const id = session('S-reused')
+    const alice = user('alice')
+    const aliceHelper = user('alice-helper', 'alice')
+    const bob = user('bob')
+    registry.registerLocal({
+      id,
+      host: host('ubuntu'),
+      owner: alice,
+      healthy: true,
+      status: 'idle',
+    })
+
+    const takeover = registry.requestTakeover(id, aliceHelper)
+    registry.removeLocal(id)
+    registry.registerLocal({
+      id,
+      host: host('ubuntu'),
+      owner: bob,
+      healthy: true,
+      status: 'idle',
+    })
+
+    await expect(takeover).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+    expect(registry.getView(id)).toMatchObject({
+      accountId: 'bob',
+      owner: { id: 'bob' },
+      lockHolder: { id: 'bob' },
+    })
+    expect(registry.takeoversFor(bob)).toEqual([])
+  })
+
   it('requires two distinct actors and a versioned CAS for exclusive takeover', async (): Promise<void> => {
     const clock = new MutableClock()
     const injected: string[] = []
