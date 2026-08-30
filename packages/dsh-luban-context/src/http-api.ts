@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AuthService } from 'dsh-luban-core'
+import type { AccountContext, AuthService } from 'dsh-luban-core'
 import { LubanError, asSessionId, isLubanError, modulePrefix } from 'dsh-luban-core'
 import type { CompactionEngineWithReplay } from './engine.js'
 
@@ -34,6 +34,7 @@ function errorStatus(error: LubanError): number {
     case 'E_AUTH_REQUIRED':
       return 401
     case 'E_NOT_FOUND':
+    case 'E_ACCOUNT_SCOPE_MISMATCH':
       return 404
     case 'E_INVALID_INPUT':
       return 400
@@ -60,7 +61,7 @@ async function requireAuth(
   request: IncomingMessage,
   path: string,
   auth: AuthService,
-): Promise<void> {
+): Promise<AccountContext> {
   const decision = await auth.middleware()({
     path,
     method: request.method ?? 'GET',
@@ -68,11 +69,12 @@ async function requireAuth(
     cookie: request.headers.cookie,
     sourceIp: request.socket.remoteAddress ?? 'unknown',
   })
-  if (!decision.allowed) {
+  if (!decision.allowed || decision.user === undefined || decision.account === undefined) {
     throw new LubanError('E_AUTH_REQUIRED', 'Authentication is required', {
       details: { status: decision.status },
     })
   }
+  return decision.account
 }
 
 export class ContextHttpApi {
@@ -94,7 +96,7 @@ export class ContextHttpApi {
       if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) {
         throw new LubanError('E_NOT_FOUND', 'Route not found')
       }
-      await requireAuth(request, url.pathname, this.#auth)
+      const account = await requireAuth(request, url.pathname, this.#auth)
       this.#assertAvailable()
       const path = url.pathname.slice(PREFIX.length) || '/'
       const method = request.method ?? 'GET'
@@ -111,13 +113,13 @@ export class ContextHttpApi {
       }
       const sessionId = asSessionId(decodeURIComponent(match[1]))
       if (method === 'GET' && match[2] === 'audit') {
-        const records = await this.#engine.audit(sessionId)
+        const records = await this.#engine.audit(sessionId, account.accountId)
         this.#assertAvailable()
         sendJson(response, 200, { records })
         return
       }
       if (method === 'GET' && match[2] === 'archives') {
-        const entries = await this.#engine.archives(sessionId)
+        const entries = await this.#engine.archives(sessionId, account.accountId)
         this.#assertAvailable()
         sendJson(response, 200, { entries })
         return
@@ -130,8 +132,9 @@ export class ContextHttpApi {
                 sessionId,
                 safeInteger(url.searchParams.get('startSeq'), 'startSeq'),
                 safeInteger(url.searchParams.get('endSeq'), 'endSeq'),
+                account.accountId,
               )
-            : await this.#engine.replayFile(sessionId, archivePath)
+            : await this.#engine.replayFile(sessionId, archivePath, account.accountId)
         this.#assertAvailable()
         sendText(response, 200, body)
         return
@@ -141,7 +144,7 @@ export class ContextHttpApi {
         if (scope !== 'day' && scope !== 'night') {
           throw new LubanError('E_INVALID_INPUT', 'scope value must be day or night')
         }
-        this.#engine.markScope(sessionId, scope)
+        await this.#engine.markScope(sessionId, scope, account.accountId)
         response.statusCode = 204
         securityHeaders(response)
         response.end()

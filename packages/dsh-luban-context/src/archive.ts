@@ -12,6 +12,7 @@ import {
 } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import type {
+  AccountId,
   Clock,
   CompactionAuditRecord,
   CompactionPlan,
@@ -22,9 +23,16 @@ import type {
   JsonCodec,
   SessionId,
 } from 'dsh-luban-core'
-import { AtomicJsonStore, LubanError, asSessionId, redactSecrets } from 'dsh-luban-core'
+import {
+  AtomicJsonStore,
+  LubanError,
+  asAccountId,
+  asSessionId,
+  redactSecrets,
+} from 'dsh-luban-core'
 
 export interface ArchiveIndexEntry {
+  readonly accountId: AccountId
   readonly startSeq: number
   readonly endSeq: number
   readonly estTokens: number
@@ -34,9 +42,14 @@ export interface ArchiveIndexEntry {
   readonly createdAt: number
 }
 
+interface StoredArchiveIndexEntry extends Omit<ArchiveIndexEntry, 'accountId'> {
+  /** Missing only on legacy indexes that have not been assigned by an explicit migration. */
+  readonly accountId?: AccountId
+}
+
 interface ArchiveState {
   readonly schemaVersion: 1
-  readonly entries: readonly ArchiveIndexEntry[]
+  readonly entries: readonly StoredArchiveIndexEntry[]
 }
 
 interface DirectoryIdentity {
@@ -53,6 +66,7 @@ interface DirectoryBoundary {
 interface RepositoryRoot {
   readonly workspace: string
   readonly archive: DirectoryBoundary
+  readonly account: DirectoryBoundary
   readonly session: DirectoryBoundary
   readonly index: AtomicJsonStore<ArchiveState>
   readonly audit: AtomicJsonStore<readonly CompactionAuditRecord[]>
@@ -165,9 +179,18 @@ function integer(value: unknown, label: string): number {
   return value
 }
 
-function indexEntry(value: unknown, label: string): ArchiveIndexEntry {
+function optionalAccountId(value: unknown, label: string): AccountId | undefined {
+  if (value === undefined) return undefined
+  const candidate = text(value, label)
+  if (candidate.trim() === '') throw new LubanError('E_IO', `${label} must not be blank`)
+  return asAccountId(candidate)
+}
+
+function indexEntry(value: unknown, label: string): StoredArchiveIndexEntry {
   const row = record(value, label)
+  const accountId = optionalAccountId(row.accountId, `${label}.accountId`)
   return {
+    ...(accountId === undefined ? {} : { accountId }),
     startSeq: integer(row.startSeq, `${label}.startSeq`),
     endSeq: integer(row.endSeq, `${label}.endSeq`),
     estTokens: integer(row.estTokens, `${label}.estTokens`),
@@ -186,7 +209,7 @@ const archiveCodec: JsonCodec<ArchiveState> = Object.freeze({
     }
     return {
       schemaVersion: 1,
-      entries: root.entries.map((item, index): ArchiveIndexEntry =>
+      entries: root.entries.map((item, index): StoredArchiveIndexEntry =>
         indexEntry(item, `entries[${String(index)}]`),
       ),
     }
@@ -268,7 +291,9 @@ function auditRecord(value: unknown, label: string): CompactionAuditRecord {
   const row = record(value, label)
   if (!Array.isArray(row.archiveFiles))
     throw new LubanError('E_IO', `${label}.archiveFiles must be an array`)
+  const accountId = optionalAccountId(row.accountId, `${label}.accountId`)
   return {
+    ...(accountId === undefined ? {} : { accountId }),
     sessionId: asSessionId(text(row.sessionId, `${label}.sessionId`)),
     at: integer(row.at, `${label}.at`),
     strategyId: text(row.strategyId, `${label}.strategyId`),
@@ -297,14 +322,13 @@ const auditCodec: JsonCodec<readonly CompactionAuditRecord[]> = Object.freeze({
   },
 })
 
-function safeSessionDirectory(sessionId: SessionId): string {
-  const raw = String(sessionId)
+function safeIdentifierDirectory(raw: string, fallback: string): string {
   const safe = raw
     .replace(/[^A-Za-z0-9._-]+/gu, '_')
     .replace(/^\.+/u, '')
     .slice(0, 80)
   const hash = createHash('sha256').update(raw).digest('hex').slice(0, 8)
-  return safe === raw && safe !== '' ? safe : `${safe === '' ? 'session' : safe}-${hash}`
+  return safe === raw && safe !== '' ? safe : `${safe === '' ? fallback : safe}-${hash}`
 }
 
 function relativeInside(workspace: string, filePath: string): string {
@@ -337,6 +361,7 @@ async function atomicTextWrite(filePath: string, content: string): Promise<void>
 export class ContextArchiveRepository {
   readonly #requestedWorkspace: string
   readonly #archiveDir: string
+  readonly #accountId: AccountId
   readonly #sessionId: SessionId
   readonly #clock: Clock
   #rootPromise: Promise<RepositoryRoot> | undefined
@@ -344,11 +369,13 @@ export class ContextArchiveRepository {
   public constructor(options: {
     readonly workspace: string
     readonly archiveDir: string
+    readonly accountId: AccountId
     readonly sessionId: SessionId
     readonly clock: Clock
   }) {
     this.#requestedWorkspace = resolve(options.workspace)
     this.#archiveDir = options.archiveDir
+    this.#accountId = options.accountId
     this.#sessionId = options.sessionId
     this.#clock = options.clock
     relativeInside(this.#requestedWorkspace, resolve(this.#requestedWorkspace, options.archiveDir))
@@ -376,6 +403,7 @@ export class ContextArchiveRepository {
     await this.#assertRoot(root)
     const path = relativeInside(root.workspace, absolutePath)
     const entry: ArchiveIndexEntry = {
+      accountId: this.#accountId,
       startSeq: segment.startSeq,
       endSeq: segment.endSeq,
       estTokens: segment.estTokens,
@@ -386,8 +414,12 @@ export class ContextArchiveRepository {
     }
     await root.index.update((state): ArchiveState => ({
       ...state,
-      entries: state.entries.some((item): boolean => item.path === path)
-        ? state.entries.map((item): ArchiveIndexEntry => (item.path === path ? entry : item))
+      entries: state.entries.some(
+        (item): boolean => item.path === path && item.accountId === this.#accountId,
+      )
+        ? state.entries.map((item): StoredArchiveIndexEntry =>
+            item.path === path && item.accountId === this.#accountId ? entry : item,
+          )
         : [...state.entries, entry],
     }))
     await this.#assertRoot(root)
@@ -397,7 +429,9 @@ export class ContextArchiveRepository {
   public async entries(): Promise<readonly ArchiveIndexEntry[]> {
     const root = await this.#root()
     await this.#assertRoot(root)
-    const entries = (await root.index.read()).entries
+    const entries = (await root.index.read()).entries.filter(
+      (entry): entry is ArchiveIndexEntry => entry.accountId === this.#accountId,
+    )
     await this.#assertRoot(root)
     return entries
   }
@@ -455,6 +489,12 @@ export class ContextArchiveRepository {
     if (record.sessionId !== this.#sessionId) {
       throw new LubanError('E_INVALID_INPUT', 'Audit record session does not match the archive')
     }
+    if (record.accountId !== this.#accountId) {
+      throw new LubanError(
+        'E_ACCOUNT_SCOPE_MISMATCH',
+        'Audit record account does not match the archive',
+      )
+    }
     const root = await this.#root()
     await this.#assertRoot(root)
     await root.audit.update((records): readonly CompactionAuditRecord[] => [...records, record])
@@ -464,7 +504,9 @@ export class ContextArchiveRepository {
   public async audit(): Promise<readonly CompactionAuditRecord[]> {
     const root = await this.#root()
     await this.#assertRoot(root)
-    const records = await root.audit.read()
+    const records = (await root.audit.read()).filter(
+      (record): boolean => record.accountId === this.#accountId,
+    )
     await this.#assertRoot(root)
     return records
   }
@@ -487,14 +529,20 @@ export class ContextArchiveRepository {
     const requestedArchive = resolve(workspace, this.#archiveDir)
     relativeInside(workspace, requestedArchive)
     const archive = await ownedDirectoryTree(workspace, requestedArchive, 'archiveDir')
+    const account = await ownedDirectory(
+      resolve(archive.path, safeIdentifierDirectory(String(this.#accountId), 'account')),
+      workspace,
+      'context account directory',
+    )
     const session = await ownedDirectory(
-      resolve(archive.path, safeSessionDirectory(this.#sessionId)),
+      resolve(account.path, safeIdentifierDirectory(String(this.#sessionId), 'session')),
       workspace,
       'context session directory',
     )
     const root: RepositoryRoot = {
       workspace,
       archive,
+      account,
       session,
       index: new AtomicJsonStore({
         filePath: resolve(session.path, 'index.json'),
@@ -515,6 +563,7 @@ export class ContextArchiveRepository {
     try {
       await Promise.all([
         assertDirectory(root.archive, 'context archive directory'),
+        assertDirectory(root.account, 'context account directory'),
         assertDirectory(root.session, 'context session directory'),
       ])
     } catch (error: unknown) {

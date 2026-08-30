@@ -6,6 +6,7 @@ import type { CompactionAuditRecord } from 'dsh-luban-core'
 import { asSessionId } from 'dsh-luban-core'
 import { ContextArchiveRepository } from '../src/archive.js'
 import { parseConfig } from '../src/config.js'
+import { ALICE, BOB } from './account-sessions.js'
 
 describe('ContextArchiveRepository', () => {
   let directory = ''
@@ -22,6 +23,7 @@ describe('ContextArchiveRepository', () => {
     const repository = new ContextArchiveRepository({
       workspace: directory,
       archiveDir: '.luban/context-archive',
+      accountId: ALICE,
       sessionId: asSessionId('session/unsafe'),
       clock: { now: (): number => 123 },
     })
@@ -29,7 +31,7 @@ describe('ContextArchiveRepository', () => {
       { startSeq: 1, endSeq: 3, estTokens: 30, topic: 'credentials' },
       'Decision: keep API token=super-secret and constraint A',
     )
-    expect(path).toMatch(/^\.luban\/context-archive\/session_unsafe-[a-f0-9]{8}\/seg-/u)
+    expect(path).toMatch(/^\.luban\/context-archive\/alice\/session_unsafe-[a-f0-9]{8}\/seg-/u)
     const replay = await repository.replay(1, 3)
     expect(replay).toContain('constraint A')
     expect(replay).not.toContain('super-secret')
@@ -47,6 +49,7 @@ describe('ContextArchiveRepository', () => {
         new ContextArchiveRepository({
           workspace: directory,
           archiveDir: '../outside',
+          accountId: ALICE,
           sessionId: asSessionId('session'),
           clock: { now: (): number => 1 },
         }),
@@ -65,6 +68,7 @@ describe('ContextArchiveRepository', () => {
     const repository = new ContextArchiveRepository({
       workspace,
       archiveDir: '.luban/context-archive',
+      accountId: ALICE,
       sessionId: asSessionId('linked-root'),
       clock: { now: (): number => 1 },
     })
@@ -82,11 +86,18 @@ describe('ContextArchiveRepository', () => {
     const repository = new ContextArchiveRepository({
       workspace,
       archiveDir: '.luban/context-archive',
+      accountId: ALICE,
       sessionId: asSessionId('identity-change'),
       clock: { now: (): number => 1 },
     })
     await expect(repository.entries()).resolves.toEqual([])
-    const sessionDirectory = join(workspace, '.luban', 'context-archive', 'identity-change')
+    const sessionDirectory = join(
+      workspace,
+      '.luban',
+      'context-archive',
+      'alice',
+      'identity-change',
+    )
     await rename(sessionDirectory, `${sessionDirectory}-original`)
     await symlink(outside, sessionDirectory, process.platform === 'win32' ? 'junction' : 'dir')
 
@@ -100,6 +111,7 @@ describe('ContextArchiveRepository', () => {
     const repository = new ContextArchiveRepository({
       workspace: directory,
       archiveDir: '.luban/context-archive',
+      accountId: ALICE,
       sessionId: asSessionId('multi-round'),
       clock: { now: (): number => 123 },
     })
@@ -122,10 +134,12 @@ describe('ContextArchiveRepository', () => {
     const options = {
       workspace: directory,
       archiveDir: '.luban/context-archive',
+      accountId: ALICE,
       sessionId,
       clock: { now: (): number => 123 },
     } as const
     const captured: CompactionAuditRecord = {
+      accountId: ALICE,
       sessionId,
       at: 123,
       strategyId: 'custom',
@@ -159,6 +173,7 @@ describe('ContextArchiveRepository', () => {
     await expect(new ContextArchiveRepository(options).audit()).resolves.toEqual([captured])
 
     const legacyRecord = {
+      accountId: ALICE,
       sessionId,
       at: 100,
       strategyId: 'legacy-strategy',
@@ -173,7 +188,14 @@ describe('ContextArchiveRepository', () => {
         strategyId: 'legacy-strategy',
       },
     }
-    const auditPath = join(directory, '.luban', 'context-archive', String(sessionId), 'audit.json')
+    const auditPath = join(
+      directory,
+      '.luban',
+      'context-archive',
+      'alice',
+      String(sessionId),
+      'audit.json',
+    )
     await writeFile(auditPath, JSON.stringify([legacyRecord]), 'utf8')
     const legacyRepository = new ContextArchiveRepository(options)
     const [decodedLegacy] = await legacyRepository.audit()
@@ -186,5 +208,97 @@ describe('ContextArchiveRepository', () => {
       { surfaceSnapshots: { kind: 'legacy' } },
       { surfaceSnapshots: { kind: 'captured' } },
     ])
+  })
+
+  it('partitions identical workspace/session paths by account and refuses cross-account replay', async () => {
+    const sessionId = asSessionId('shared-session-name')
+    const alice = new ContextArchiveRepository({
+      workspace: directory,
+      archiveDir: '.luban/context-archive',
+      accountId: ALICE,
+      sessionId,
+      clock: { now: (): number => 1 },
+    })
+    const bob = new ContextArchiveRepository({
+      workspace: directory,
+      archiveDir: '.luban/context-archive',
+      accountId: BOB,
+      sessionId,
+      clock: { now: (): number => 2 },
+    })
+
+    const alicePath = await alice.archive(
+      { startSeq: 0, endSeq: 0, estTokens: 1 },
+      'alice-only context',
+    )
+    const bobPath = await bob.archive({ startSeq: 0, endSeq: 0, estTokens: 1 }, 'bob-only context')
+
+    expect(alicePath).toContain('/alice/shared-session-name/')
+    expect(bobPath).toContain('/bob/shared-session-name/')
+    expect(await alice.replayPath(alicePath)).toContain('alice-only')
+    expect(await bob.replayPath(bobPath)).toContain('bob-only')
+    await expect(bob.replayPath(alicePath)).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+    expect((await alice.entries()).every((entry) => entry.accountId === ALICE)).toBe(true)
+    expect((await bob.entries()).every((entry) => entry.accountId === BOB)).toBe(true)
+  })
+
+  it('does not auto-assign legacy index or audit rows that lack accountId', async () => {
+    const sessionId = asSessionId('unowned-legacy')
+    const sessionDirectory = join(
+      directory,
+      '.luban',
+      'context-archive',
+      'alice',
+      String(sessionId),
+    )
+    await mkdir(sessionDirectory, { recursive: true })
+    await writeFile(
+      join(sessionDirectory, 'index.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        entries: [
+          {
+            startSeq: 0,
+            endSeq: 0,
+            estTokens: 1,
+            path: '.luban/context-archive/alice/unowned-legacy/seg.md',
+            sha256: 'legacy',
+            createdAt: 1,
+          },
+        ],
+      }),
+      'utf8',
+    )
+    await writeFile(
+      join(sessionDirectory, 'audit.json'),
+      JSON.stringify([
+        {
+          sessionId,
+          at: 1,
+          strategyId: 'legacy',
+          beforeTokens: 1,
+          afterTokens: 1,
+          archiveFiles: [],
+          plan: {
+            keep: [],
+            summarize: [],
+            archive: [],
+            budgetTokens: 1,
+            strategyId: 'legacy',
+          },
+        },
+      ]),
+      'utf8',
+    )
+
+    const repository = new ContextArchiveRepository({
+      workspace: directory,
+      archiveDir: '.luban/context-archive',
+      accountId: ALICE,
+      sessionId,
+      clock: { now: (): number => 2 },
+    })
+    await expect(repository.entries()).resolves.toEqual([])
+    await expect(repository.audit()).resolves.toEqual([])
   })
 })

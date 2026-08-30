@@ -1,11 +1,15 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { AuthService, LubanEventMap, TelemetryAggregator } from 'dsh-luban-core'
+import type { AuthService, TelemetryAggregator } from 'dsh-luban-core'
 import { LubanError, modulePrefix, systemClock } from 'dsh-luban-core'
 import { Config as ConfigSchema, type Config as ContextConfig, parseConfig } from './config.js'
 import { DshCompactionContextFactory, DshCompactionCoordinator } from './dsh-context.js'
-import { DefaultCompactionEngine, type CompactionEngineWithReplay } from './engine.js'
+import {
+  DefaultCompactionEngine,
+  type AccountCompactionDoneEvent,
+  type CompactionEngineWithReplay,
+} from './engine.js'
 import { ContextHttpApi } from './http-api.js'
 import {
   SummarizeStrategy,
@@ -19,7 +23,7 @@ declare module '@deepseek-ai/cordis' {
   }
 
   interface Events {
-    'luban.compaction.done'(payload: LubanEventMap['luban.compaction.done']): void
+    'luban.compaction.done'(payload: AccountCompactionDoneEvent): void
   }
 }
 
@@ -39,6 +43,7 @@ export {
 } from './dsh-context.js'
 export { DefaultCompactionEngine } from './engine.js'
 export type {
+  AccountCompactionDoneEvent,
   CompactionCadence,
   CompactionContextFactory,
   CompactionEngineWithReplay,
@@ -64,7 +69,8 @@ export function apply(ctx: Context, input: Partial<ContextConfig> = {}): void {
   }
   const engine = new DefaultCompactionEngine({
     config,
-    factory: new DshCompactionContextFactory(ctx.agents, config, systemClock),
+    factory: new DshCompactionContextFactory(ctx.agents, config, systemClock, auth.accountSessions),
+    accountSessions: auth.accountSessions,
     clock: systemClock,
     events: {
       emit: (_event, payload): void => ctx.emit('luban.compaction.done', payload),

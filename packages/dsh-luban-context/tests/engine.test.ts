@@ -21,6 +21,7 @@ import {
   SummarizeVirtualFileStrategy,
   VirtualFileStrategy,
 } from '../src/strategies.js'
+import { ALICE, BOB, memoryAccountSessions } from './account-sessions.js'
 
 const config: Config = {
   trigger: { ratio: 0.8, minGapRounds: 2 },
@@ -82,27 +83,32 @@ describe('DefaultCompactionEngine', () => {
   function harness(activeConfig: Config = config): {
     readonly engine: DefaultCompactionEngine
     readonly inject: ReturnType<typeof vi.fn>
+    readonly accountSessions: ReturnType<typeof memoryAccountSessions>
   } {
     const repositories = new Map<string, ContextArchiveRepository>()
+    const accountSessions = memoryAccountSessions()
     const inject = vi
       .fn<(summary: string, files: readonly string[]) => Promise<void>>()
       .mockResolvedValue()
     const engine = new DefaultCompactionEngine({
       config: activeConfig,
+      accountSessions,
       clock: { now: (): number => 1000 },
       factory: {
-        create: (ref): Promise<CompactionWorkspace> => {
+        create: (ref, accountId): Promise<CompactionWorkspace> => {
           let repository = repositories.get(ref.id)
           if (repository === undefined) {
             repository = new ContextArchiveRepository({
               workspace: directory,
               archiveDir: activeConfig.archiveDir,
+              accountId,
               sessionId: ref.id,
               clock: { now: (): number => 1000 },
             })
             repositories.set(ref.id, repository)
           }
           return Promise.resolve({
+            accountId,
             repository,
             snapshotSurface: (): CompactionSurfaceSnapshotIndex => ({
               totalTokens: ref.segments.reduce(
@@ -130,42 +136,52 @@ describe('DefaultCompactionEngine', () => {
     engine.register(new SummarizeStrategy())
     engine.register(new VirtualFileStrategy())
     engine.register(new SummarizeVirtualFileStrategy())
-    return { engine, inject }
+    return { engine, inject, accountSessions }
   }
 
   it('waits for threshold and the configured number of turn boundaries, then audits', async () => {
-    const { engine, inject } = harness()
-    await engine.maybeCompact(session(), telemetry(0.9))
-    await expect(engine.audit(session().id)).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
-    await engine.maybeCompact(session(), telemetry(0.9))
+    const { engine, inject, accountSessions } = harness()
+    const activeSession = session()
+    await accountSessions.bind(ALICE, activeSession.id)
+    await engine.maybeCompact(activeSession, telemetry(0.9))
+    await expect(engine.audit(activeSession.id)).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+    await engine.maybeCompact(activeSession, telemetry(0.9))
     expect(inject).toHaveBeenCalledTimes(1)
-    const records = await engine.audit(session().id)
+    const records = await engine.audit(activeSession.id)
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({
       strategyId: 'summarize+virtualfile',
       beforeTokens: 40,
     })
-    expect(await engine.archives(session().id)).toHaveLength(3)
+    expect(records[0]?.accountId).toBe(ALICE)
+    expect(await engine.archives(activeSession.id)).toHaveLength(3)
 
-    await engine.maybeCompact(session(), telemetry(0.9))
-    expect(await engine.audit(session().id)).toHaveLength(1)
+    await engine.maybeCompact(activeSession, telemetry(0.9))
+    expect(await engine.audit(activeSession.id)).toHaveLength(1)
   })
 
-  it('uses the more aggressive night cadence and allows explicit scope marking', () => {
-    const { engine } = harness()
+  it('uses the more aggressive night cadence and allows explicit scope marking', async () => {
+    const { engine, accountSessions } = harness()
     expect(engine.profile('day')).toMatchObject({ thresholdRatio: 0.8, keepRecentTokens: 15 })
     expect(engine.profile('night')).toMatchObject({ thresholdRatio: 0.7, keepRecentTokens: 10 })
-    engine.markScope(asSessionId('manual-night'), 'night')
+    const sessionId = asSessionId('manual-night')
+    await accountSessions.bind(ALICE, sessionId)
+    await engine.markScope(sessionId, 'night', ALICE)
+    await expect(engine.markScope(sessionId, 'day', BOB)).rejects.toMatchObject({
+      code: 'E_ACCOUNT_SCOPE_MISMATCH',
+    })
   })
 
   it('retries once and degrades to archive-only with an auditable strategy id', async () => {
     const activeConfig = { ...config, strategy: 'always-fail' }
-    const { engine } = harness(activeConfig)
+    const { engine, accountSessions } = harness(activeConfig)
     const failing = new AlwaysFailStrategy()
     engine.register(failing)
     engine.use('always-fail')
-    await engine.maybeCompact(session('fallback'), telemetry(0.9))
-    await engine.maybeCompact(session('fallback'), telemetry(0.9))
+    const fallbackSession = session('fallback')
+    await accountSessions.bind(ALICE, fallbackSession.id)
+    await engine.maybeCompact(fallbackSession, telemetry(0.9))
+    await engine.maybeCompact(fallbackSession, telemetry(0.9))
     expect(failing.executeCount).toHaveBeenCalledTimes(2)
     expect((await engine.audit(asSessionId('fallback')))[0]?.strategyId).toBe(
       'always-fail:archive-fallback',
@@ -174,7 +190,7 @@ describe('DefaultCompactionEngine', () => {
   })
 
   it('executes custom strategies without extra contracts and ignores unknown telemetry', async () => {
-    const { engine } = harness()
+    const { engine, accountSessions } = harness()
     const execute = vi.fn<CompactionStrategy['execute']>(() =>
       Promise.resolve({
         beforeTokens: 40,
@@ -189,10 +205,12 @@ describe('DefaultCompactionEngine', () => {
     }
     const unregister = engine.register(custom)
     engine.use('custom')
-    await engine.maybeCompact(session('custom'), telemetry('unknown'))
-    await engine.maybeCompact(session('custom'), telemetry('unknown'))
+    const customSession = session('custom')
+    await accountSessions.bind(ALICE, customSession.id)
+    await engine.maybeCompact(customSession, telemetry('unknown'))
+    await engine.maybeCompact(customSession, telemetry('unknown'))
     await expect(engine.audit(asSessionId('custom'))).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
-    await engine.maybeCompact(session('custom'), telemetry(0.9))
+    await engine.maybeCompact(customSession, telemetry(0.9))
     expect(execute).toHaveBeenCalledOnce()
     const [record] = await engine.audit(asSessionId('custom'))
     expect(record?.surfaceSnapshots).toMatchObject({
@@ -202,5 +220,26 @@ describe('DefaultCompactionEngine', () => {
     })
     unregister()
     expect(() => engine.use('custom')).toThrow(/not registered/u)
+  })
+
+  it('skips unbound legacy sessions and rejects cross-account history access', async () => {
+    const { engine, inject, accountSessions } = harness({
+      ...config,
+      trigger: { ...config.trigger, minGapRounds: 1 },
+    })
+    const legacy = session('unbound-legacy')
+    await engine.maybeCompact(legacy, telemetry(0.9))
+    expect(inject).not.toHaveBeenCalled()
+    await expect(engine.audit(legacy.id, ALICE)).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+
+    const aliceSession = session('alice-owned')
+    await accountSessions.bind(ALICE, aliceSession.id)
+    await engine.maybeCompact(aliceSession, telemetry(0.9))
+    await expect(engine.audit(aliceSession.id, BOB)).rejects.toMatchObject({
+      code: 'E_ACCOUNT_SCOPE_MISMATCH',
+    })
+    await expect(engine.archives(aliceSession.id, BOB)).rejects.toMatchObject({
+      code: 'E_ACCOUNT_SCOPE_MISMATCH',
+    })
   })
 })

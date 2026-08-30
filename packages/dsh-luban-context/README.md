@@ -8,7 +8,7 @@ Auditable context compaction for DSH. The plugin compacts only at an idle turn b
 
 - **M08-F001** — zero-intrusion `CompactionStrategy` registration with standalone summarize, virtual-file, and composite strategies.
 - **M08-F002** — exact-session telemetry threshold plus minimum-turn-gap triggering; a DSH maintenance task guarantees an idle boundary and replaces only a contiguous old surface prefix.
-- **M08-F003** — redacted `.luban/context-archive/<session>/seg-*.md` files with checksummed `index.json` lookup.
+- **M08-F003** — account/session-partitioned `.luban/context-archive/<account>/<session>/seg-*.md` files with checksummed `index.json` lookup.
 - **M08-F004** — durable `audit.json`, authenticated audit/index routes, and checksum-verified segment replay.
 - **M08-F005** — separate day/night cadence; `luban-night-*` sessions select the aggressive profile automatically and schedulers can call `markScope()` or the scope API.
 
@@ -40,7 +40,7 @@ After a session crosses its profile threshold, inspect its decisions and replay 
 curl -b cookies.txt http://127.0.0.1:3081/luban-context/sessions/SESSION_ID/audit
 curl -b cookies.txt http://127.0.0.1:3081/luban-context/sessions/SESSION_ID/archives
 curl -b cookies.txt 'http://127.0.0.1:3081/luban-context/sessions/SESSION_ID/replay?startSeq=0&endSeq=3'
-curl -b cookies.txt --get --data-urlencode 'path=.luban/context-archive/SESSION/seg-INDEX-HASH.md' \
+curl -b cookies.txt --get --data-urlencode 'path=.luban/context-archive/ACCOUNT/SESSION/seg-INDEX-HASH.md' \
   http://127.0.0.1:3081/luban-context/sessions/SESSION_ID/replay
 ```
 
@@ -66,7 +66,7 @@ The first two responses expose the chosen strategy, token estimates, compaction 
 
 ## Runtime behavior
 
-When an agent becomes idle, the coordinator claims a DSH maintenance boundary, requests a fresh `lubanTelemetry.snapshotFor(sessionId)`, and calls the selected strategy. The targeted read bypasses the global HUD cache, so another initiator/running/newest agent cannot supply the ratio for this session. The default composite strategy:
+When an agent becomes idle, the coordinator claims a DSH maintenance boundary, requests a fresh `lubanTelemetry.snapshotFor(sessionId)`, and calls the selected strategy. Before any archive or session-surface mutation, the engine resolves the session owner through M01 `accountSessions`; an unbound legacy session is skipped and is not assigned to the currently logged-in account. The targeted read bypasses the global HUD cache, so another initiator/running/newest agent cannot supply the ratio for this session. The default composite strategy:
 
 1. keeps the newest complete surface messages within the token budget;
 2. archives the old prefix after credential-pattern redaction;
@@ -79,7 +79,7 @@ During plugin disposal, new maintenance and HTTP work fail closed, pre-engine sa
 
 ## Strategy API and night coordination
 
-Call `lubanCompaction.register(strategy)` to add a strategy and dispose the returned function to unregister it. `use(id, { taskScope: 'day' | 'night' })` switches one profile without changing the engine. `markScope(sessionId, 'night')` gives schedulers an explicit boundary; taskboard sessions named `luban-night-*` are recognized automatically.
+Call `lubanCompaction.register(strategy)` to add a strategy and dispose the returned function to unregister it. `use(id, { taskScope: 'day' | 'night' })` switches one profile without changing the engine. `await markScope(sessionId, 'night', accountId)` gives authenticated schedulers an explicit boundary after verifying M01 session ownership; taskboard sessions named `luban-night-*` are recognized automatically.
 
 ## Audit and replay API
 
@@ -97,9 +97,8 @@ idempotent while preserving older generations that reused the same temporary sur
 
 ## Persistence and stability
 
-- Archives, indexes, and audits use atomic JSON replacement. Archive, audit, replay,
-  and scope routes are intended to resolve sessions within the current M01
-  `accountId`, so another account cannot address them by session id.
+- Archives, indexes, and audits use atomic JSON replacement under an account/session namespace. New index and audit rows persist `accountId`; legacy rows without an explicitly migrated owner remain invisible.
+- Audit, archive, replay, and scope routes derive `accountId` only from M01 authentication and verify the target session against M01's persistent session map. A body or query parameter cannot override ownership, and cross-account or unbound session ids return not found.
 - Session ids and paths are normalized and checked against their workspace roots.
 - Common API keys, bearer tokens, passwords, private keys, and platform token formats are redacted before archive or summary injection.
 - Original DSH events remain in the append-only durable log; only the model-visible surface is replaced, enabling explanation and replay.

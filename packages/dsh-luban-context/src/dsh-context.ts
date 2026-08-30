@@ -3,6 +3,8 @@ import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {
+  AccountId,
+  AccountSessionRegistry,
   Clock,
   CompactionSurfaceSnapshotIndex,
   ContextSegment,
@@ -81,6 +83,7 @@ function importantLines(content: string): readonly string[] {
 
 /** DSH session adapter: reads the live surface and replaces an old prefix with a cited summary node. */
 export class DshCompactionContext implements ReadableCompactionContext {
+  public readonly accountId: AccountId
   public readonly sessionId: ReturnType<typeof asSessionId>
   public readonly archiveDir: string
   readonly #session: Session
@@ -90,11 +93,13 @@ export class DshCompactionContext implements ReadableCompactionContext {
 
   public constructor(options: {
     readonly session: Session
+    readonly accountId: AccountId
     readonly snapshots: readonly SegmentSnapshot[]
     readonly repository: ContextArchiveRepository
     readonly archiveDir: string
   }) {
     this.#session = options.session
+    this.accountId = options.accountId
     this.#snapshots = options.snapshots
     this.#repository = options.repository
     this.sessionId = asSessionId(options.session.id)
@@ -197,14 +202,22 @@ export class DshCompactionContextFactory implements CompactionContextFactory {
   readonly #agents: AgentRegistry
   readonly #config: Config
   readonly #clock: Clock
+  readonly #accountSessions: AccountSessionRegistry
 
-  public constructor(agents: AgentRegistry, config: Config, clock: Clock) {
+  public constructor(
+    agents: AgentRegistry,
+    config: Config,
+    clock: Clock,
+    accountSessions: AccountSessionRegistry,
+  ) {
     this.#agents = agents
     this.#config = config
     this.#clock = clock
+    this.#accountSessions = accountSessions
   }
 
-  public create(session: SessionRef): Promise<CompactionWorkspace> {
+  public async create(session: SessionRef, accountId: AccountId): Promise<CompactionWorkspace> {
+    await this.#assertOwner(session.id, accountId)
     const agent = this.#agents.get(SessionId(session.id))
     if (agent === undefined)
       throw new LubanError('E_NOT_FOUND', `Agent ${session.id} is not active`)
@@ -214,33 +227,50 @@ export class DshCompactionContextFactory implements CompactionContextFactory {
     const repository = new ContextArchiveRepository({
       workspace,
       archiveDir: this.#config.archiveDir,
+      accountId,
       sessionId: session.id,
       clock: this.#clock,
     })
     const context = new DshCompactionContext({
       session: agent.session,
+      accountId,
       snapshots: segmentSnapshots(agent.session),
       repository,
       archiveDir: resolve(workspace, this.#config.archiveDir),
     })
-    return Promise.resolve({
+    return {
+      accountId,
       repository,
       context,
       snapshotSurface: (): CompactionSurfaceSnapshotIndex => context.snapshotSurface(),
+    }
+  }
+
+  public async open(
+    sessionId: ReturnType<typeof asSessionId>,
+    accountId: AccountId,
+  ): Promise<ContextArchiveRepository> {
+    await this.#assertOwner(sessionId, accountId)
+    const agent = this.#agents.get(SessionId(sessionId))
+    if (agent === undefined) throw new LubanError('E_NOT_FOUND', `Agent ${sessionId} is not active`)
+    return new ContextArchiveRepository({
+      workspace: resolve(agent.session.header.cwd ?? process.cwd()),
+      archiveDir: this.#config.archiveDir,
+      accountId,
+      sessionId,
+      clock: this.#clock,
     })
   }
 
-  public open(sessionId: ReturnType<typeof asSessionId>): Promise<ContextArchiveRepository> {
-    const agent = this.#agents.get(SessionId(sessionId))
-    if (agent === undefined) throw new LubanError('E_NOT_FOUND', `Agent ${sessionId} is not active`)
-    return Promise.resolve(
-      new ContextArchiveRepository({
-        workspace: resolve(agent.session.header.cwd ?? process.cwd()),
-        archiveDir: this.#config.archiveDir,
-        sessionId,
-        clock: this.#clock,
-      }),
-    )
+  async #assertOwner(
+    sessionId: ReturnType<typeof asSessionId>,
+    accountId: AccountId,
+  ): Promise<void> {
+    const owner = await this.#accountSessions.ownerOf(sessionId)
+    if (owner === null) throw new LubanError('E_NOT_FOUND', `Session ${sessionId} was not found`)
+    if (owner !== accountId) {
+      throw new LubanError('E_ACCOUNT_SCOPE_MISMATCH', `Session ${sessionId} was not found`)
+    }
   }
 }
 

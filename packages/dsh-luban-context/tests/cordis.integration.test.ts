@@ -5,14 +5,22 @@ import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type { AuthService, TelemetryAggregator } from 'dsh-luban-core'
+import type { AccountSessionRegistry, AuthService, TelemetryAggregator } from 'dsh-luban-core'
 import { asSessionId } from 'dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import plugin from '../src/index.js'
+import { ALICE, memoryAccountSessions } from './account-sessions.js'
 
-function authentication(): AuthService {
+function authentication(accountSessions: AccountSessionRegistry): AuthService {
   return {
-    middleware: () => () => Promise.resolve({ allowed: true, status: 200, user: 'tester' }),
+    middleware: () => () =>
+      Promise.resolve({
+        allowed: true,
+        status: 200,
+        user: 'tester',
+        account: { accountId: ALICE, username: 'tester', role: 'operator' },
+      }),
+    accountSessions,
   } as unknown as AuthService
 }
 
@@ -21,6 +29,7 @@ describe('Cordis integration', (): void => {
     const workspace = await mkdtemp(join(tmpdir(), 'luban-context-cordis-'))
     const context = new Context()
     const sessionId = SessionId('context-cordis-agent')
+    const accountSessions = memoryAccountSessions([[ALICE, asSessionId(sessionId)]])
     const append = vi.fn()
     const events = [1, 2, 3].map(
       (seq): SessionEvent =>
@@ -55,7 +64,7 @@ describe('Cordis integration', (): void => {
     const authFiber = context.plugin({
       name: 'luban-context-test-auth',
       apply(ctx: Context): void {
-        ctx.provide('lubanAuth', authentication())
+        ctx.provide('lubanAuth', authentication(accountSessions))
       },
     })
     const telemetryFiber = context.plugin({
@@ -98,6 +107,7 @@ describe('Cordis integration', (): void => {
       expect(audit?.afterTokens).toBeLessThan(audit?.beforeTokens ?? 0)
       expect(published).toEqual([
         {
+          accountId: ALICE,
           sessionId,
           strategy: 'summarize+virtualfile',
           beforeTokens: audit?.beforeTokens,

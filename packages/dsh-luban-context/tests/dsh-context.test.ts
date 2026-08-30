@@ -17,6 +17,7 @@ import {
 } from '../src/dsh-context.js'
 import { DefaultCompactionEngine, type CompactionEngineWithReplay } from '../src/engine.js'
 import { SummarizeVirtualFileStrategy } from '../src/strategies.js'
+import { ALICE, BOB, memoryAccountSessions } from './account-sessions.js'
 
 function maintenanceAgent(idValue: string): {
   readonly agent: Agent
@@ -89,6 +90,7 @@ describe('DSH compaction boundary', () => {
     } as unknown as Agent
     const agents = { get: (): Agent => agent } as unknown as AgentRegistry
     const clock: Clock = { now: (): number => 100 }
+    const accountSessions = memoryAccountSessions([[ALICE, asSessionId(id)]])
     const factory = new DshCompactionContextFactory(
       agents,
       {
@@ -99,9 +101,10 @@ describe('DSH compaction boundary', () => {
         nightProfile: { trigger: { ratio: 0.7 }, keepRecentTokens: 8 },
       },
       clock,
+      accountSessions,
     )
     const ref = sessionRefFromAgent(agent)
-    const workspace = await factory.create(ref)
+    const workspace = await factory.create(ref, ALICE)
     const strategy = new SummarizeVirtualFileStrategy()
     const result = await strategy.execute(
       strategy.plan({ segments: ref.segments, budgetTokens: 10 }),
@@ -118,7 +121,62 @@ describe('DSH compaction boundary', () => {
     const replay = await workspace.repository.replay(entry.startSeq, entry.endSeq)
     expect(replay).toContain('Requirement')
     expect(replay).toContain('[REDACTED]')
-    expect(await (await factory.open(ref.id)).entries()).toHaveLength(result.archiveFiles.length)
+    expect(await (await factory.open(ref.id, ALICE)).entries()).toHaveLength(
+      result.archiveFiles.length,
+    )
+  })
+
+  it('rejects account/session mismatches before a compaction context can inject', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'luban-dsh-context-account-'))
+    directories.push(directory)
+    const id = SessionId('alice-context-session')
+    const session = Session.create(id, [], {
+      version: SESSION_FORMAT_VERSION,
+      id,
+      createdAt: 1,
+      cwd: directory,
+    })
+    for (const text of ['old context', 'recent context']) {
+      session.append(
+        'user/message',
+        createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'plugin', plugin: 'test' },
+        }),
+        { surfaceOp: 'append' },
+      )
+    }
+    const originalSurface = [...session.surface.nodes]
+    const agent = { id, session, status: 'idle' } as unknown as Agent
+    const agents = { get: (): Agent => agent } as unknown as AgentRegistry
+    const activeConfig = {
+      trigger: { ratio: 0.8, minGapRounds: 1 },
+      strategy: 'summarize+virtualfile',
+      keepRecentTokens: 10,
+      archiveDir: '.luban/context-archive',
+      nightProfile: { trigger: { ratio: 0.7 }, keepRecentTokens: 8 },
+    } as const
+    const aliceFactory = new DshCompactionContextFactory(
+      agents,
+      activeConfig,
+      { now: (): number => 100 },
+      memoryAccountSessions([[ALICE, asSessionId(id)]]),
+    )
+    const unboundFactory = new DshCompactionContextFactory(
+      agents,
+      activeConfig,
+      { now: (): number => 100 },
+      memoryAccountSessions(),
+    )
+    const ref = sessionRefFromAgent(agent)
+
+    await expect(aliceFactory.create(ref, BOB)).rejects.toMatchObject({
+      code: 'E_ACCOUNT_SCOPE_MISMATCH',
+    })
+    await expect(unboundFactory.create(ref, ALICE)).rejects.toMatchObject({
+      code: 'E_NOT_FOUND',
+    })
+    expect(session.surface.nodes).toEqual(originalSurface)
   })
 
   it('exposes deterministic agent-facing retrieval of an injected archive path', async () => {
@@ -227,11 +285,16 @@ describe('DSH compaction boundary', () => {
         archiveDir: '.luban/context-archive',
         nightProfile: { trigger: { ratio: 0.7 }, keepRecentTokens: 8 },
       } as const
-      const factory = new DshCompactionContextFactory(context.agents, activeConfig, {
-        now: (): number => 100,
-      })
+      const factory = new DshCompactionContextFactory(
+        context.agents,
+        activeConfig,
+        {
+          now: (): number => 100,
+        },
+        memoryAccountSessions([[ALICE, asSessionId(id)]]),
+      )
       const ref = sessionRefFromAgent(agent)
-      const workspace = await factory.create(ref)
+      const workspace = await factory.create(ref, ALICE)
       const strategy = new SummarizeVirtualFileStrategy()
       await strategy.execute(
         strategy.plan({ segments: ref.segments, budgetTokens: 10 }),
@@ -316,12 +379,19 @@ describe('DSH compaction boundary', () => {
       archiveDir: '.luban/context-archive',
       nightProfile: { trigger: { ratio: 0.7 }, keepRecentTokens: 8 },
     } as const
-    const factory = new DshCompactionContextFactory(agents, activeConfig, {
-      now: (): number => 100,
-    })
+    const accountSessions = memoryAccountSessions([[ALICE, asSessionId(id)]])
+    const factory = new DshCompactionContextFactory(
+      agents,
+      activeConfig,
+      {
+        now: (): number => 100,
+      },
+      accountSessions,
+    )
     const engine = new DefaultCompactionEngine({
       config: activeConfig,
       factory,
+      accountSessions,
       clock: { now: (): number => 100 },
     })
     engine.register(new SummarizeVirtualFileStrategy())
@@ -357,7 +427,7 @@ describe('DSH compaction boundary', () => {
     expect(after.totalTokens).toBe(
       after.entries.reduce((total, entry): number => total + entry.segment.estTokens, 0),
     )
-    expect(await (await factory.open(asSessionId(id))).audit()).toEqual([record])
+    expect(await (await factory.open(asSessionId(id), ALICE)).audit()).toEqual([record])
   })
 
   it('runs maintenance with a fresh snapshot scoped to the exact idle agent', async (): Promise<void> => {

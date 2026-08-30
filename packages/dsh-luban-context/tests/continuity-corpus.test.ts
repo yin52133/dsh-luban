@@ -15,6 +15,7 @@ import {
   SummarizeVirtualFileStrategy,
   VirtualFileStrategy,
 } from '../src/strategies.js'
+import { ALICE, memoryAccountSessions } from './account-sessions.js'
 
 const CONFIG: Config = {
   trigger: { ratio: 0.8, minGapRounds: 1 },
@@ -84,8 +85,14 @@ describe('deterministic bilingual compaction continuity corpus', (): void => {
         candidate === id ? agent : undefined,
     } as unknown as AgentRegistry
     const clock: Clock = { now: (): number => 100 }
-    const factory = new DshCompactionContextFactory(agents, CONFIG, clock)
-    const engine = new DefaultCompactionEngine({ config: CONFIG, factory, clock })
+    const accountSessions = memoryAccountSessions([[ALICE, coreId]])
+    const factory = new DshCompactionContextFactory(agents, CONFIG, clock, accountSessions)
+    const engine = new DefaultCompactionEngine({
+      config: CONFIG,
+      factory,
+      accountSessions,
+      clock,
+    })
     engine.register(new SummarizeStrategy())
     engine.register(new VirtualFileStrategy())
     engine.register(new SummarizeVirtualFileStrategy())
