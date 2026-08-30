@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { ChannelAdapter, ChannelEndpoint } from '@luban/core'
 import { asSessionId } from '@luban/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HotplugWatcher } from '../src/hotplug.js'
@@ -69,6 +70,105 @@ describe('serial adapter and hot-plug polling', (): void => {
       added: [{ id: 'serial:COM4' }],
       removed: [{ id: 'serial:COM3' }],
     })
+  })
+
+  it('drains an in-flight poll and suppresses publication after stop', async (): Promise<void> => {
+    let releaseList!: (endpoints: readonly ChannelEndpoint[]) => void
+    const listing = new Promise<readonly ChannelEndpoint[]>((resolve): void => {
+      releaseList = resolve
+    })
+    const adapter: ChannelAdapter = {
+      kind: 'serial',
+      list: (): Promise<readonly ChannelEndpoint[]> => listing,
+      open: (): Promise<never> => Promise.reject(new Error('not used')),
+    }
+    const watcher = new HotplugWatcher(adapter, 1000)
+    const changes: unknown[] = []
+    watcher.subscribe((change): void => {
+      changes.push(change)
+    })
+    watcher.start()
+    await Promise.resolve()
+
+    let stopped = false
+    const stopping = watcher.stop().then((): void => {
+      stopped = true
+    })
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    releaseList([
+      {
+        kind: 'serial',
+        id: 'serial:COM10',
+        label: 'COM10',
+        params: { port: 'COM10' },
+      },
+    ])
+    await stopping
+
+    expect(changes).toEqual([])
+    expect(watcher.endpoints()).toEqual([])
+  })
+
+  it('enforces serial adapter cancellation and closes a late connection', async (): Promise<void> => {
+    const provider = new FakeSerialProvider()
+    const adapter = new SerialChannelAdapter(provider)
+    const endpoint = (await adapter.list())[0]
+    if (endpoint === undefined) throw new Error('missing fake endpoint')
+    let releaseOpen!: () => void
+    provider.openBarrier = new Promise<void>((resolve): void => {
+      releaseOpen = resolve
+    })
+    const controller = new AbortController()
+    const opening = adapter.open(endpoint, { signal: controller.signal, timeoutMs: 5000 })
+    await flush()
+
+    controller.abort()
+    await expect(opening).rejects.toMatchObject({
+      code: 'E_CHANNEL_UNAVAILABLE',
+      message: 'Serial open was cancelled',
+    })
+    releaseOpen()
+    await flush()
+
+    expect(provider.connections[0]?.closeCalls).toBe(1)
+    expect(provider.connections[0]?.closed).toBe(true)
+  })
+
+  it('enforces serial adapter timeout and closes a late connection', async (): Promise<void> => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let releaseOpen: (() => void) | undefined
+    try {
+      const provider = new FakeSerialProvider()
+      const adapter = new SerialChannelAdapter(provider)
+      const endpoint = (await adapter.list())[0]
+      if (endpoint === undefined) throw new Error('missing fake endpoint')
+      provider.openBarrier = new Promise<void>((resolve): void => {
+        releaseOpen = resolve
+      })
+      const opening = adapter.open(endpoint, { timeoutMs: 100 })
+      await flush()
+      const rejected = expect(opening).rejects.toMatchObject({
+        code: 'E_TIMEOUT',
+        message: 'Serial open timed out',
+      })
+
+      await vi.advanceTimersByTimeAsync(100)
+      await rejected
+      const release = releaseOpen
+      if (release === undefined) throw new Error('serial open barrier was not installed')
+      release()
+      releaseOpen = undefined
+      await flush()
+
+      expect(provider.connections[0]?.closeCalls).toBe(1)
+      expect(provider.connections[0]?.closed).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      releaseOpen?.()
+      await vi.runAllTimersAsync()
+      vi.useRealTimers()
+    }
   })
 
   it('keeps the optional native module lazy and explains an unavailable binding', async (): Promise<void> => {
@@ -151,6 +251,47 @@ describe('serial adapter and hot-plug polling', (): void => {
     expect(closeCalls).toBe(1)
     completeOpen()
     expect(closeCalls).toBe(2)
+  })
+
+  it('bounds native serial write and close callbacks that never settle', async (): Promise<void> => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      class HangingCallbacksSerialPort {
+        public static list(): Promise<readonly { readonly path: string }[]> {
+          return Promise.resolve([{ path: 'COM11' }])
+        }
+
+        public open(callback: (error?: Error | null) => void): void {
+          callback()
+        }
+
+        public write(_data: Uint8Array, _callback: (error?: Error | null) => void): void {
+          void _data
+          void _callback
+        }
+
+        public close(_callback: (error?: Error | null) => void): void {
+          void _callback
+        }
+      }
+      const provider = new OptionalSerialPortProvider(() =>
+        Promise.resolve({ SerialPort: HangingCallbacksSerialPort }),
+      )
+      const connection = await provider.open('COM11', 115200)
+      const writing = connection.write(new Uint8Array([1]))
+      const writeRejected = expect(writing).rejects.toMatchObject({ code: 'E_TIMEOUT' })
+      await vi.advanceTimersByTimeAsync(10_000)
+      await writeRejected
+
+      const closing = connection.close()
+      const closeRejected = expect(closing).rejects.toMatchObject({ code: 'E_TIMEOUT' })
+      await vi.advanceTimersByTimeAsync(10_000)
+      await closeRejected
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      await vi.runAllTimersAsync()
+      vi.useRealTimers()
+    }
   })
 })
 

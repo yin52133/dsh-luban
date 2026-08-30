@@ -9,6 +9,9 @@ import { LubanError } from '@luban/core'
 import { BoundedAsyncQueue } from './queue.js'
 import type { SerialConnection, SerialPortDescriptor, SerialProvider } from './types.js'
 
+const DEFAULT_SERIAL_OPEN_TIMEOUT_MS = 10_000
+const SERIAL_CALLBACK_TIMEOUT_MS = 10_000
+
 interface SerialPortInstance {
   open(callback: (error?: Error | null) => void): void
   write(data: Uint8Array, callback: (error?: Error | null) => void): void
@@ -209,16 +212,105 @@ function abortRequested(signal: AbortSignal | undefined, abort: () => void): boo
   return true
 }
 
+function cancelledSerialOpen(): LubanError {
+  return new LubanError('E_CHANNEL_UNAVAILABLE', 'Serial open was cancelled', {
+    retriable: true,
+  })
+}
+
+function closeLateConnection(connection: SerialConnection): void {
+  try {
+    void connection.close().catch((): void => {
+      // The caller already failed closed and must not observe a late connection.
+    })
+  } catch {
+    // The caller already failed closed and must not observe a late connection.
+  }
+}
+
+async function boundedSerialOpen(
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  operation: (signal: AbortSignal) => Promise<SerialConnection>,
+): Promise<SerialConnection> {
+  if (isAborted(signal)) throw cancelledSerialOpen()
+  const controller = new AbortController()
+  let failure: LubanError | undefined
+  let rejectDeadline!: (error: LubanError) => void
+  const deadline = new Promise<never>((_resolve, reject): void => {
+    rejectDeadline = reject
+  })
+  const fail = (error: LubanError): void => {
+    if (failure !== undefined) return
+    failure = error
+    rejectDeadline(error)
+    controller.abort()
+  }
+  const abort = (): void => fail(cancelledSerialOpen())
+  signal?.addEventListener('abort', abort, { once: true })
+  const timer = setTimeout((): void => {
+    fail(new LubanError('E_TIMEOUT', 'Serial open timed out', { retriable: true }))
+  }, timeoutMs)
+  timer.unref()
+  const cleanup = (): void => {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', abort)
+  }
+  const opening = Promise.resolve()
+    .then((): Promise<SerialConnection> => operation(controller.signal))
+    .then(
+      (connection): SerialConnection => {
+        if (failure !== undefined) {
+          closeLateConnection(connection)
+          throw failure
+        }
+        return connection
+      },
+      (error: unknown): never => {
+        if (failure !== undefined) throw failure
+        throw error
+      },
+    )
+  try {
+    return await Promise.race([opening, deadline])
+  } finally {
+    cleanup()
+  }
+}
+
 function callbackOperation(
   invoke: (done: (error?: Error | null) => void) => void,
   message: string,
 ): Promise<void> {
   return new Promise<void>((resolve, reject): void => {
-    invoke((error): void => {
-      if (error === undefined || error === null) resolve()
-      else
-        reject(new LubanError('E_CHANNEL_UNAVAILABLE', message, { retriable: true, cause: error }))
-    })
+    let settled = false
+    const timer = setTimeout((): void => {
+      if (settled) return
+      settled = true
+      reject(new LubanError('E_TIMEOUT', `${message} timed out`, { retriable: true }))
+    }, SERIAL_CALLBACK_TIMEOUT_MS)
+    timer.unref()
+    try {
+      invoke((error): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (error === undefined || error === null) resolve()
+        else
+          reject(
+            new LubanError('E_CHANNEL_UNAVAILABLE', message, { retriable: true, cause: error }),
+          )
+      })
+    } catch (error: unknown) {
+      settled = true
+      clearTimeout(timer)
+      reject(
+        new LubanError('E_CHANNEL_UNAVAILABLE', message, {
+          retriable: true,
+          cause: error,
+        }),
+      )
+    }
   })
 }
 
@@ -359,20 +451,25 @@ export class SerialChannelAdapter implements ChannelAdapter {
   public async open(endpoint: ChannelEndpoint, options: OpenOptions): Promise<ChannelHandle> {
     if (endpoint.kind !== this.kind)
       throw new LubanError('E_INVALID_INPUT', 'Endpoint is not serial')
-    const current = await this.list()
-    const allowed = current.find((candidate): boolean => candidate.id === endpoint.id)
-    if (allowed === undefined || allowed.params.port !== endpoint.params.port) {
-      throw new LubanError('E_CHANNEL_UNAVAILABLE', 'Serial endpoint is no longer available', {
-        retriable: true,
-      })
+    const timeoutMs = options.timeoutMs ?? DEFAULT_SERIAL_OPEN_TIMEOUT_MS
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300_000) {
+      throw new LubanError('E_INVALID_INPUT', 'Serial timeout is invalid')
     }
     const baudRate = options.baudRate ?? this.#defaultBaud
     if (!Number.isSafeInteger(baudRate) || baudRate < 50 || baudRate > 12_000_000) {
       throw new LubanError('E_INVALID_INPUT', 'baudRate is outside the supported range')
     }
-    return new SerialHandle(
-      await this.#provider.open(allowed.params.port ?? '', baudRate, options.signal),
-    )
+    const connection = await boundedSerialOpen(timeoutMs, options.signal, async (signal) => {
+      const current = await this.list()
+      const allowed = current.find((candidate): boolean => candidate.id === endpoint.id)
+      if (allowed === undefined || allowed.params.port !== endpoint.params.port) {
+        throw new LubanError('E_CHANNEL_UNAVAILABLE', 'Serial endpoint is no longer available', {
+          retriable: true,
+        })
+      }
+      return this.#provider.open(allowed.params.port ?? '', baudRate, signal)
+    })
+    return new SerialHandle(connection)
   }
 
   /** Probe Windows' exclusive-open boundary immediately before a flasher takes ownership. */

@@ -299,8 +299,13 @@ export class DefaultWinDebugService implements WinDebugService {
   }
 
   public async dispose(): Promise<void> {
-    this.#hotplug?.stop()
+    const hotplug = this.#hotplug?.stop()
     this.#detachHotplug?.()
-    await Promise.allSettled([this.#gdb.stop(), this.#mcp.stop(), this.#hub.dispose()])
+    await Promise.allSettled([
+      ...(hotplug === undefined ? [] : [hotplug]),
+      this.#gdb.stop(),
+      this.#mcp.stop(),
+      this.#hub.dispose(),
+    ])
   }
 }
