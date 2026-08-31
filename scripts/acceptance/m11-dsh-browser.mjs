@@ -24,12 +24,17 @@ const parsed = parseArgs({
     profile: { type: 'string', default: 'web' },
     'dsh-port': { type: 'string', default: '42810' },
     'auth-port': { type: 'string', default: '42811' },
+    'dsh-entry': { type: 'string' },
   },
 })
 const output = resolve(required(parsed.values.output, '--output'))
 const profile = required(parsed.values.profile, '--profile')
 const dshPort = port(parsed.values['dsh-port'], '--dsh-port')
 const authPort = port(parsed.values['auth-port'], '--auth-port')
+const dshEntry =
+  parsed.values['dsh-entry'] === undefined
+    ? undefined
+    : resolve(required(parsed.values['dsh-entry'], '--dsh-entry'))
 if (dshPort === authPort || [dshPort, authPort].includes(CHALLENGE_PORT)) {
   throw new Error('Acceptance ports must be distinct')
 }
@@ -66,6 +71,7 @@ const child = startDsh({
   templateDirectory,
   overlayPath,
   password,
+  dshEntry,
 })
 const logs = []
 child.stdout?.on('data', (chunk) => logs.push(String(chunk)))
@@ -96,7 +102,10 @@ try {
 }
 
 if (operationError !== undefined) throw operationError
-assert(job?.status === 'succeeded', `Browser job finished as ${String(job?.status)}`)
+assert(
+  job?.status === 'succeeded',
+  `Browser job finished as ${String(job?.status)}: ${JSON.stringify(job)}`,
+)
 assert(job.result?.status === 'ok', 'Browser result is not ok')
 assert(job.result?.structured?.nonce === nonce, 'Browser result did not return the challenge nonce')
 assert(challenge.requestCount() >= 1, 'The real browser did not fetch the challenge')
@@ -185,10 +194,28 @@ function startDsh(input) {
     LUBAN_M11_BRIDGE_ENVIRONMENT: join(input.runtimeDirectory, 'uv-env'),
   }
   if (process.platform === 'win32') {
-    return spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'dsh.cmd', ...args], {
+    const entry =
+      input.dshEntry ??
+      resolve(
+        required(process.env.APPDATA, 'APPDATA'),
+        'npm',
+        'node_modules',
+        '@deepseek-ai',
+        'dsh',
+        'lib',
+        'bin.js',
+      )
+    return spawn(process.execPath, [entry, ...args], {
       cwd: repositoryRoot,
       env,
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  }
+  if (input.dshEntry !== undefined) {
+    return spawn(process.execPath, [input.dshEntry, ...args], {
+      cwd: repositoryRoot,
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
   }
