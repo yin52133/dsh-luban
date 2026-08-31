@@ -67,8 +67,8 @@ WantedBy=default.target
 `bootRestore: false`，M03 仍会在该 systemd 启动路径执行恢复。只有精确字符串 `1`
 生效，其他类 truthy 文本不取得覆盖语义。
 
-M09-F001 的真实验收按阶段执行。除 plan 外的阶段需 `--apply` 才记录进度；只有 install/cleanup
-修改 user unit，reboot 仍由用户在 runner 外明确执行：
+M09-F001 的一次性开机恢复验收按阶段执行。除 plan 外的阶段需 `--apply` 才记录进度；只有
+install/cleanup 修改 user unit，reboot 仍由用户在 runner 外明确执行：
 
 ```sh
 # Zero-write plan
@@ -96,6 +96,11 @@ node scripts/acceptance/m09-systemd-reboot.mjs cleanup --apply \
 enabled/active/running；重启后确认 boot ID 已变化、服务重新 active 且 profile 可以正常登录和使用。
 cleanup 只删除本次运行创建的 `dsh-luban.service` 及其验收文件。runner 不启用 linger，也不执行
 reboot、logout 或 disconnect；这些系统操作继续由用户单独授权和执行。
+
+真实开机恢复通过后，日常安装或配置验证不再重复整机重启。先运行正式 operator 的只读 install plan；
+若返回 `unit=exact`、`ready=true`，可直接幂等执行 `install --apply`，再用
+`systemctl --user restart dsh-luban.service`、`is-enabled`、`is-active` 和实际 HTTP 请求确认。此时
+cleanup 只是验收临时资源管理步骤，不是生产功能完成条件，也不需要为了重建相同 unit 先删除服务文件。
 
 6. **linger**：`sudo loginctl enable-linger <user>`——不登录桌面也让 user 级服务开机自启（R02 关键）。
 7. **认证初始化**：首启引导建管理员；`config.port` 自定义（默认 42600）。
