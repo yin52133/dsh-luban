@@ -94,6 +94,8 @@ session immediately.
 Tested with DeepSeek Harness `0.1.1-rc.2`, Cordis 4.0.1, and Node.js 22.19+.
 DSH rc2 does not expose global WebServer middleware, so this package is an
 outer sidecar by design rather than a route-local authentication plugin.
+Its native session API uses HTTP RPC plus SSE; rc2 registers no production
+WebSocket session route. Generic WebSocket upgrades still require a valid login.
 
 ## Platform Support
 

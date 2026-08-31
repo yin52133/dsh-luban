@@ -13,6 +13,7 @@
 | v0.5 | 2026-08-30 | Codex | 回填 canonical 登录入口本机验证 |
 | v0.6 | 2026-08-30 | Codex | 收敛为简单账号登录与账号上下文隔离，废弃安全加固目标 |
 | v0.7 | 2026-08-30 | Codex | 将来源地址降为临时诊断字段，不作为锁定、限速或审计验收 |
+| v0.8 | 2026-08-31 | Codex | 记录原生 DSH HTTP RPC/SSE 账号隔离实机验收 |
 
 ## 1. 概述与目标
 
@@ -132,12 +133,17 @@ M01-F001 ~ M01-F008 共 8 项；M01-F005 保留 ID 但状态为 `dropped`。
 
 - `AuthManager` 已覆盖首启、口令验证、会话过期、登出和全端下线；账户状态使用原子文件更新。
 - `AuthSidecar` 代理 HTTP、SSE 与 WebSocket；唯一 canonical 登录入口为 `/luban-auth/login`。
-- 后续实现以 `authenticateRequest()` 输出的账号身份作为 M01-F008 的唯一业务归属来源。
+- DSH 0.1.1-rc.2 的生产会话接口使用 HTTP RPC，变化通知使用 SSE；该版本没有注册
+  WebSocket 会话路由。sidecar 对通用 WebSocket upgrade 做登录门禁，不为不存在的会话帧协议
+  引入额外代理依赖。
+- `authenticateRequest()` 输出的账号身份是 M01-F008 的唯一业务归属来源；原生 DSH session
+  创建后立即绑定 owner，list/search、history/写操作和 SSE 事件按 owner 过滤。
 - `tests/cordis.integration.test.ts` 使用真实 Cordis Context 验证 `ctx.lubanAuth` 提供与 effect
   卸载；其余测试覆盖首启、登录/过期/登出和账号管理。
 - 本机 Edge 已渲染唯一正向入口 `/luban-auth/login`；`/luban/auth/login` 不是支持的路由。
-- 本地严格类型、ESLint、Prettier、构建、32 项测试及 pack 清单检查均通过；仍需在真实 Ubuntu
-  profile 完成启动、登录和业务 API smoke，可选反代兼容性另行抽查。
+- 本地严格类型、ESLint、构建及全仓测试通过；Ubuntu 真实 profile 已完成 Alice/Bob 原生
+  session 创建、列表隔离、自己的 history 可读和对方 history 拒绝。验收脚本为
+  `scripts/acceptance/m01-account-isolation.mjs`，直接证据保存在目标服务器 `.acceptance` 目录。
 
 ## 11. 开放问题
 

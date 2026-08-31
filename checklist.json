@@ -69,7 +69,7 @@
     }
   ],
   "requirements": [
-    { "id": "R01", "title": "Ubuntu 端可直接用网页操作 dsh", "modules": ["M01", "M09"], "status": "doing" },
+    { "id": "R01", "title": "Ubuntu 端可直接用网页操作 dsh", "modules": ["M01", "M09"], "status": "done" },
     { "id": "R02", "title": "tmux 等保活；重启后后台继续工作直到完成", "modules": ["M03"], "status": "blocked" },
     { "id": "R03", "title": "任务看板（todo/执行中/已完成）+ agent 自主领单", "modules": ["M02"], "status": "done" },
     { "id": "R04", "title": "注册到 dsh 插件市场", "modules": ["M12"], "status": "blocked" },
@@ -89,7 +89,7 @@
     { "id": "M01-F005", "requirement": "R01", "module": "M01", "title": "失败锁定与审计日志", "priority": "P1", "milestone": "MS1", "status": "dropped", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["安全加固范围已取消：爆破锁定、IP 限速和长期安全审计不再作为产品需求；ID 按规则保留"] },
     { "id": "M01-F006", "requirement": "R01", "module": "M01", "title": "双端部署适配（win/ubuntu 同一实现）", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-31", "notes": ["Windows 本地登录及 Ubuntu 24.04.4 隔离 profile 均已验证；Windows <client-lan-ip> 经限定来源的 LAN 规则访问 Ubuntu <server-lan-ip>:42600，完成 canonical /luban-auth/login 200、匿名 session.list 401、管理员登录 200、认证 session 200 与原生 session.list 200/RPC 对应检查。直接证据位于 <private-deploy-dir>/.acceptance/m01-lan-smoke.json（SHA-256 1d231367c481be0aac8df6761e178d783ae6132106ec1dd4f6ac51dc19b4e4f2）"] },
     { "id": "M01-F007", "requirement": "R01", "module": "M01", "title": "HTTPS/反代适配", "priority": "P3", "milestone": "MS4", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["作为可选部署兼容能力，反向代理下的 redirect 与 cookie 行为已通过集成测试；不作为安全加固 blocker"] },
-    { "id": "M01-F008", "requirement": "R01", "module": "M01", "title": "账号上下文隔离", "priority": "P0", "milestone": "MS1", "status": "doing", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["插件模块的 accountId 分区及 M09/M10/M11 缺口已补齐；最终审计确认 DSH 原生主 Web 的 session HTTP/WS 仍访问全局 session，且 Web 新建 session 未绑定 owner。修复并完成 Alice/Bob 原生 session 集成验证前保持 doing"] },
+    { "id": "M01-F008", "requirement": "R01", "module": "M01", "title": "账号上下文隔离", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-31", "notes": ["插件模块的 accountId 分区及 M09/M10/M11 归属链已补齐；DSH 0.1.1-rc.2 的生产会话面为 HTTP RPC + SSE，未注册 WebSocket 会话路由，sidecar 已覆盖原生 session 创建绑定、list/search 过滤、读写拒绝和事件过滤。Ubuntu 真实 profile 由 Alice(admin) 与临时 Bob 分别创建原生 session，双方 list 仅见自己的新 session、自己的 history 可读、对方 history 均返回 session-not-found；直接证据 <private-deploy-dir>/.acceptance/m01-account-isolation-20260831.json（SHA-256 7206dd58f89247823bb02f5455a763f4a5e29f3a4598e861ecf0d3698fc6d079）"] },
 
     { "id": "M02-F001", "requirement": "R03", "module": "M02", "title": "任务 CRUD 与状态机", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-30", "notes": ["状态机、软删除与乐观锁单元/API 测试通过；非法迁移返回 E_INVALID_TRANSITION，客户端不发请求并显示明确错误"] },
     { "id": "M02-F002", "requirement": "R03", "module": "M02", "title": "看板 Web UI（列视图/拖拽/过滤）", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M02-taskboard.md", "updatedAt": "2026-08-30", "notes": ["六列响应式 UI、过滤、版本化拖拽及触屏/键盘合法迁移控件测试通过；真实 ReactDOM 拖拽经 loopback HTTP API 即时回显，并由新建 JsonTaskStore 从 JSON ledger 重读为 done/version 4，直接覆盖即时落盘口径"] },
