@@ -208,6 +208,8 @@ describe('WindowsTaskKeepaliveAdapter', (): void => {
       args: ['/user', '/fo', 'csv', '/nh'],
     })
     expect(runner.createdXml[0]).toContain('<UserId>S-1-5-21-1000</UserId>')
+    expect(runner.createdXml[0]).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/u)
+    expect(runner.createdEncoding).toEqual(['utf16le-bom'])
     expect(
       runner.calls
         .filter((call) => call.command === 'schtasks.exe')

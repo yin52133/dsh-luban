@@ -376,6 +376,14 @@ describe('M03 Windows mounted keepalive acceptance', () => {
 
       expect(result.exitCode).toBe(0)
       expect(parseOutput(result)).toMatchObject({ stage: 'prepared' })
+      const profilePackage = JSON.parse(
+        await readFile(
+          join(value.runDir, 'dsh-home', 'profiles', 'win-debug', 'package.json'),
+          'utf8',
+        ),
+      )
+      expect(profilePackage.dependencies).toEqual({ 'dsh-luban-keepalive': '0.1.0' })
+      expect(profilePackage.dsh.profile.bundles).toEqual(['@deepseek-ai/dsh-base'])
       const profilePatch = await readFile(
         join(value.runDir, 'dsh-home', 'profiles', 'win-debug', 'cordis.patch.yml'),
         'utf8',

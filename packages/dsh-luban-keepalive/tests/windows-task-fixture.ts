@@ -22,6 +22,7 @@ export class FakeScheduledTaskRunner implements CommandRunner {
   public readonly tasks = new Map<string, string>()
   public readonly running = new Set<string>()
   public readonly createdXml: string[] = []
+  public readonly createdEncoding: string[] = []
   public failNextCreateAfterStore = false
   public failNextRun = false
   public failNextDelete = false
@@ -59,7 +60,12 @@ export class FakeScheduledTaskRunner implements CommandRunner {
       const path = valueAfter(args, '/XML')
       if (name === undefined || path === undefined) throw new Error('Invalid fake create call')
       if (this.tasks.has(name)) return result('', 1, 'ERROR: task already exists')
-      const xml = await readFile(path, 'utf8')
+      const bytes = await readFile(path)
+      const utf16LittleEndian = bytes[0] === 0xff && bytes[1] === 0xfe
+      const xml = utf16LittleEndian
+        ? bytes.subarray(2).toString('utf16le')
+        : bytes.toString('utf8').replace(/^\uFEFF/u, '')
+      this.createdEncoding.push(utf16LittleEndian ? 'utf16le-bom' : 'utf8')
       this.createdXml.push(xml)
       this.tasks.set(name, xml)
       if (this.failNextCreateAfterStore) {

@@ -349,11 +349,11 @@ async function prepareWorkspaceRuntime(runDir) {
     dependencies: { 'dsh-luban-keepalive': '0.1.0' },
     dsh: {
       profile: {
-        bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-luban-keepalive'],
+        bundles: ['@deepseek-ai/dsh-base'],
       },
     },
   }
-  const patchValue = `- insert:\n    - id: luban-keepalive\n      name: dsh-luban-keepalive\n      config:\n        strategy: service\n        patrolIntervalSec: 60\n        ledgerFile: ${JSON.stringify(join(runDir, 'keepalive-ledger.json'))}\n        bootRestore: true\n        alertToTaskboard: false\n`
+  const patchValue = `- insert:\n    - id: luban-keepalive\n      name: dsh-luban-keepalive\n      config:\n        strategy: service\n        patrolIntervalSec: 5\n        ledgerFile: ${JSON.stringify(join(runDir, 'keepalive-ledger.json'))}\n        bootRestore: true\n        alertToTaskboard: false\n`
   await ensureAcceptanceFile(join(profileRoot, 'package.json'), canonicalJson(packageValue))
   await ensureAcceptanceFile(join(profileRoot, 'cordis.patch.yml'), patchValue)
   await ensureAcceptanceJunction(
@@ -498,7 +498,27 @@ async function executeOperator(command, apply, context, environment) {
     throw new Error('Windows host operator returned invalid JSON')
   }
   if (result.exitCode !== 0 || !isRecord(envelope) || envelope.ok !== true) {
-    throw new Error('Windows host operator rejected the command')
+    const failure = isRecord(envelope) && isRecord(envelope.error) ? envelope.error : null
+    const code =
+      typeof failure?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/u.test(failure.code)
+        ? failure.code
+        : 'E_OPERATOR_REJECTED'
+    const message =
+      typeof failure?.message === 'string' &&
+      failure.message.length > 0 &&
+      failure.message.length <= 256 &&
+      !/[\r\n]/u.test(failure.message)
+        ? failure.message
+        : 'Windows host operator rejected the command'
+    const diagnostic =
+      isRecord(failure?.details) &&
+      typeof failure.details.stderr === 'string' &&
+      failure.details.stderr.length > 0 &&
+      failure.details.stderr.length <= 1_000 &&
+      !/[\r\n]/u.test(failure.details.stderr)
+        ? `: ${failure.details.stderr}`
+        : ''
+    throw new Error(`${command}: ${code}: ${message}${diagnostic}`)
   }
   return envelope
 }
@@ -1359,8 +1379,11 @@ export async function runM03WindowsKeepaliveAcceptance(argv, injectedDependencie
       return await runCleanup(run, chain, adapters, now)
     }
     return await runVerification(parsed.command, run, chain, adapters, now)
-  } catch {
-    return safeFailure('E_ACCEPTANCE_REQUIRED', 'M03 Windows acceptance stage did not pass')
+  } catch (error) {
+    return safeFailure(
+      'E_ACCEPTANCE_REQUIRED',
+      error instanceof Error ? error.message : 'M03 Windows acceptance stage did not pass',
+    )
   }
 }
 

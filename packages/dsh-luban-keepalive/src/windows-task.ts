@@ -221,9 +221,9 @@ function hasOnlyExpectedTrigger(xml: string, trigger: WindowsTaskTrigger): boole
     openingTagCount(xml, tag),
   ])
   if (trigger === 'on-demand') {
-    return (
-      counts.every(([, count]): boolean => count === 0) && openingTagCount(xml, 'Triggers') === 0
-    )
+    if (!counts.every(([, count]): boolean => count === 0)) return false
+    const triggerContainers = openingTagCount(xml, 'Triggers')
+    return triggerContainers === 0 || (triggerContainers === 1 && /<Triggers\s*\/>/iu.test(xml))
   }
   if (
     counts.some(([tag, count]): boolean => count !== (tag === 'BootTrigger' ? 1 : 0)) ||
@@ -232,14 +232,17 @@ function hasOnlyExpectedTrigger(xml: string, trigger: WindowsTaskTrigger): boole
     return false
   }
   const triggers = singleElement(xml, 'Triggers')
-  const boot = triggers === null ? null : singleElement(triggers.inner, 'BootTrigger')
+  if (triggers === null || !exactAttributes(triggers.attributes, {})) return false
+  const triggerBody = triggers.inner.trim()
+  if (/^<BootTrigger\s*\/>$/iu.test(triggerBody)) return true
+  const boot = singleElement(triggerBody, 'BootTrigger')
+  if (boot === null || !exactAttributes(boot.attributes, {})) return false
+  const enabled = textChild(boot.inner, 'Enabled')
   return (
-    triggers !== null &&
-    boot !== null &&
-    exactAttributes(triggers.attributes, {}) &&
-    exactAttributes(boot.attributes, {}) &&
-    triggers.inner.replace(boot.full, '').trim() === '' &&
-    exactTextChildren(boot.inner, { Enabled: 'true' })
+    triggerBody.replace(boot.full, '').trim() === '' &&
+    (boot.inner.trim() === '' ||
+      (enabled?.value.toLocaleLowerCase('en-US') === 'true' &&
+        boot.inner.replace(enabled.full, '').trim() === ''))
   )
 }
 
@@ -333,7 +336,7 @@ export function renderWindowsTaskXml(definition: WindowsTaskDefinition): string 
         ]
       : []
   return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
     '  <RegistrationInfo>',
     `    <Description>${xmlText(definition.description)}</Description>`,
@@ -395,6 +398,7 @@ const EXPECTED_SETTINGS = Object.freeze({
 })
 
 function exactSettings(value: string): boolean {
+  let remainder = value
   const restart = singleElement(value, 'RestartOnFailure')
   if (
     restart === null ||
@@ -403,11 +407,61 @@ function exactSettings(value: string): boolean {
   ) {
     return false
   }
-  return exactTextChildren(value.replace(restart.full, ''), EXPECTED_SETTINGS)
+  remainder = remainder.replace(restart.full, '')
+
+  const idle = singleElement(value, 'IdleSettings')
+  if (idle !== null) {
+    if (
+      !exactAttributes(idle.attributes, {}) ||
+      !exactTextChildren(idle.inner, { StopOnIdleEnd: 'true', RestartOnIdle: 'false' })
+    ) {
+      return false
+    }
+    remainder = remainder.replace(idle.full, '')
+  } else if (openingTagCount(value, 'IdleSettings') !== 0) {
+    return false
+  }
+
+  for (const key of [
+    'MultipleInstancesPolicy',
+    'DisallowStartIfOnBatteries',
+    'StopIfGoingOnBatteries',
+    'StartWhenAvailable',
+    'ExecutionTimeLimit',
+  ] as const) {
+    const child = textChild(value, key)
+    if (
+      child?.value.toLocaleLowerCase('en-US') !== EXPECTED_SETTINGS[key].toLocaleLowerCase('en-US')
+    ) {
+      return false
+    }
+    remainder = remainder.replace(child.full, '')
+  }
+
+  const optional = {
+    AllowHardTerminate: 'true',
+    RunOnlyIfNetworkAvailable: 'false',
+    AllowStartOnDemand: 'true',
+    Enabled: 'true',
+    Hidden: 'false',
+    RunOnlyIfIdle: 'false',
+    WakeToRun: 'false',
+    Priority: '7',
+    UseUnifiedSchedulingEngine: 'true',
+  } as const
+  for (const [key, expected] of Object.entries(optional)) {
+    const count = openingTagCount(value, key)
+    if (count === 0) continue
+    const child = count === 1 ? textChild(value, key) : null
+    if (child?.value.toLocaleLowerCase('en-US') !== expected) return false
+    remainder = remainder.replace(child.full, '')
+  }
+  return remainder.trim() === ''
 }
 
 interface WindowsTaskProjection {
   readonly description: string
+  readonly uri: string | null
   readonly principalSid: string
   readonly command: string
   readonly arguments: string
@@ -423,6 +477,7 @@ function projectWindowsTaskXml(
 
   const registration = singleElement(task.inner, 'RegistrationInfo')
   const description = registration === null ? null : textChild(registration.inner, 'Description')
+  const uri = registration === null ? null : textChild(registration.inner, 'URI')
   const principals = singleElement(task.inner, 'Principals')
   const principal = principals === null ? null : singleElement(principals.inner, 'Principal')
   if (
@@ -436,21 +491,22 @@ function projectWindowsTaskXml(
   ) {
     return null
   }
+  let registrationRemainder = registration.inner.replace(description.full, '')
+  if (uri !== null) registrationRemainder = registrationRemainder.replace(uri.full, '')
+  if (registrationRemainder.trim() !== '') return null
   const userId = textChild(principal.inner, 'UserId')
   const logonType = textChild(principal.inner, 'LogonType')
   const runLevel = textChild(principal.inner, 'RunLevel')
   if (
     userId === null ||
     logonType?.value.toUpperCase() !== 'S4U' ||
-    runLevel?.value.toLocaleLowerCase('en-US') !== 'leastprivilege' ||
-    !exactTextChildren(principal.inner, {
-      UserId: userId.value,
-      LogonType: 'S4U',
-      RunLevel: 'LeastPrivilege',
-    })
+    (runLevel !== null && runLevel.value.toLocaleLowerCase('en-US') !== 'leastprivilege')
   ) {
     return null
   }
+  let principalRemainder = principal.inner.replace(userId.full, '').replace(logonType.full, '')
+  if (runLevel !== null) principalRemainder = principalRemainder.replace(runLevel.full, '')
+  if (principalRemainder.trim() !== '') return null
 
   const settings = singleElement(task.inner, 'Settings')
   if (
@@ -481,6 +537,7 @@ function projectWindowsTaskXml(
   if (actionRemainder.trim() !== '') return null
   return {
     description: description.value,
+    uri: uri?.value ?? null,
     principalSid: userId.value,
     command: command.value,
     arguments: argumentElement?.value ?? '',
@@ -492,6 +549,7 @@ export function matchesWindowsTaskXml(xml: string, definition: WindowsTaskDefini
   return (
     projection !== null &&
     projection.description === definition.description &&
+    (projection.uri === null || sameWindowsValue(projection.uri, definition.name)) &&
     sameWindowsValue(projection.principalSid, definition.principalSid) &&
     sameWindowsValue(projection.command, definition.command) &&
     projection.arguments === definition.arguments
@@ -574,7 +632,8 @@ export class WindowsTaskRepository {
     try {
       const handle = await open(path, 'wx', 0o600)
       try {
-        await handle.writeFile(renderWindowsTaskXml(definition), 'utf8')
+        const xml = Buffer.from(renderWindowsTaskXml(definition), 'utf16le')
+        await handle.writeFile(Buffer.concat([Buffer.from([0xff, 0xfe]), xml]))
         await handle.sync()
       } finally {
         await handle.close()

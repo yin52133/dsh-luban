@@ -86,6 +86,35 @@ describe('Windows deployment host task', (): void => {
     expect(childXml).not.toContain('<Triggers>')
     expect(matchesWindowsTaskXml(hostXml, host)).toBe(true)
     expect(matchesWindowsTaskXml(childXml, child)).toBe(true)
+    const normalizedHostXml = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>${host.description}</Description>
+    <URI>${host.name}</URI>
+  </RegistrationInfo>
+  <Principals><Principal id="CurrentUser">
+    <UserId>${host.principalSid}</UserId><LogonType>S4U</LogonType>
+  </Principal></Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <RestartOnFailure><Count>3</Count><Interval>PT1M</Interval></RestartOnFailure>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings><StopOnIdleEnd>true</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+  </Settings>
+  <Triggers><BootTrigger /></Triggers>
+  <Actions Context="CurrentUser"><Exec>
+    <Command>${host.command}</Command><Arguments>${host.arguments}</Arguments>
+  </Exec></Actions>
+</Task>
+`
+    expect(matchesWindowsTaskXml(normalizedHostXml, host)).toBe(true)
+    expect(matchesWindowsTaskXml(normalizedHostXml.replace('<URI>', '<URI>foreign-'), host)).toBe(
+      false,
+    )
     expect(matchesWindowsTaskXml(hostXml.replace('<BootTrigger>', '<LogonTrigger>'), host)).toBe(
       false,
     )

@@ -138,11 +138,30 @@ function parseCli(argv: readonly string[]): ParsedCli {
   }
 }
 
-function failure(code: string, message: string): WindowsOperatorCliResult {
+function failure(
+  code: string,
+  message: string,
+  details?: Readonly<Record<string, unknown>>,
+): WindowsOperatorCliResult {
   return {
     exitCode: 1,
-    output: JSON.stringify({ schemaVersion: 1, ok: false, error: { code, message } }),
+    output: JSON.stringify({
+      schemaVersion: 1,
+      ok: false,
+      error: { code, message, ...(details === undefined ? {} : { details }) },
+    }),
   }
+}
+
+function commandFailureDetails(error: LubanError): Readonly<Record<string, unknown>> | undefined {
+  const exitCode = error.details?.exitCode
+  const stderr = error.details?.stderr
+  if (!Number.isSafeInteger(exitCode) || typeof stderr !== 'string') return undefined
+  const diagnostic = stderr
+    .trim()
+    .replace(/[\r\n\t]+/gu, ' ')
+    .slice(-1_000)
+  return { exitCode, ...(diagnostic === '' ? {} : { stderr: diagnostic }) }
 }
 
 function resolveOperator(
@@ -279,7 +298,7 @@ export async function runWindowsOperatorCli(
     }
   } catch (error: unknown) {
     return error instanceof LubanError
-      ? failure(error.code, error.message)
+      ? failure(error.code, error.message, commandFailureDetails(error))
       : failure('E_UNAVAILABLE', 'Windows keepalive operator command failed')
   }
 }
