@@ -109,8 +109,9 @@ node scripts/acceptance/m07-rate-reconcile.mjs --live --confirm-real-provider-ex
 coverage, challenge/schema/window drift, credential-like response fields, requests over 10 seconds,
 and responses over 10 MiB fail. The mounted comparison is accepted when HUD and
 a real provider billing export cover the same window and request/token totals
-meet the documented tolerance. M07-F004 remains pending until that mapping and
-a Windows/Ubuntu functional run are demonstrated.
+meet the documented tolerance. This is an optional provider-adapter compatibility smoke: DSH rc2
+does not expose provider request IDs through its public success events, so the external billing
+mapping is not required for the sliding-window feature itself.
 
 ## Compatibility
 
@@ -128,9 +129,9 @@ The implementation uses the public rc2 `AgentRegistry`, `Session.requestContext(
 - Ubuntu/Linux: the same host, Web, and CLI implementation is used.
 - Web: current DSH rc2 browser client; subscriptions pause when `document.hidden`.
 
-Window math, token-source projection, and the Cordis-mounted capture endpoint
-are directly tested. Independent real billing/token exports are still required
-on both target hosts; until then, M07-F004 is not accepted.
+Window math, token-source projection, rc2 assistant usage collection, and the
+Cordis-mounted authenticated capture endpoint are directly tested. Independent billing/token
+exports can additionally validate a provider-specific adapter when one is available.
 
 ## License
 

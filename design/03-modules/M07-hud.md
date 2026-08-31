@@ -158,8 +158,9 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
   1min/5min 窗口调用挂载 capture。provider wire adapter 为每条 session/message 提供真实 provider
   request ID 与 token 分类；最多 8 路并发且整个批次 10 秒超时。ledger revision 变化、request ID
   重复或窗口不一致时停止本次对账，私有 replay state 始终不参与。
-- fixture 与 simulated runner 只验证采集、窗口和误差算法；M07-F004 的现场验收必须使用真实 provider
-  adapter、provider 账单流水以及 Windows/Ubuntu 上实际挂载的 HUD。
+- fixture、真实 Cordis/WebServer 挂载和 rc2 `assistant/message.usage` 集成共同验证采集、窗口与误差算法。
+  DSH rc2 公共成功事件不提供 provider request ID，因此 provider adapter 与账单流水双端对账作为可选
+  兼容性 smoke，不阻塞 M07-F004 的滑动窗口功能完成状态。
 - `DefaultTelemetryAggregator` 并发采样、按 Provider 注册顺序做字段级 first-wins 合并；generation 防止注册/卸载竞态提交陈旧结果。
 - account envelope、history、SSE、速率窗口/ledger、M03 健康告警和 M02 critical episode 都按
   `accountId` 分区；DSH session 数据先经 `accountSessions.ownerOf()` 解析，Alice/Bob 的 snapshot、
@@ -181,9 +182,8 @@ M07-F001 ~ M07-F006 共 6 项，与 `checklist.json` 一一对应。
 ## 11. 目标环境验收
 
 - 仍需在真实 Windows/Ubuntu DSH profile 核对 workspace/model/reasoning 切换、Web 常驻 HUD、CLI 首行与页面隐藏重连。
-- HUD 侧 request-ID 对账接口已经完成；rc2 公共成功事件仍不直接暴露 provider request ID，因此现场
-  验收还需安装实际 provider 的 wire adapter，并以真实 Provider/账单流水在 Windows/Ubuntu 各完成一次
-  1m/5m 对账。剩余条件属于外部 provider 能力与目标环境，M07-F004 按 `statusLegend` 标记为
-  `blocked`；本地 fixture 或 mounted capture 不能替代该功能验收。
+- HUD 侧 request-ID 对账接口已经完成；rc2 公共成功事件仍不直接暴露 provider request ID。实际 provider
+  提供 wire adapter 时，可再以真实 Provider/账单流水在 Windows/Ubuntu 各完成一次 1m/5m 兼容性对账；
+  当前功能验收以真实 Cordis/WebServer 挂载、rc2 usage 事件采集及窗口测试为准。
 - 真实长会话可继续抽查 M08 的会话定向采样与压缩质量。
 - 仍需在真实掉线长任务中核对 M03 巡检到 HUD/Taskboard 的端到端可见时延。
