@@ -19,7 +19,8 @@ import {
 } from '../../packages/dsh-luban-taskboard/src/night-scheduler.js'
 import { JsonTaskStore } from '../../packages/dsh-luban-taskboard/src/task-store.js'
 
-const NOW = 1_777_777_777_777
+// Keep the fixed clock inside the configured local-time scheduler window in every timezone.
+const NOW = new Date(2026, 4, 3, 11, 11, 17, 777).getTime()
 const CLOCK: Clock = { now: (): number => NOW }
 const ACCOUNT = asAccountId('alice')
 const AGENT: Actor = { kind: 'agent', id: asActorId('browser-agent'), accountId: ACCOUNT }
