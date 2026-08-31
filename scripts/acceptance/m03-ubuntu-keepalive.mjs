@@ -200,7 +200,13 @@ async function assertExternalPath(path, label, existing) {
     throw new Error(`${label} must be accessible only to its owner`)
   }
   const canonical = await realpath(target)
-  if (resolve(canonical) !== resolve(target)) throw new Error(`${label} crosses a link`)
+  const canonicalStats = await lstat(canonical)
+  if (
+    !sameIdentity(stats, canonicalStats) ||
+    (process.platform !== 'win32' && resolve(canonical) !== resolve(target))
+  ) {
+    throw new Error(`${label} crosses a link`)
+  }
 }
 
 function sameIdentity(left, right) {

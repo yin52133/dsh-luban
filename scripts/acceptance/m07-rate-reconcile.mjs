@@ -269,10 +269,20 @@ function isInside(root, target) {
   return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`))
 }
 
-function sameFilesystemPath(left, right) {
-  return process.platform === 'win32'
-    ? resolve(left).toLowerCase() === resolve(right).toLowerCase()
-    : resolve(left) === resolve(right)
+async function sameFilesystemPath(left, right) {
+  const normalizedLeft = resolve(left)
+  const normalizedRight = resolve(right)
+  if (process.platform !== 'win32') return normalizedLeft === normalizedRight
+  if (normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()) return true
+  try {
+    const [canonicalLeft, canonicalRight] = await Promise.all([
+      realpath(normalizedLeft),
+      realpath(normalizedRight),
+    ])
+    return resolve(canonicalLeft).toLowerCase() === resolve(canonicalRight).toLowerCase()
+  } catch {
+    return false
+  }
 }
 
 function normalizeCredentialKey(key) {
@@ -410,7 +420,7 @@ async function inspectTrackedM07Source(root, canonicalRoot, relativePath, invoke
     const requested = await lstat(requestedSource, { bigint: true })
     if (!requested.isFile() || requested.isSymbolicLink()) throw new Error('not a regular file')
     canonicalSource = await realpath(requestedSource)
-    if (!sameFilesystemPath(canonicalSource, resolve(canonicalRoot, relativePath))) {
+    if (!(await sameFilesystemPath(canonicalSource, resolve(canonicalRoot, relativePath)))) {
       throw new Error('unexpected source identity')
     }
     before = await lstat(canonicalSource, { bigint: true })
@@ -427,7 +437,7 @@ async function inspectTrackedM07Source(root, canonicalRoot, relativePath, invoke
     const after = await lstat(canonicalSource, { bigint: true })
     const requestedAfter = await realpath(resolve(root, relativePath))
     if (
-      !sameFilesystemPath(requestedAfter, canonicalSource) ||
+      !(await sameFilesystemPath(requestedAfter, canonicalSource)) ||
       !sameFileSnapshot(opened, openedAfter) ||
       !sameFileSnapshot(openedAfter, after) ||
       after.size !== BigInt(raw.length)
@@ -542,7 +552,7 @@ async function readStableM07RuntimeFile(
       throw new Error('not a bounded regular file')
     }
     const canonical = await realpath(requested)
-    if (!sameFilesystemPath(canonical, requested)) {
+    if (!(await sameFilesystemPath(canonical, requested))) {
       throw new Error('runtime file uses a symbolic path')
     }
     const before = await lstat(canonical, { bigint: true })
@@ -559,7 +569,7 @@ async function readStableM07RuntimeFile(
     const after = await lstat(canonical, { bigint: true })
     const finalCanonical = await realpath(requested)
     if (
-      !sameFilesystemPath(finalCanonical, canonical) ||
+      !(await sameFilesystemPath(finalCanonical, canonical)) ||
       !sameFileSnapshot(requestedStat, before) ||
       !sameFileSnapshot(before, opened) ||
       !sameFileSnapshot(opened, openedAfter) ||
@@ -596,14 +606,14 @@ export async function inspectM07RuntimeArtifact(root) {
     const packageStat = await lstat(requestedPackageRoot)
     if (!packageStat.isDirectory() || packageStat.isSymbolicLink()) throw new Error('package root')
     canonicalPackageRoot = await realpath(requestedPackageRoot)
-    if (!sameFilesystemPath(canonicalPackageRoot, requestedPackageRoot)) {
+    if (!(await sameFilesystemPath(canonicalPackageRoot, requestedPackageRoot))) {
       throw new Error('package root identity')
     }
     const requestedDistRoot = resolve(canonicalPackageRoot, 'dist')
     const distStat = await lstat(requestedDistRoot)
     if (!distStat.isDirectory() || distStat.isSymbolicLink()) throw new Error('dist root')
     canonicalDistRoot = await realpath(requestedDistRoot)
-    if (!sameFilesystemPath(canonicalDistRoot, requestedDistRoot)) {
+    if (!(await sameFilesystemPath(canonicalDistRoot, requestedDistRoot))) {
       throw new Error('dist root identity')
     }
   } catch {
@@ -799,8 +809,11 @@ export async function inspectM07BuildProvenance(root, expectedGitHead, runtimeAr
     )
   }
   if (
-    !sameFilesystemPath(canonicalPackageRoot, resolve(root, 'packages', HUD_PACKAGE_NAME)) ||
-    !sameFilesystemPath(canonicalDistRoot, resolve(canonicalPackageRoot, 'dist'))
+    !(await sameFilesystemPath(
+      canonicalPackageRoot,
+      resolve(root, 'packages', HUD_PACKAGE_NAME),
+    )) ||
+    !(await sameFilesystemPath(canonicalDistRoot, resolve(canonicalPackageRoot, 'dist')))
   ) {
     throw new AcceptanceError(
       'E_RATE_BUILD_PROVENANCE',
@@ -1014,7 +1027,7 @@ export async function readExternalRateExport(root, path, label) {
     const openedAfter = await handle.stat({ bigint: true })
     const canonicalAfter = await realpath(candidate)
     if (
-      !sameFilesystemPath(canonicalPath, canonicalAfter) ||
+      !(await sameFilesystemPath(canonicalPath, canonicalAfter)) ||
       !openedAfter.isFile() ||
       !sameFileSnapshot(opened, openedAfter) ||
       openedAfter.size !== BigInt(raw.length)
@@ -1940,7 +1953,7 @@ export async function writeM07RateEvidence(path, evidence, options = {}) {
   if (
     !metadata.isFile() ||
     metadata.isSymbolicLink() ||
-    !sameFilesystemPath(canonicalTarget, target) ||
+    !(await sameFilesystemPath(canonicalTarget, target)) ||
     isInside(canonicalRoot, canonicalTarget) ||
     persisted.length !== Buffer.byteLength(serialized, 'utf8') ||
     sha256(persisted) !== sha256(serialized)

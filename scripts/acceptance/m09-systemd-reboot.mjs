@@ -1836,14 +1836,34 @@ async function packageManagerRuntime(root) {
   }
 }
 
-async function packageManagerEntry(toolchain, packageManager, trust) {
-  const launcher = await executableFromPath('pnpm', process.env.PATH)
+async function packageManagerRootFromLauncher(launcher, trust) {
   const launcherParent = dirname(launcher)
+  if (!launcher.toLowerCase().endsWith('.exe')) {
+    const launcherBytes = await readBoundedFile(launcher, 64 * 1024).catch(() => undefined)
+    if (launcherBytes !== undefined) {
+      const launcherText = launcherBytes.toString('utf8')
+      const targetPattern =
+        /(?:%~dp0|\$basedir(?:_win)?)([\\/][^"'\r\n]*?[\\/]node_modules[\\/]pnpm[\\/]bin[\\/]pnpm\.mjs)/giu
+      const roots = new Set()
+      for (const match of launcherText.matchAll(targetPattern)) {
+        const relativeEntry = match[1].replace(/^[\\/]+/u, '')
+        const entry = await realpath(resolve(launcherParent, relativeEntry)).catch(() => undefined)
+        if (entry === undefined || basename(entry) !== basename(trust.entry)) continue
+        roots.add(resolve(entry, '..', '..'))
+      }
+      if (roots.size === 1) return [...roots][0]
+    }
+  }
   const candidateRoot =
     basename(launcherParent) === 'bin'
       ? resolve(launcherParent, '..')
       : join(launcherParent, 'node_modules', 'pnpm')
-  const packageRoot = await realpath(candidateRoot).catch(() => fail('E_PACKAGE_MANAGER_TRUST'))
+  return await realpath(candidateRoot).catch(() => fail('E_PACKAGE_MANAGER_TRUST'))
+}
+
+async function packageManagerEntry(toolchain, packageManager, trust) {
+  const launcher = await executableFromPath('pnpm', process.env.PATH)
+  const packageRoot = await packageManagerRootFromLauncher(launcher, trust)
   if (!outsideRepository(packageRoot)) fail('E_PACKAGE_MANAGER_TRUST')
   const entryPath = await realpath(join(packageRoot, ...trust.entry.split('/'))).catch(() =>
     fail('E_PACKAGE_MANAGER_TRUST'),

@@ -1103,6 +1103,21 @@ describe('M12 release policy', () => {
     }
   })
 
+  it('installs the requested Node runtime before pnpm in both CI workflows', async () => {
+    const workflows = await Promise.all(
+      ['ci.yml', 'release.yml'].map((name) =>
+        readFile(join(REPOSITORY_ROOT, '.github', 'workflows', name), 'utf8'),
+      ),
+    )
+
+    for (const workflow of workflows) {
+      const node = workflow.indexOf('actions/setup-node@')
+      const pnpm = workflow.indexOf('pnpm/action-setup@')
+      expect(node).toBeGreaterThan(-1)
+      expect(pnpm).toBeGreaterThan(node)
+    }
+  })
+
   it('rejects files outside the npm payload allowlist', async () => {
     const policy = await loadPolicy()
     const manifest = {
