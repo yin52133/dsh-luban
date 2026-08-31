@@ -19,6 +19,12 @@ class _Output(BaseModel):
 
 
 class DshChatModelTests(unittest.IsolatedAsyncioTestCase):
+    def test_exposes_browser_use_model_identity(self) -> None:
+        model = DshChatModel("http://127.0.0.1:42601/v1/browser-use/complete", "t" * 32)
+        self.assertEqual(model.provider, "dsh")
+        self.assertEqual(model.name, "dsh-default")
+        self.assertEqual(model.model_name, "dsh-default")
+
     async def test_forwards_messages_schema_and_usage_without_a_provider_key(self) -> None:
         observed: dict[str, object] = {}
 

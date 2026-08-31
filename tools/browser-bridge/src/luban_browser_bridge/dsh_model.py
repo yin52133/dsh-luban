@@ -63,6 +63,12 @@ class DshChatModel:
     def name(self) -> str:
         return self.model
 
+    @property
+    def model_name(self) -> str:
+        """Expose the legacy browser-use model identifier."""
+
+        return self.model
+
     @overload
     async def ainvoke(
         self,
