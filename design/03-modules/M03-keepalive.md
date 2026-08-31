@@ -164,5 +164,15 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   heartbeat 与系统 boot 时间。注销验证要求 heartbeat 在注销后继续推进；重启验证要求任务在新 boot
   启动，并从已保存 checkpoint 继续未完成步骤。
 - Windows checkpoint 丢失或损坏时不从验收参数重建；恢复保持幂等，并保留孤儿任务供人工处理。
-- 本地 keepalive 包测试、Windows staged runner、Prettier、ESLint、严格类型检查与构建通过；真实 tmux、
-  Windows 注销及双端重启恢复仍需在目标主机上完成最终功能验收。
+- 本地 keepalive 包测试、Windows staged runner、Prettier、ESLint、严格类型检查与构建通过。Ubuntu
+  24.04.4 实机已完成 linger、user systemd、真实 SSH 断连、heartbeat 连续推进和 tmux attach/detach；
+  直接证据为 `<external-acceptance-dir>/m03-20260831-e288abe/evidence/04-reboot-armed.json`
+  （SHA-256 `f3ddbf724317180540e47a6c69ebd073d2fa5b017b26f753a275e6aaf3ec3a43`）。该 run 已在 boot ID
+  `<boot-id-before>` 武装，等待一次人工重启后验证恢复。
+- Windows production run `<external-acceptance-dir>\m03-windows-20260831-e288abe` 已完成
+  `prepare`：精确 S4U boot host task 与 child task 均在运行，checkpoint seed、host heartbeat 和
+  session heartbeat 已验证；证据为 `events\000002-prepare-confirmed.json`（SHA-256
+  `0026cf66e31a70bf03b9b64977d45bff504bdfe1568ce990123011a0c01a7d54`）。实机验证同时修复
+  `schtasks.exe /XML` 所需 UTF-16LE+BOM、Task Scheduler 回读默认值规范化、验收 profile 重复加载
+  keepalive，以及用户现有 DSH 占用默认 Web 端口时的冲突。仍需当前账户真实注销/登录与重启；runner
+  本身不会触发这些会话操作。
