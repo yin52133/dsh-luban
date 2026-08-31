@@ -9,6 +9,8 @@ param(
 
     [string]$ApprovedBy,
 
+    [string]$Output,
+
     [switch]$ApproveUnpinned,
 
     [switch]$Apply,
@@ -36,6 +38,9 @@ if ($DshHome) {
 }
 if ($ApprovedBy) {
     $driverArgs += @('--approved-by', $ApprovedBy)
+}
+if ($Output) {
+    $driverArgs += @('--output', $Output)
 }
 if ($ApproveUnpinned) {
     $driverArgs += '--approve-unpinned'

@@ -2,7 +2,7 @@
 
 import { Buffer } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, parse, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL, URL } from 'node:url'
 
@@ -95,6 +95,7 @@ function parseArgs(argv) {
     else if (arg === '--profile') options.profile = value()
     else if (arg === '--version') options.version = value()
     else if (arg === '--dsh-home') options.dshHome = value()
+    else if (arg === '--output') options.output = value()
     else if (arg === '--approved-by') options.approvedBy = value()
     else if (arg === '--approve-unpinned') options.approveUnpinned = true
     else if (arg === '--apply') {
@@ -366,11 +367,33 @@ function runChecked(runner, invocation, env, label) {
     throw new Error(`${label} executable was not found on PATH`)
   }
   if (result?.error !== undefined) throw new Error(`${label} failed to start`)
+  const stdout = boundedOutput(result.stdout, label)
+  const stderr = boundedOutput(result.stderr, label)
   if (!Number.isInteger(result?.status) || result.status !== 0) {
-    throw new Error(`${label} failed with exit code ${String(result?.status ?? 'unknown')}`)
+    const detail = commandFailureDetail(stderr, stdout)
+    throw new Error(
+      `${label} failed with exit code ${String(result?.status ?? 'unknown')}${detail === '' ? '' : `: ${detail}`}`,
+    )
   }
-  boundedOutput(result.stderr, label)
-  return boundedOutput(result.stdout, label)
+  return stdout
+}
+
+function commandFailureDetail(stderr, stdout) {
+  const source = stderr.trim() || stdout.trim()
+  if (source === '') return ''
+  const printable = [...source]
+    .filter((character) => {
+      const codePoint = character.codePointAt(0)
+      return (
+        codePoint !== undefined &&
+        (codePoint === 9 ||
+          codePoint === 10 ||
+          codePoint === 13 ||
+          (codePoint >= 32 && codePoint !== 127))
+      )
+    })
+    .join('')
+  return printable.slice(-4_096)
 }
 
 function parseJsonOutput(output, label) {
@@ -684,11 +707,19 @@ async function main() {
   const options = parseArgs(process.argv.slice(2))
   if (options.help === true) {
     console.log(
-      'Usage: node scripts/install-3rd-party.mjs --platform windows|ubuntu [--profile <name>] [--version pinned|latest|<semver>] [--dsh-home <absolute-path>] [--approved-by <actor>] [--approve-unpinned] [--dry-run|--apply]',
+      'Usage: node scripts/install-3rd-party.mjs --platform windows|ubuntu [--profile <name>] [--version pinned|latest|<semver>] [--dsh-home <absolute-path>] [--approved-by <actor>] [--approve-unpinned] [--output <path>] [--dry-run|--apply]',
     )
     return
   }
-  console.log(JSON.stringify(await installThirdParty(options), null, 2))
+  const result = await installThirdParty(options)
+  const serialized = `${JSON.stringify(result, null, 2)}\n`
+  if (options.output !== undefined) {
+    const output = resolve(options.output)
+    if (output === parse(output).root) throw new Error('--output cannot be a filesystem root')
+    await mkdir(dirname(output), { recursive: true })
+    await writeFile(output, serialized, { encoding: 'utf8', flag: 'wx' })
+  }
+  process.stdout.write(serialized)
   if (options.apply !== true)
     console.log('Dry run only. Use --apply to install the packages into the profile.')
 }

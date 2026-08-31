@@ -363,6 +363,35 @@ describe('M12 plugin scaffolder', () => {
 })
 
 describe('M12 install and safety plans', () => {
+  it('writes create-once CLI evidence when an output path is requested', async () => {
+    const root = await temporaryRoot()
+    const output = join(root, 'install-plan.json')
+    const invocation = [
+      join(REPOSITORY_ROOT, 'scripts/install-3rd-party.mjs'),
+      '--platform',
+      'windows',
+      '--dry-run',
+      '--output',
+      output,
+    ]
+    const first = spawnSync(process.execPath, invocation, {
+      cwd: REPOSITORY_ROOT,
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    expect(first.status).toBe(0)
+    const evidence = JSON.parse(await readFile(output, 'utf8'))
+    expect(evidence).toMatchObject({ platform: 'windows', dryRun: true })
+
+    const second = spawnSync(process.execPath, invocation, {
+      cwd: REPOSITORY_ROOT,
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    expect(second.status).not.toBe(0)
+    expect(second.stderr).toContain('EEXIST')
+  })
+
   it('attests Ubuntu from os-release instead of accepting generic Linux', async () => {
     await expect(
       assertTargetHost('ubuntu', 'linux', async () => 'NAME=Ubuntu\nID=ubuntu\n'),
@@ -780,6 +809,13 @@ describe('M12 install and safety plans', () => {
         error: /invalid JSON/u,
         calls: 6,
       },
+      {
+        label: 'post-install verifier diagnostics',
+        mutate: (output, index) =>
+          index === 5 ? { ...output, status: 1, stderr: 'verifier root cause\n' } : output,
+        error: /verifier root cause/u,
+        calls: 6,
+      },
     ]
 
     for (const testCase of cases) {
@@ -820,6 +856,29 @@ describe('M12 install and safety plans', () => {
     })
     expect(report.installed).toHaveLength(3)
     expect(report.installed.every(({ license }) => license.sha256.length === 64)).toBe(true)
+  })
+
+  it('locates manifests for ESM-only packages without a require export', async () => {
+    const fixture = await thirdPartyProfileFixture()
+    const expected = fixture.lock.packages.map(({ name, version }) => ({ name, version }))
+    const buildExpected = fixture.lock.buildPackages.map(({ name, version }) => ({ name, version }))
+    for (const record of allLockedPackages(fixture.lock)) {
+      const sourceManifest = fixture.manifests.get(record.name)
+      const packageRoot = join(fixture.profileRoot, 'node_modules', ...record.name.split('/'))
+      const manifest = JSON.parse(await readFile(sourceManifest, 'utf8'))
+      manifest.exports = { '.': { import: './lib/index.js' } }
+      await mkdir(packageRoot, { recursive: true })
+      await json(join(packageRoot, 'package.json'), manifest)
+      await writeFile(join(packageRoot, 'LICENSE'), `${record.name} MIT license\n`, 'utf8')
+    }
+
+    const report = await verifyThirdPartyProfile(
+      { profileRoot: fixture.profileRoot, expected, buildExpected },
+      { loadPackage: async () => ({ spawn: () => ({}) }) },
+    )
+
+    expect(report.installed.map(({ name }) => name)).toEqual(expected.map(({ name }) => name))
+    expect(report.build).toMatchObject({ name: 'node-pty', loaded: true })
   })
 
   it('rejects broad build approval, duplicate bundles, and missing license evidence', async () => {

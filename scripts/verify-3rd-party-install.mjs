@@ -63,6 +63,13 @@ async function defaultManifestResolver(profileRoot, name) {
   try {
     return requireFromProfile.resolve(`${name}/package.json`)
   } catch {
+    const directManifest = join(profileRoot, 'node_modules', ...name.split('/'), 'package.json')
+    try {
+      const manifest = await jsonFile(directManifest, `${name} manifest`)
+      if (manifest.name === name) return directManifest
+    } catch {
+      // Fall back to walking from the package entry when one is exported for require().
+    }
     let directory = dirname(requireFromProfile.resolve(name))
     for (let depth = 0; depth < 12; depth += 1) {
       const candidate = join(directory, 'package.json')

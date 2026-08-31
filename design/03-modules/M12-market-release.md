@@ -24,6 +24,7 @@
 | v0.16 | 2026-08-30 | Codex | 增加双端安装结果聚合与独立输出文件 |
 | v0.17 | 2026-08-30 | Codex | 补齐最终结果复核和 owned cleanup |
 | v0.18 | 2026-08-30 | Codex | 收口为可复现、错误恢复与真实环境验收 |
+| v0.19 | 2026-08-31 | Codex | 完成 Windows/Ubuntu A 档真实安装并简化验收链 |
 
 ## 1. 概述与目标
 
@@ -97,11 +98,8 @@ node scripts/release/publish.mjs --reconcile --artifacts <dir> --repository <own
 node scripts/release/publish.mjs --resume --artifacts <dir> --repository <owner/name> [--ledger <path>]
 node scripts/release/verify-published-release.mjs --artifacts <dir> [--ledger <path>] --repository <owner/name>
 node scripts/release/prepare-market-handoff.mjs --package <dsh-luban-*> --category <upstream-slug> [--dry-run|--write]
-scripts/install-3rd-party.ps1 [-Profile win-debug] [-Version pinned|latest|<semver>] [-DshHome <absolute>] [-ApprovedBy <actor>] [-ApproveUnpinned] [-DryRun|-Apply]
-scripts/install-3rd-party.sh  [--profile ubuntu-server] [--version pinned|latest|<semver>] [--dsh-home <absolute>] [--approved-by <actor>] [--approve-unpinned] [--dry-run|--apply]
-node scripts/acceptance/m12-third-party-install.mjs
-node scripts/acceptance/m12-third-party-install.mjs run --live --apply --target windows|ubuntu --dsh-home <external-run-root>/dsh-home --output <new-json>
-node scripts/acceptance/m12-third-party-install.mjs aggregate --windows <windows-json> --ubuntu <ubuntu-json> --output <new-json>
+scripts/install-3rd-party.ps1 [-Profile win-debug] [-Version pinned|latest|<semver>] [-DshHome <absolute>] [-ApprovedBy <actor>] [-Output <path>] [-ApproveUnpinned] [-DryRun|-Apply]
+scripts/install-3rd-party.sh  [--profile ubuntu-server] [--version pinned|latest|<semver>] [--dsh-home <absolute>] [--approved-by <actor>] [--output <path>] [--approve-unpinned] [--dry-run|--apply]
 node scripts/acceptance/m12-profile-smoke.mjs [--live] [--output <new-json-path>]
 node scripts/acceptance/m12-profile-smoke.mjs aggregate --windows <json> --ubuntu <json> --output <new-json-path>
 ```
@@ -116,14 +114,9 @@ latest 或显式 semver 还必须提供 `--approve-unpinned`/`-ApproveUnpinned`�
 核对精确版本、bundle 唯一挂载、MIT manifest、常规 LICENSE 文件、精确 `allowBuilds` 与
 `node-pty` 可加载性。安装在指定的 disposable `DSH_HOME` 中执行，不修改调用者的 profile。
 
-`m12-third-party-install` 默认只输出零写入计划。真实执行由人工触发专用 workflow，并逐字确认安装到
-仓库外 disposable profile；普通 push/PR/CI 不触发安装。Windows/Ubuntu job 分别调用对应的 production
-`.ps1`/`.sh` wrapper，按 lock v3 和固定 pnpm 版本安装两次，再执行 list/config、manifest/LICENSE 与
-native load 核验。每端将结构化结果写入新的输出文件，聚合器要求两端所有功能检查均通过。
-
-运行根、`DSH_HOME`、HOME/AppData/XDG、cache 与临时目录均位于仓库外，并在成功或失败后只清理 runner
-明确拥有的目录。fixture 仅用于本地测试；M12-F004 的验收必须由获授权的 Windows/Ubuntu 目标宿主
-实际安装。当前尚无这两份真实安装结果，因此 M12-F004 按 `statusLegend` 标记为 `blocked`。
+真实验收直接在 Windows/Ubuntu 目标宿主调用 production `.ps1`/`.sh` wrapper，并使用独立、绝对的
+disposable `DSH_HOME`。`--output`/`-Output` 将同一份成功结果以 create-once JSON 保存，已有文件拒绝
+覆盖。验收不依赖额外 OIDC、证明链或专用 workflow；profile 与证据按用户的删除规则保留供复核。
 
 M12 profile smoke 默认只输出无写入计划。`--live` 根据当前宿主选择 `win-debug` 或
 `ubuntu-server`，要求项目本地 DSH `0.1.1-rc.2`，在忽略目录下创建隔离 `DSH_HOME`，离线安装
@@ -221,9 +214,8 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
   `main` 的贡献说明/schema 做人工 diff，再插入 entry、执行上游测试、开 PR 或追加 topic。仓库不会
   自动调用 GitHub 或修改 topic。
 - client-ui 槽位按模块从官方 SlotMap 选择并做 profile 实测；脚手架只提供 lazy-CJS 构建、manifest 与生命周期模板，不虚构通用页面槽位。
-- A 档三包及 `node-pty@1.1.0` 的 npm metadata/lock v3 已核对；安装器已经具备 LICENSE 存在性、
-  重复执行、精确清单、配置挂载和原生模块加载验证，但双平台真实安装与 notices 仍须在获得授权的
-  disposable profile 上完成。
+- A 档三包及 `node-pty@1.1.0` 的 npm metadata/lock v3 已核对；Windows/Ubuntu disposable profile
+  均已完成重复执行、精确清单、配置挂载、LICENSE 和原生模块加载验证。
 
 ## 11. 实现与验证记录
 
@@ -244,11 +236,8 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
   逐项复核后
   使用 pnpm 11.24.0、精确依赖和精确 allow-build 连续安装两次，再独立核验清单、配置、manifest、
   LICENSE 存在与 native load。latest/显式 semver 需额外批准并先解析为精确版本；定向契约测试
-  覆盖成功链和错误恢复，本轮未安装外部插件。
-- `scripts/acceptance/m12-third-party-install.mjs` 与专用 workflow_dispatch 工作流已补齐 A 档 live
-  验收流程：默认 plan 零写入；人工确认后在仓库外 disposable DSH_HOME 分别调用 Windows/Ubuntu
-  production wrapper，执行两次安装及独立 verifier，再聚合两端功能结果。本轮没有触发该人工授权
-  workflow，因此 M12-F004 尚缺真实双端安装结果并保持 `blocked`。
+  覆盖成功链、错误恢复、ESM-only 包 manifest 定位和原始 stderr 传播。Windows 与 Ubuntu 已分别在
+  disposable profile 完成真实安装，create-once 证据哈希记录于 `checklist.json`，M12-F004 为 `done`。
 - `scripts/deploy/setup-windows.ps1` 与 `setup-ubuntu.sh` 共享 allowlist 生成器，默认仅输出计划，
   显式 apply 才创建 profile；同父目录 staging 原子发布，已有目标一律拒绝覆盖，失败时只清理生成器
   自己创建的临时目录。Windows 隔离 `DSH_HOME` 已实际 apply `win-debug`
@@ -260,9 +249,8 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
 - CI 与 tag 发布工作流运行 format/lint/typecheck/build/test、uv lock、ruff、Python 测试、compileall、
   `files` 清单、pack/publish dry-run、tag/版本/CHANGELOG/README/DSH 基线检查；这些稳定性检查归入
   M12-F003/M12-F006，M12-F005 标记为 `dropped`。
-- M12 的脚手架、profile 生成、安装、市场、发布恢复及 profile smoke 契约测试通过；仍缺获准的 A 档
-  Windows/Ubuntu 真实双端安装、CI tag、
-  npm、GitHub Release、市场 PR 与 topic，须在获得明确授权后验收。
+- M12 的脚手架、profile 生成、安装、市场、发布恢复及 profile smoke 契约测试通过；A 档
+  Windows/Ubuntu 真实双端安装已完成，仍缺获准的 CI tag、npm、GitHub Release、市场 PR 与 topic。
 - 全工作区 format/lint/typecheck/build、包测试、跨模块集成、12 包 audit、release metadata、
   pack/publish dry-run、`uv --locked` Ruff、Python 测试与 compileall 通过。具体测试数不在设计记录
   固化，以当前检查输出为准。

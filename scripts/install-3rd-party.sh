@@ -6,6 +6,7 @@ version='pinned'
 mode='--dry-run'
 dsh_home=''
 approved_by=''
+output=''
 approve_unpinned=0
 apply_seen=0
 dry_run_seen=0
@@ -32,6 +33,11 @@ while (($# > 0)); do
       approved_by=$2
       shift 2
       ;;
+    --output)
+      [[ $# -ge 2 ]] || { echo '--output requires a value' >&2; exit 2; }
+      output=$2
+      shift 2
+      ;;
     --approve-unpinned)
       approve_unpinned=1
       shift
@@ -47,7 +53,7 @@ while (($# > 0)); do
       shift
       ;;
     --help)
-      echo 'Usage: scripts/install-3rd-party.sh [--profile ubuntu-server] [--version pinned|latest|<semver>] [--dsh-home <absolute-path>] [--approved-by <actor>] [--approve-unpinned] [--dry-run|--apply]'
+      echo 'Usage: scripts/install-3rd-party.sh [--profile ubuntu-server] [--version pinned|latest|<semver>] [--dsh-home <absolute-path>] [--approved-by <actor>] [--approve-unpinned] [--output <path>] [--dry-run|--apply]'
       exit 0
       ;;
     *)
@@ -84,6 +90,9 @@ if [[ -n $dsh_home ]]; then
 fi
 if [[ -n $approved_by ]]; then
   driver_args+=(--approved-by "$approved_by")
+fi
+if [[ -n $output ]]; then
+  driver_args+=(--output "$output")
 fi
 if ((approve_unpinned == 1)); then
   driver_args+=(--approve-unpinned)
