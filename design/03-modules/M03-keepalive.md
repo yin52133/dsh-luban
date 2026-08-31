@@ -166,13 +166,15 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
 - Windows checkpoint 丢失或损坏时不从验收参数重建；恢复保持幂等，并保留孤儿任务供人工处理。
 - 本地 keepalive 包测试、Windows staged runner、Prettier、ESLint、严格类型检查与构建通过。Ubuntu
   24.04.4 实机已完成 linger、user systemd、真实 SSH 断连、heartbeat 连续推进和 tmux attach/detach；
-  直接证据为 `<external-acceptance-dir>/m03-20260831-e288abe/evidence/04-reboot-armed.json`
-  （SHA-256 `f3ddbf724317180540e47a6c69ebd073d2fa5b017b26f753a275e6aaf3ec3a43`）。该 run 已在 boot ID
-  `<boot-id-before>` 武装，等待一次人工重启后验证恢复。
-- Windows production run `<external-acceptance-dir>\m03-windows-20260831-e288abe` 已完成
-  `prepare`：精确 S4U boot host task 与 child task 均在运行，checkpoint seed、host heartbeat 和
-  session heartbeat 已验证；证据为 `events\000002-prepare-confirmed.json`（SHA-256
-  `0026cf66e31a70bf03b9b64977d45bff504bdfe1568ce990123011a0c01a7d54`）。实机验证同时修复
+  跨真实 boot 完成 `verify-reboot`；直接证据为 `evidence/05-reboot-verified.json`（SHA-256
+  `f75d1fda4900eeb854f26e2cc38a6ece1651e12ca5d9bfd55c19ce2cfc21a986`）。
+- Windows production run `<external-acceptance-dir>\m03-windows-20260831-e288abe` 的精确 S4U boot host
+  task 与 child task 均在运行，checkpoint seed、host heartbeat 和 session heartbeat 已验证。当前账户
+  经真实注销/重新登录后，`verify-signout` 确认 heartbeat 继续推进；证据为
+  `events\000004-verify-signout-confirmed.json`（SHA-256
+  `7f937dc605d2922d38bcc31e8041f9c698542f5b57108b4ef45214c6f5802194`）。实机验证同时修复
   `schtasks.exe /XML` 所需 UTF-16LE+BOM、Task Scheduler 回读默认值规范化、验收 profile 重复加载
-  keepalive，以及用户现有 DSH 占用默认 Web 端口时的冲突。仍需当前账户真实注销/登录与重启；runner
-  本身不会触发这些会话操作。
+  keepalive，以及用户现有 DSH 占用默认 Web 端口时的冲突。run 已完成 `arm-reboot`，证据为
+  `events\000006-arm-reboot-confirmed.json`（SHA-256
+  `5f5177ecab5438d04bf8f8f64a12988626f92e51577a51ab32aeab6e13d04a01`）；仅剩人工重启 Windows 后
+  执行 `verify-reboot`。runner 本身不会触发该系统操作。
