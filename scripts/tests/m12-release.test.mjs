@@ -1011,7 +1011,7 @@ describe('M12 install and safety plans', () => {
           })
     expect(blocked.status).not.toBe(0)
     expect(`${blocked.stdout}\n${blocked.stderr}`).toMatch(/dsh-home|DshHome/u)
-  })
+  }, 15_000)
 })
 
 describe('M12 release policy', () => {

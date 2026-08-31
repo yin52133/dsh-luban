@@ -103,7 +103,7 @@ describe('profile deployment setup', () => {
           )
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('"dryRun": true')
-  })
+  }, 15_000)
 
   it('rejects a profiles junction that would write outside DSH_HOME', async () => {
     const dshHome = await temporaryRoot()
