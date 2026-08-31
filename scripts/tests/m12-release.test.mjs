@@ -1016,7 +1016,8 @@ describe('M12 install and safety plans', () => {
 
 describe('M12 release policy', () => {
   it('excludes deployment runtime roots from repository-wide style gates', async () => {
-    const [prettierIgnore, eslintConfig] = await Promise.all([
+    const [gitIgnore, prettierIgnore, eslintConfig] = await Promise.all([
+      readFile(join(REPOSITORY_ROOT, '.gitignore'), 'utf8'),
       readFile(join(REPOSITORY_ROOT, '.prettierignore'), 'utf8'),
       readFile(join(REPOSITORY_ROOT, 'eslint.config.js'), 'utf8'),
     ])
@@ -1025,6 +1026,7 @@ describe('M12 release policy', () => {
       expect(prettierIgnore.split(/\r?\n/u)).toContain(directory)
       expect(eslintConfig).toContain(`'**/${directory}/**'`)
     }
+    expect(gitIgnore.split(/\r?\n/u)).toContain('.release-artifacts/')
   })
 
   it('allows a package-specific DSH floor within the tested compatibility window', async () => {
