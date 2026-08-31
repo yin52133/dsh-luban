@@ -106,6 +106,28 @@ describe('BridgeProcess', (): void => {
     await expect(bridge.close()).resolves.toBeUndefined()
   })
 
+  it('accepts attested Google Chrome for the Ubuntu headless kernel', async (): Promise<void> => {
+    const harness = await createHarness({
+      shutdownWithoutNewline: false,
+      exitDelayMs: 20,
+      resolvedProfile: {
+        kernel: 'chromium-headless',
+        headless: true,
+        isolated: true,
+        binary: { kind: 'chrome', version: '146.0.7680.177', sha256: 'a'.repeat(64) },
+      },
+    })
+    const bridge = new BridgeProcess({
+      config: harness.config,
+      spawnProcess: harness.spawnProcess,
+    })
+
+    await expect(bridge.start({ kernel: 'chromium-headless' })).resolves.toMatchObject({
+      profile: { kernel: 'chromium-headless', binary: { kind: 'chrome' } },
+    })
+    await expect(bridge.close()).resolves.toBeUndefined()
+  })
+
   it('starts and closes the DSH model gateway around the bridge process', async (): Promise<void> => {
     const harness = await createHarness({
       shutdownWithoutNewline: false,

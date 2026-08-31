@@ -502,8 +502,7 @@ function decodeStartedProfile(value: unknown): BrowserProfile {
     typeof profile.headless !== 'boolean' ||
     typeof profile.isolated !== 'boolean' ||
     !isBrowserBinaryKind(binaryKind) ||
-    binaryKind !==
-      ({ chrome: 'chrome', edge: 'edge', 'chromium-headless': 'chromium' } as const)[kernel] ||
+    !binaryMatchesKernel(kernel, binaryKind) ||
     typeof binary.version !== 'string' ||
     binary.version.length > 128 ||
     !/^\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$/u.test(binary.version) ||
@@ -530,6 +529,14 @@ function isResolvedBrowserKernel(value: unknown): value is 'chrome' | 'edge' | '
 
 function isBrowserBinaryKind(value: unknown): value is 'chrome' | 'edge' | 'chromium' {
   return typeof value === 'string' && ['chrome', 'edge', 'chromium'].includes(value)
+}
+
+function binaryMatchesKernel(
+  kernel: 'chrome' | 'edge' | 'chromium-headless',
+  kind: 'chrome' | 'edge' | 'chromium',
+): boolean {
+  if (kernel === 'chromium-headless') return kind === 'chromium' || kind === 'chrome'
+  return kernel === kind
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {

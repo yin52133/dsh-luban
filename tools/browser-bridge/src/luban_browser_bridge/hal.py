@@ -95,11 +95,7 @@ def resolve_profile(
     else:
         raise BridgeError("E_BROWSER_INVALID_PROFILE", "userDataDir must be a non-empty string")
 
-    channel = {
-        "chrome": "chrome",
-        "edge": "msedge",
-        "chromium-headless": "chromium",
-    }[resolved_kernel]
+    channel = {"chrome": "chrome", "edge": "msedge", "chromium": "chromium"}[binary.kind]
     headless = (
         requested_headless
         if requested_headless is not None
@@ -172,6 +168,8 @@ def _resolve_browser_binary(
     expected_kinds = (
         ("chrome", "edge")
         if current_platform == "win32" and kernel == "auto"
+        else ("chromium", "chrome")
+        if current_platform == "linux" and kernel == "chromium-headless"
         else (_kind_for_kernel(kernel),)
     )
     if explicit_path is not None:
@@ -228,15 +226,28 @@ def _browser_candidates(current_platform: str, kind: str) -> tuple[Path, ...]:
         command = shutil.which("chrome.exe" if kind == "chrome" else "msedge.exe")
         if command:
             candidates.append(Path(command))
-    elif kind == "chromium":
-        for path in (
-            "/usr/bin/chromium",
-            "/usr/bin/chromium-browser",
-            "/usr/local/bin/chromium",
-            "/snap/bin/chromium",
-        ):
+    elif kind in {"chromium", "chrome"}:
+        paths = (
+            (
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+                "/usr/local/bin/chromium",
+                "/snap/bin/chromium",
+            )
+            if kind == "chromium"
+            else (
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/local/bin/google-chrome",
+            )
+        )
+        for path in paths:
             candidates.append(Path(path))
-        command = shutil.which("chromium") or shutil.which("chromium-browser")
+        command = (
+            shutil.which("chromium") or shutil.which("chromium-browser")
+            if kind == "chromium"
+            else shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+        )
         if command:
             candidates.append(Path(command))
     return tuple(dict.fromkeys(candidates))

@@ -136,6 +136,33 @@ class HalTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], [str(path), "--version"])
         self.assertNotIn("BROWSER_USE_API_KEY", run.call_args.kwargs["env"])
 
+    def test_ubuntu_headless_falls_back_to_attested_google_chrome(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            chrome = _fake_binary(Path(directory), "google-chrome")
+
+            def candidates(_platform: str, kind: str) -> tuple[Path, ...]:
+                return (chrome,) if kind == "chrome" else ()
+
+            with (
+                patch("luban_browser_bridge.hal._browser_candidates", side_effect=candidates),
+                patch(
+                    "luban_browser_bridge.hal._probe_browser_identity",
+                    return_value=("chrome", "146.0.7680.177"),
+                ),
+            ):
+                profile = resolve_profile(
+                    {"kernel": "chromium-headless"},
+                    platform="linux",
+                    read_os_release=lambda: "ID=ubuntu\n",
+                )
+            try:
+                self.assertEqual(profile.public["kernel"], "chromium-headless")
+                self.assertEqual(profile.public["binary"]["kind"], "chrome")
+                self.assertEqual(profile.browser_kwargs["channel"], "chrome")
+                self.assertTrue(profile.public["headless"])
+            finally:
+                profile.cleanup()
+
     @unittest.skipIf(os.name == "nt", "Windows symlink creation requires host policy")
     def test_ubuntu_preserves_snap_style_symlink_as_the_launch_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
