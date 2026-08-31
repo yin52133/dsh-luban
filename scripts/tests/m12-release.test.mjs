@@ -1015,6 +1015,18 @@ describe('M12 install and safety plans', () => {
 })
 
 describe('M12 release policy', () => {
+  it('excludes deployment runtime roots from repository-wide style gates', async () => {
+    const [prettierIgnore, eslintConfig] = await Promise.all([
+      readFile(join(REPOSITORY_ROOT, '.prettierignore'), 'utf8'),
+      readFile(join(REPOSITORY_ROOT, 'eslint.config.js'), 'utf8'),
+    ])
+
+    for (const directory of ['.acceptance', '.runtime']) {
+      expect(prettierIgnore.split(/\r?\n/u)).toContain(directory)
+      expect(eslintConfig).toContain(`'**/${directory}/**'`)
+    }
+  })
+
   it('allows a package-specific DSH floor within the tested compatibility window', async () => {
     const policy = await loadPolicy()
     expect(validateDshEngineRange('>=0.1.1-rc.1', policy)).toBeUndefined()
