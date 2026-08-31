@@ -54,6 +54,7 @@ const CORE_ENTRY_PATH = join(CORE_DIST_ROOT, 'index.js')
 const CORE_LINK_PATH = join(SERVER_PACKAGE_ROOT, 'node_modules', 'dsh-luban-core')
 const RUNNER_REPOSITORY_PATH = 'scripts/acceptance/m09-systemd-reboot.mjs'
 const PNPM_TRUST_REPOSITORY_PATH = 'scripts/acceptance/m09-pnpm-trust.json'
+const PACKAGE_MANAGER_METADATA_FILES = new Set(['.corepack'])
 const REQUIRED_BUILD_INPUTS = Object.freeze([
   'package.json',
   'pnpm-lock.yaml',
@@ -1799,6 +1800,11 @@ async function collectPackageManagerFiles(root, directory, files) {
   entries.sort((left, right) => compareCodeUnits(left.name, right.name))
   for (const entry of entries) {
     const path = join(directory, entry.name)
+    const relativePath = relative(root, path).replaceAll('\\', '/')
+    if (PACKAGE_MANAGER_METADATA_FILES.has(relativePath)) {
+      if (!entry.isFile() || entry.isSymbolicLink()) fail('E_UNAVAILABLE')
+      continue
+    }
     if (entry.isSymbolicLink()) fail('E_UNAVAILABLE')
     if (entry.isDirectory()) {
       await collectPackageManagerFiles(root, path, files)
