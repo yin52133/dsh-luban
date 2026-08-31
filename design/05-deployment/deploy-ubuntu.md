@@ -17,6 +17,7 @@
 | v0.11 | 2026-08-30 | Codex | 固定 M09 验收所用 pnpm 版本与运行文件 |
 | v0.12 | 2026-08-30 | Codex | 完善 M09 验收运行目录与阶段重试 |
 | v0.13 | 2026-08-30 | Codex | 收敛安装与重启 smoke 为幂等、owned cleanup 和真实宿主功能验收 |
+| v0.14 | 2026-08-31 | Codex | 限定 Web 端口为实际 LAN CIDR 并记录跨机登录验收 |
 
 ## 1. 目标形态
 
@@ -159,7 +160,18 @@ sequenceDiagram
 - 日志：`journalctl --user -u dsh-luban -f`；套件自有日志在 `~/.dsh/luban/logs/`（滚动 30 天）。
 - 升级：同 Windows（dsh-market Update API / pnpm）；dsh 本体升级前在测试 profile 验证。
 - 备份：`~/.dsh/luban/`（看板/认证/保活账本）每日 cron 快照保留 7 份；备份包含账号数据，按普通本地备份保存，不作为项目文件提交。
-- 防火墙：需要从其他设备访问时，为配置的 Web 端口添加对应规则，例如 `ufw allow <port>/tcp`。
+- 防火墙：只向实际局域网客户端地址范围开放配置的 Web 端口。`<lan-client-cidr>` 是当前验收环境示例，
+  不是固定值；其他网络应使用路由器或网络管理员给出的 CIDR，例如 `192.0.2.0/24` 或分配的
+  `10.x.x.x` 地址范围。
+
+```sh
+# Example only: replace this value with the actual LAN client CIDR.
+LAN_CIDR=<lan-client-cidr>
+sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
+```
+
+该规则只放通到认证 sidecar 的网络连接；用户仍需在 `/luban-auth/login` 使用本地账号登录。除非明确
+需要接受所有可路由来源，否则不要配置无来源限制的 `ufw allow 42600/tcp`。
 
 ## 5. 浏览器自动化（M11）无桌面注意点
 

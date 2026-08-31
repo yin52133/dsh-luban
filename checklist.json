@@ -4,7 +4,7 @@
     "project": "dsh-luban",
     "description": "功能进度台账：与 design/01-overview/trace-matrix.md 及各模块文档功能清单三处一致，由 scripts/validate-design.mjs 校验",
     "version": "0.1.0",
-    "updatedAt": "2026-08-30",
+    "updatedAt": "2026-08-31",
     "idRules": "R=需求(只增不改) M=模块 F=功能点(只增不改，废弃置dropped) MS=里程碑"
   },
   "statusLegend": {
@@ -69,7 +69,7 @@
     }
   ],
   "requirements": [
-    { "id": "R01", "title": "Ubuntu 端可直接用网页操作 dsh", "modules": ["M01", "M09"], "status": "blocked" },
+    { "id": "R01", "title": "Ubuntu 端可直接用网页操作 dsh", "modules": ["M01", "M09"], "status": "doing" },
     { "id": "R02", "title": "tmux 等保活；重启后后台继续工作直到完成", "modules": ["M03"], "status": "blocked" },
     { "id": "R03", "title": "任务看板（todo/执行中/已完成）+ agent 自主领单", "modules": ["M02"], "status": "done" },
     { "id": "R04", "title": "注册到 dsh 插件市场", "modules": ["M12"], "status": "blocked" },
@@ -87,7 +87,7 @@
     { "id": "M01-F003", "requirement": "R01", "module": "M01", "title": "Web 认证门禁中间件", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["HTTP/SSE/WebSocket/SPA 的匿名跳转或 401 行为已通过集成测试；正向登录路由统一为 `/luban-auth/login`"] },
     { "id": "M01-F004", "requirement": "R10", "module": "M01", "title": "端口与监听地址配置", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["host/port 配置、动态端口监听和 upstream 端口匹配测试通过"] },
     { "id": "M01-F005", "requirement": "R01", "module": "M01", "title": "失败锁定与审计日志", "priority": "P1", "milestone": "MS1", "status": "dropped", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["安全加固范围已取消：爆破锁定、IP 限速和长期安全审计不再作为产品需求；ID 按规则保留"] },
-    { "id": "M01-F006", "requirement": "R01", "module": "M01", "title": "双端部署适配（win/ubuntu 同一实现）", "priority": "P0", "milestone": "MS1", "status": "blocked", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-31", "notes": ["Windows 本地登录已验证；Ubuntu 24.04.4 主机 operator@<server-lan-ip> 已在提交 1fa7654 上完成真实 profile 启动、canonical /luban-auth/login、匿名 401、管理员登录、认证 session 与原生 session.list smoke，证据位于 <private-deploy-dir>/.acceptance/m01-ubuntu-smoke.json（SHA-256 93170b822569489410e8073b25860ab5bf5594183784e6bca14fe22d6dc3f05d）。sidecar 已确认监听 0.0.0.0:42600，当前仅因 Ubuntu UFW active/default DROP 且无 42600 规则导致 Windows 跨机 TCP 超时；获准开放该端口并完成一次 Windows→Ubuntu 登录后可转 done"] },
+    { "id": "M01-F006", "requirement": "R01", "module": "M01", "title": "双端部署适配（win/ubuntu 同一实现）", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-31", "notes": ["Windows 本地登录及 Ubuntu 24.04.4 隔离 profile 均已验证；Windows <client-lan-ip> 经限定来源的 LAN 规则访问 Ubuntu <server-lan-ip>:42600，完成 canonical /luban-auth/login 200、匿名 session.list 401、管理员登录 200、认证 session 200 与原生 session.list 200/RPC 对应检查。直接证据位于 <private-deploy-dir>/.acceptance/m01-lan-smoke.json（SHA-256 1d231367c481be0aac8df6761e178d783ae6132106ec1dd4f6ac51dc19b4e4f2）"] },
     { "id": "M01-F007", "requirement": "R01", "module": "M01", "title": "HTTPS/反代适配", "priority": "P3", "milestone": "MS4", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["作为可选部署兼容能力，反向代理下的 redirect 与 cookie 行为已通过集成测试；不作为安全加固 blocker"] },
     { "id": "M01-F008", "requirement": "R01", "module": "M01", "title": "账号上下文隔离", "priority": "P0", "milestone": "MS1", "status": "doing", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["插件模块的 accountId 分区及 M09/M10/M11 缺口已补齐；最终审计确认 DSH 原生主 Web 的 session HTTP/WS 仍访问全局 session，且 Web 新建 session 未绑定 owner。修复并完成 Alice/Bob 原生 session 集成验证前保持 doing"] },
 

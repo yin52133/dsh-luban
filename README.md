@@ -44,6 +44,19 @@ pnpm check
 当前账号读取对应的会话与上下文。各插件路由遵循 `/luban-<module>`，例如
 `/luban-taskboard/tasks` 与 `/luban-browser/jobs`。
 
+Ubuntu 服务器只需向实际局域网地址范围开放认证 sidecar 端口。`<lan-client-cidr>` 只是
+一个示例；不同网络可能使用 `192.0.2.0/24`、`10.x.x.x` 或其他 CIDR，应替换为路由器
+或网络管理员提供的客户端地址范围：
+
+```sh
+# Example only: replace this value with the actual LAN client CIDR.
+LAN_CIDR=<lan-client-cidr>
+sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
+```
+
+该规则只控制哪些设备能连接端口；访问 DSH 仍需通过 `/luban-auth/login` 使用本地账号登录。
+除非明确需要接受所有可路由来源，否则不要使用无来源限制的 `ufw allow 42600/tcp`。
+
 浏览器桥接使用仓库锁文件，不使用全局 pip：
 
 ```powershell

@@ -43,6 +43,23 @@ listening port matches the configured upstream port.
         usersFile: ~/.dsh/luban/auth/users.json
 ```
 
+### LAN firewall
+
+Expose the sidecar only to the client address range of the actual LAN. The
+following CIDR matches one example network; it is not a universal default:
+
+```sh
+# Example only: replace this value with the actual LAN client CIDR.
+LAN_CIDR=<lan-client-cidr>
+sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
+```
+
+Other LANs may use ranges such as `192.0.2.0/24` or an allocated `10.x.x.x`
+range. Use the CIDR reported by the router or network administrator. The UFW
+rule controls network reachability only; clients must still sign in at
+`/luban-auth/login`. Avoid an unrestricted `ufw allow 42600/tcp` rule unless
+the service is intentionally meant to accept every routable source.
+
 ### First start
 
 Set `LUBAN_ADMIN_PASSWORD` to a password of at least eight characters for the
