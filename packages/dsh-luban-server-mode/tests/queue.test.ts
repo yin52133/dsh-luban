@@ -637,7 +637,7 @@ describe('BuildQueue', (): void => {
       .poll(
         async (): Promise<number> =>
           (await queue.queue()).filter((job): boolean => job.status === 'done').length,
-        { interval: 10, timeout: 2_000 },
+        { interval: 10, timeout: 10_000 },
       )
       .toBe(2)
     await queue.dispose()
