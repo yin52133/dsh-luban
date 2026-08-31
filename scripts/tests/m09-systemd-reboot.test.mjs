@@ -624,6 +624,8 @@ describe('M09 Ubuntu systemd staged reboot acceptance', () => {
     const environment = createM09ChildEnvironment(
       {
         HOME: '/home/builder',
+        PNPM_HOME: '/home/builder/.local/share/pnpm',
+        XDG_DATA_HOME: '/home/builder/.local/share',
         XDG_RUNTIME_DIR: '/run/user/1000',
         GH_TOKEN: 'must-not-propagate',
         LUBAN_SESSION_COOKIE: 'must-not-propagate',
@@ -636,6 +638,8 @@ describe('M09 Ubuntu systemd staged reboot acceptance', () => {
     expect(environment).toMatchObject({
       HOME: '/home/builder',
       PATH: '/trusted/bin:/usr/bin',
+      PNPM_HOME: '/home/builder/.local/share/pnpm',
+      XDG_DATA_HOME: '/home/builder/.local/share',
       XDG_RUNTIME_DIR: '/run/user/1000',
     })
     expect(environment).not.toHaveProperty('GH_TOKEN')

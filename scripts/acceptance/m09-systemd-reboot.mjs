@@ -277,7 +277,13 @@ async function assertSafeDirectory(path, privateDirectory) {
     fail('E_EVIDENCE_INVALID')
   }
   const canonical = await realpath(path)
-  if (resolve(canonical) !== resolve(path)) fail('E_EVIDENCE_INVALID')
+  const canonicalDetails = await lstat(canonical)
+  if (
+    !sameIdentity(initial, canonicalDetails) ||
+    (process.platform !== 'win32' && resolve(canonical) !== resolve(path))
+  ) {
+    fail('E_EVIDENCE_INVALID')
+  }
 }
 
 async function assertRunLocation(runDir, existing) {
@@ -1628,10 +1634,14 @@ const CHILD_ENVIRONMENT_KEYS = Object.freeze([
   'DBUS_SESSION_BUS_ADDRESS',
   'HOME',
   'LOGNAME',
+  'PNPM_HOME',
   'TEMP',
   'TMP',
   'TMPDIR',
   'USER',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
   'XDG_RUNTIME_DIR',
 ])
 
@@ -1934,14 +1944,15 @@ async function snapshotPackageManager(root, packageManager, trust) {
   })
   if (process.platform !== 'win32') await chmod(snapshotRoot, 0o700)
   await assertSafeDirectory(snapshotRoot, true)
-  const snapshotEntry = await realpath(join(snapshotRoot, ...trust.entry.split('/'))).catch(() =>
-    fail('E_PACKAGE_MANAGER_TRUST'),
-  )
-  if (!withinDirectory(snapshotRoot, snapshotEntry)) fail('E_PACKAGE_MANAGER_TRUST')
+  const canonicalSnapshotRoot = await realpath(snapshotRoot)
+  const snapshotEntry = await realpath(
+    join(canonicalSnapshotRoot, ...trust.entry.split('/')),
+  ).catch(() => fail('E_PACKAGE_MANAGER_TRUST'))
+  if (!withinDirectory(canonicalSnapshotRoot, snapshotEntry)) fail('E_PACKAGE_MANAGER_TRUST')
   const snapshot = {
     ...packageManager,
     entryPath: snapshotEntry,
-    rootPath: snapshotRoot,
+    rootPath: canonicalSnapshotRoot,
   }
   await assertPackageManagerMatches(snapshot)
   await assertPackageManagerMatches(packageManager)
