@@ -1836,62 +1836,83 @@ async function packageManagerRuntime(root) {
   }
 }
 
-async function packageManagerRootFromLauncher(launcher, trust) {
+async function packageManagerRootsFromLauncher(launcher, trust) {
   const launcherParent = dirname(launcher)
+  const roots = new Set()
   if (!launcher.toLowerCase().endsWith('.exe')) {
     const launcherBytes = await readBoundedFile(launcher, 64 * 1024).catch(() => undefined)
     if (launcherBytes !== undefined) {
       const launcherText = launcherBytes.toString('utf8')
       const targetPattern =
         /(?:%~dp0|\$basedir(?:_win)?)([\\/][^"'\r\n]*?[\\/]node_modules[\\/]pnpm[\\/]bin[\\/]pnpm\.mjs)/giu
-      const roots = new Set()
       for (const match of launcherText.matchAll(targetPattern)) {
         const relativeEntry = match[1].replace(/^[\\/]+/u, '')
         const entry = await realpath(resolve(launcherParent, relativeEntry)).catch(() => undefined)
         if (entry === undefined || basename(entry) !== basename(trust.entry)) continue
         roots.add(resolve(entry, '..', '..'))
       }
-      if (roots.size === 1) return [...roots][0]
     }
   }
   const candidateRoot =
     basename(launcherParent) === 'bin'
       ? resolve(launcherParent, '..')
       : join(launcherParent, 'node_modules', 'pnpm')
-  return await realpath(candidateRoot).catch(() => fail('E_PACKAGE_MANAGER_TRUST'))
+  const directRoot = await realpath(candidateRoot).catch(() => undefined)
+  if (directRoot !== undefined) roots.add(directRoot)
+
+  const normalizedLauncher = launcher.replaceAll('\\', '/')
+  if (normalizedLauncher.endsWith('/node_modules/corepack/dist/pnpm.js')) {
+    const configuredCorepackHome = process.env.COREPACK_HOME
+    const corepackHome =
+      typeof configuredCorepackHome === 'string' && isAbsolute(configuredCorepackHome)
+        ? configuredCorepackHome
+        : join(userInfo().homedir, '.cache', 'node', 'corepack')
+    const corepackRoot = await realpath(join(corepackHome, 'v1', 'pnpm', trust.version)).catch(
+      () => undefined,
+    )
+    if (corepackRoot !== undefined) roots.add(corepackRoot)
+  }
+  return [...roots]
 }
 
 async function packageManagerEntry(toolchain, packageManager, trust) {
   const launcher = await executableFromPath('pnpm', process.env.PATH)
-  const packageRoot = await packageManagerRootFromLauncher(launcher, trust)
-  if (!outsideRepository(packageRoot)) fail('E_PACKAGE_MANAGER_TRUST')
-  const entryPath = await realpath(join(packageRoot, ...trust.entry.split('/'))).catch(() =>
-    fail('E_PACKAGE_MANAGER_TRUST'),
-  )
-  if (!withinDirectory(packageRoot, entryPath)) fail('E_PACKAGE_MANAGER_TRUST')
-  const entry = await readCanonicalRuntimeFile(entryPath)
-  const runtime = await packageManagerRuntime(packageRoot)
-  if (
-    digest(entry) !== trust.entrySha256 ||
-    runtime.files !== trust.runtimeFiles ||
-    runtime.sha256 !== trust.runtimeSha256 ||
-    runtime.unpackedSize !== trust.unpackedSize
-  ) {
-    fail('E_PACKAGE_MANAGER_TRUST')
+  const roots = await packageManagerRootsFromLauncher(launcher, trust)
+  for (const packageRoot of roots) {
+    if (!outsideRepository(packageRoot)) continue
+    const entryPath = await realpath(join(packageRoot, ...trust.entry.split('/'))).catch(
+      () => undefined,
+    )
+    if (entryPath === undefined || !withinDirectory(packageRoot, entryPath)) continue
+    const validated = await Promise.all([
+      readCanonicalRuntimeFile(entryPath),
+      packageManagerRuntime(packageRoot),
+    ]).catch(() => undefined)
+    if (validated === undefined) continue
+    const [entry, runtime] = validated
+    if (
+      digest(entry) !== trust.entrySha256 ||
+      runtime.files !== trust.runtimeFiles ||
+      runtime.sha256 !== trust.runtimeSha256 ||
+      runtime.unpackedSize !== trust.unpackedSize
+    ) {
+      continue
+    }
+    return {
+      entryPath,
+      entrySha256: trust.entrySha256,
+      environment: packageManagerEnvironment(toolchain.buildEnvironmentSource, toolchain.nodePath),
+      manifestSha256: trust.manifestSha256,
+      packageManager: packageManager.specifier,
+      rootPath: packageRoot,
+      runtimeFiles: trust.runtimeFiles,
+      runtimeSha256: trust.runtimeSha256,
+      tarballIntegrity: trust.tarballIntegrity,
+      unpackedSize: trust.unpackedSize,
+      version: trust.version,
+    }
   }
-  return {
-    entryPath,
-    entrySha256: trust.entrySha256,
-    environment: packageManagerEnvironment(toolchain.buildEnvironmentSource, toolchain.nodePath),
-    manifestSha256: trust.manifestSha256,
-    packageManager: packageManager.specifier,
-    rootPath: packageRoot,
-    runtimeFiles: trust.runtimeFiles,
-    runtimeSha256: trust.runtimeSha256,
-    tarballIntegrity: trust.tarballIntegrity,
-    unpackedSize: trust.unpackedSize,
-    version: trust.version,
-  }
+  fail('E_PACKAGE_MANAGER_TRUST')
 }
 
 async function snapshotPackageManager(root, packageManager, trust) {
