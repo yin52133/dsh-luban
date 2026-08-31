@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['packages/**/tests/**/*.test.ts', 'scripts/**/*.test.mjs'],
+    maxWorkers: 4,
     passWithNoTests: false,
     restoreMocks: true,
     coverage: {
