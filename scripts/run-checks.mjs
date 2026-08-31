@@ -9,9 +9,10 @@ if (pnpmEntry === undefined || pnpmEntry === '') {
 
 const checks = [
   ['format', ['format:check']],
+  // Type-aware workspace checks resolve declaration files emitted by package builds.
+  ['build', ['build']],
   ['lint', ['lint']],
   ['typecheck', ['typecheck']],
-  ['build', ['build']],
   ['tests', ['test']],
   ['design', ['validate:design']],
   ['features', ['validate:features']],
