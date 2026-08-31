@@ -33,6 +33,7 @@ interface ChildState {
 type SpawnBridge = typeof spawn
 
 const PROCESS_CLOSE_TIMEOUT_MS = 5_000
+const PROCESS_HANDSHAKE_TIMEOUT_MS = 60_000
 
 export interface BridgeProcessOptions {
   readonly config: ResolvedConfig['bridge']
@@ -65,7 +66,7 @@ export class BridgeProcess implements BrowserBridge {
 
   public async start(profile: BrowserProfile): Promise<BrowserSession> {
     await this.#ensureProcess()
-    const ping = asRecord(await this.#request('ping', {}, 10_000))
+    const ping = asRecord(await this.#request('ping', {}, PROCESS_HANDSHAKE_TIMEOUT_MS))
     if (
       ping.bridgeVersion !== '0.1.0' ||
       ping.browserUseVersion !== '0.13.8' ||
