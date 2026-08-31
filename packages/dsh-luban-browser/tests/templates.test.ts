@@ -63,11 +63,17 @@ describe('TemplateRepository', () => {
 describe('bridge environment security', () => {
   it('passes only base and explicitly named variables', () => {
     const environment = bridgeEnvironment(
-      { PATH: '/bin', OPENAI_API_KEY: 'secret', UNRELATED_SECRET: 'nope' },
+      {
+        PATH: '/bin',
+        ProgramFiles: 'C:\\Program Files',
+        OPENAI_API_KEY: 'secret',
+        UNRELATED_SECRET: 'nope',
+      },
       ['OPENAI_API_KEY'],
       '/isolated/uv',
     )
     expect(environment.OPENAI_API_KEY).toBe('secret')
+    expect(environment.ProgramFiles).toBe('C:\\Program Files')
     expect(environment.UNRELATED_SECRET).toBeUndefined()
     expect(environment.UV_PROJECT_ENVIRONMENT).toBe('/isolated/uv')
   })
