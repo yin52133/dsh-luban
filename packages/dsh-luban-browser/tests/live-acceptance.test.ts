@@ -35,7 +35,8 @@ const BUILD_TREE_SHA256 = createHash('sha256')
   .update(RUNTIME_CONTENT, 'utf8')
   .digest('hex')
 const NONCE = '0123456789abcdef0123456789abcdef'
-const PROVIDER_SECRET = 'provider-secret-for-tests'
+const MODEL_GATEWAY_TOKEN = 'model-gateway-token-for-tests-123456'
+const MODEL_GATEWAY_URL = 'http://127.0.0.1:42601/v1/browser-use/complete'
 const CHROME_BINARY = Object.freeze({
   kind: 'chrome' as const,
   version: '140.0.7339.81',
@@ -178,7 +179,7 @@ describe('M11 live browser acceptance runner', (): void => {
     })
     expect(service?.tasks).toEqual([{ templateId: 'luban-live-acceptance-v1', goal: '' }])
     expect(service?.closed).toBe(true)
-    expect(JSON.stringify(evidence)).not.toContain(PROVIDER_SECRET)
+    expect(JSON.stringify(evidence)).not.toContain(MODEL_GATEWAY_TOKEN)
     expect(JSON.stringify(evidence)).not.toContain(NONCE)
   })
 
@@ -191,7 +192,10 @@ describe('M11 live browser acceptance runner', (): void => {
 
     await expect(
       runLiveBrowserAcceptanceForTest(
-        { repositoryRoot: process.cwd(), environment: { BROWSER_USE_API_KEY: PROVIDER_SECRET } },
+        {
+          repositoryRoot: process.cwd(),
+          environment: { LUBAN_BROWSER_DSH_LLM_TOKEN: MODEL_GATEWAY_TOKEN },
+        },
         dependencies,
       ),
     ).rejects.toMatchObject({ code: 'E_LIVE_OPT_IN_REQUIRED' })
@@ -199,7 +203,7 @@ describe('M11 live browser acceptance runner', (): void => {
     expect(createService).not.toHaveBeenCalled()
   })
 
-  it('rejects a missing selected provider credential before creating a runtime', async (): Promise<void> => {
+  it('rejects a missing parent DSH model gateway before creating a runtime', async (): Promise<void> => {
     const createService = vi.fn((): never => {
       throw new Error('must not create a browser')
     })
@@ -210,11 +214,11 @@ describe('M11 live browser acceptance runner', (): void => {
         { repositoryRoot: process.cwd(), environment: { LUBAN_LIVE_ACCEPTANCE: '1' } },
         dependencies,
       ),
-    ).rejects.toMatchObject({ code: 'E_LIVE_PROVIDER_REQUIRED' })
+    ).rejects.toMatchObject({ code: 'E_LIVE_MODEL_GATEWAY_REQUIRED' })
     expect(createService).not.toHaveBeenCalled()
   })
 
-  it('does not treat unrelated provider credentials as Browser Use credentials', async (): Promise<void> => {
+  it('does not treat unrelated credentials as a DSH model gateway', async (): Promise<void> => {
     const createService = vi.fn((): never => {
       throw new Error('must not create a browser')
     })
@@ -226,12 +230,12 @@ describe('M11 live browser acceptance runner', (): void => {
           repositoryRoot: process.cwd(),
           environment: {
             LUBAN_LIVE_ACCEPTANCE: '1',
-            OPENAI_API_KEY: PROVIDER_SECRET,
+            OPENAI_API_KEY: MODEL_GATEWAY_TOKEN,
           },
         },
         dependencies,
       ),
-    ).rejects.toMatchObject({ code: 'E_LIVE_PROVIDER_REQUIRED' })
+    ).rejects.toMatchObject({ code: 'E_LIVE_MODEL_GATEWAY_REQUIRED' })
     expect(createService).not.toHaveBeenCalled()
   })
 
@@ -490,7 +494,7 @@ describe('M11 dual-platform evidence aggregation', (): void => {
 
     for (const invalid of [
       { ...evidence, fixtureSha256: 'f'.repeat(64) },
-      { ...evidence, providerEnvironment: 'UNTRUSTED_API_KEY' },
+      { ...evidence, modelRoute: 'untrusted-model-route' },
       { ...evidence, verdict: 'test-only' },
       { ...evidence, build: { ...evidence.build, gitSha: 'b'.repeat(40) } },
       {
@@ -573,7 +577,8 @@ function liveOptions(): {
     repositoryRoot: process.cwd(),
     environment: {
       LUBAN_LIVE_ACCEPTANCE: '1',
-      BROWSER_USE_API_KEY: PROVIDER_SECRET,
+      LUBAN_BROWSER_DSH_LLM_URL: MODEL_GATEWAY_URL,
+      LUBAN_BROWSER_DSH_LLM_TOKEN: MODEL_GATEWAY_TOKEN,
     },
   }
 }
@@ -598,7 +603,7 @@ function fakeChallenge(): ChallengeServerHandle {
 function allChecks(): LiveBrowserChecks {
   return {
     optIn: true,
-    providerCredentialPresent: true,
+    dshModelGatewayPresent: true,
     gitClean: true,
     buildProvenanceAttested: true,
     platformAttested: true,
@@ -633,7 +638,7 @@ function productionEvidence(target: 'windows' | 'ubuntu'): LiveBrowserEvidence {
     },
     taskSha256: LIVE_BROWSER_TASK_SHA256,
     fixtureSha256: LIVE_BROWSER_FIXTURE_SHA256,
-    providerEnvironment: 'BROWSER_USE_API_KEY',
+    modelRoute: 'dsh-default',
     platform: windows
       ? { target, runtimePlatform: 'win32', arch: 'x64', node: 'v22.0.0' }
       : {

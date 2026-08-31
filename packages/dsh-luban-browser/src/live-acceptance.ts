@@ -20,7 +20,7 @@ import {
   LIVE_BROWSER_EVIDENCE_SCHEMA,
   LIVE_BROWSER_FEATURES,
   LIVE_BROWSER_FIXTURE_SHA256,
-  LIVE_BROWSER_PROVIDER_ENVIRONMENTS,
+  LIVE_BROWSER_MODEL_ROUTE,
   LIVE_BROWSER_TASK_SHA256,
   LIVE_BROWSER_TEMPLATE_ID,
   LiveAcceptanceError,
@@ -33,14 +33,14 @@ import {
   type LiveBrowserExecution,
   type LiveBrowserPlatformEvidence,
   type LiveBrowserProfileEvidence,
-  type LiveBrowserProviderEnvironment,
   type LiveBrowserScreenshotEvidence,
 } from './live-evidence.js'
 
 export * from './live-evidence.js'
 
 const OPT_IN_ENVIRONMENT = 'LUBAN_LIVE_ACCEPTANCE'
-const DEFAULT_PROVIDER_ENVIRONMENT = 'BROWSER_USE_API_KEY'
+const DSH_MODEL_URL_ENVIRONMENT = 'LUBAN_BROWSER_DSH_LLM_URL'
+const DSH_MODEL_TOKEN_ENVIRONMENT = 'LUBAN_BROWSER_DSH_LLM_TOKEN'
 const TEMPORARY_DIRECTORY_PREFIX = 'luban-browser-live-'
 const MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024
 const MAX_BUILD_FILE_BYTES = 16 * 1024 * 1024
@@ -208,7 +208,7 @@ async function runWithDependencies(
   dependencies: LiveAcceptanceDependencies,
 ): Promise<LiveBrowserEvidence> {
   const environment = options.environment ?? process.env
-  const provider = providerCredential(environment)
+  const gateway = modelGatewayEnvironment(environment)
   const repositoryRoot = resolve(options.repositoryRoot ?? process.cwd())
   const [platform, git] = await Promise.all([
     dependencies.inspectPlatform(),
@@ -242,7 +242,9 @@ async function runWithDependencies(
         timeoutSec: LIVE_BROWSER_CANONICAL_TASK.timeoutSec,
         allowDomains: LIVE_BROWSER_CANONICAL_TASK.allowDomains,
       },
-      bridge: { passEnvironment: [provider.name] },
+      bridge: {
+        passEnvironment: [DSH_MODEL_URL_ENVIRONMENT, DSH_MODEL_TOKEN_ENVIRONMENT],
+      },
     })
     const nonce = dependencies.nonce()
     if (!/^[a-f0-9]{32}$/u.test(nonce)) {
@@ -270,8 +272,7 @@ async function runWithDependencies(
       git,
       build,
       profile,
-      providerEnvironment: provider.name,
-      providerSecret: provider.value,
+      gatewayToken: gateway.token,
       environment,
       nonce,
     })
@@ -321,8 +322,7 @@ async function executeAcceptance(input: {
   readonly git: GitEvidence
   readonly build: LiveBrowserBuildEvidence
   readonly profile: BrowserProfile
-  readonly providerEnvironment: LiveBrowserProviderEnvironment
-  readonly providerSecret: string
+  readonly gatewayToken: string
   readonly environment: NodeJS.ProcessEnv
   readonly nonce: string
 }): Promise<LiveBrowserEvidence> {
@@ -342,7 +342,7 @@ async function executeAcceptance(input: {
       if (event.type === 'result') browserResult = event.result
     }
   } catch {
-    // A stable failed evidence record is preferable to provider diagnostics.
+    // A stable failed evidence record is preferable to model runtime diagnostics.
   }
   if (browserResult !== undefined) {
     for (const path of browserResult.screenshots) screenshotPaths.add(path)
@@ -352,7 +352,7 @@ async function executeAcceptance(input: {
   const challenge = input.challenge.snapshot()
   const checks: LiveBrowserChecks = Object.freeze({
     optIn: true,
-    providerCredentialPresent: true,
+    dshModelGatewayPresent: true,
     gitClean: !input.git.dirty,
     buildProvenanceAttested: input.build.gitSha === input.git.sha,
     platformAttested: platformIsAttested(input.platform),
@@ -380,7 +380,7 @@ async function executeAcceptance(input: {
     build: input.build,
     taskSha256: LIVE_BROWSER_TASK_SHA256,
     fixtureSha256: LIVE_BROWSER_FIXTURE_SHA256,
-    providerEnvironment: input.providerEnvironment,
+    modelRoute: LIVE_BROWSER_MODEL_ROUTE,
     platform: input.platform,
     browser: Object.freeze({
       profile: attestedBrowser.profile,
@@ -409,7 +409,7 @@ async function executeAcceptance(input: {
     checks,
   })
   const secretValues = knownSecretValues(input.environment)
-  if (!secretValues.includes(input.providerSecret)) secretValues.push(input.providerSecret)
+  if (!secretValues.includes(input.gatewayToken)) secretValues.push(input.gatewayToken)
   assertSecretFree(JSON.stringify(evidence), secretValues)
   return parseLiveBrowserEvidence(evidence)
 }
@@ -480,25 +480,22 @@ export async function removeLiveAcceptanceTemporaryDirectory(path: string): Prom
   await rm(candidate, { recursive: true, force: false })
 }
 
-function providerCredential(environment: NodeJS.ProcessEnv): {
-  readonly name: LiveBrowserProviderEnvironment
-  readonly value: string
-} {
+function modelGatewayEnvironment(environment: NodeJS.ProcessEnv): { readonly token: string } {
   if (environment[OPT_IN_ENVIRONMENT] !== '1') {
     throw new LiveAcceptanceError(
       'E_LIVE_OPT_IN_REQUIRED',
       `${OPT_IN_ENVIRONMENT}=1 is required for live browser acceptance`,
     )
   }
-  const requested = DEFAULT_PROVIDER_ENVIRONMENT
-  const value = environment[requested]
-  if (!isProviderCredential(value)) {
+  const endpoint = environment[DSH_MODEL_URL_ENVIRONMENT]
+  const token = environment[DSH_MODEL_TOKEN_ENVIRONMENT]
+  if (typeof endpoint !== 'string' || endpoint.trim() === '' || !isGatewayToken(token)) {
     throw new LiveAcceptanceError(
-      'E_LIVE_PROVIDER_REQUIRED',
-      `A non-empty ${requested} credential is required for live browser acceptance`,
+      'E_LIVE_MODEL_GATEWAY_REQUIRED',
+      `A parent DSH model gateway (${DSH_MODEL_URL_ENVIRONMENT} and ${DSH_MODEL_TOKEN_ENVIRONMENT}) is required for standalone live acceptance`,
     )
   }
-  return { name: requested, value }
+  return { token }
 }
 
 export async function inspectRuntimeBuildProvenance(
@@ -677,7 +674,6 @@ function attestedSessionBrowser(
   const binary = actual.binary
   const keys = Object.keys(actual)
   const kernel = actual.kernel
-  const expectedBinary = actual.kernel === 'chromium-headless' ? 'chromium' : actual.kernel
   if (
     keys.length !== 4 ||
     !['kernel', 'headless', 'isolated', 'binary'].every((key): boolean => keys.includes(key)) ||
@@ -690,7 +686,7 @@ function attestedSessionBrowser(
     !isRecord(binary) ||
     !hasExactKeys(binary, ['kind', 'version', 'sha256']) ||
     !isLiveBrowserBinaryKind(binary.kind) ||
-    binary.kind !== expectedBinary ||
+    !binaryMatchesLiveKernel(kernel, binary.kind) ||
     typeof binary.version !== 'string' ||
     binary.version.length > 128 ||
     !/^\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$/u.test(binary.version) ||
@@ -718,6 +714,14 @@ function attestedSessionBrowser(
 
 function isLiveBrowserKernel(value: unknown): value is LiveBrowserProfileEvidence['kernel'] {
   return typeof value === 'string' && ['chrome', 'edge', 'chromium-headless'].includes(value)
+}
+
+function binaryMatchesLiveKernel(
+  kernel: LiveBrowserProfileEvidence['kernel'],
+  kind: LiveBrowserBinaryEvidence['kind'],
+): boolean {
+  if (kernel === 'chromium-headless') return kind === 'chromium' || kind === 'chrome'
+  return kernel === kind
 }
 
 function isLiveBrowserBinaryKind(value: unknown): value is LiveBrowserBinaryEvidence['kind'] {
@@ -908,15 +912,13 @@ function osReleaseId(value: string): string | undefined {
   return undefined
 }
 
-function isProviderCredential(value: unknown): value is string {
-  return typeof value === 'string' && value.trim() === value && value.length >= 8
+function isGatewayToken(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() === value && value.length >= 32
 }
 
 function knownSecretValues(environment: NodeJS.ProcessEnv): string[] {
-  return LIVE_BROWSER_PROVIDER_ENVIRONMENTS.flatMap((name): string[] => {
-    const value = environment[name]
-    return value === undefined || value.length < 8 ? [] : [value]
-  })
+  const value = environment[DSH_MODEL_TOKEN_ENVIRONMENT]
+  return value === undefined || value.length < 8 ? [] : [value]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -174,7 +174,8 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   `events\000004-verify-signout-confirmed.json`（SHA-256
   `7f937dc605d2922d38bcc31e8041f9c698542f5b57108b4ef45214c6f5802194`）。实机验证同时修复
   `schtasks.exe /XML` 所需 UTF-16LE+BOM、Task Scheduler 回读默认值规范化、验收 profile 重复加载
-  keepalive，以及用户现有 DSH 占用默认 Web 端口时的冲突。run 已完成 `arm-reboot`，证据为
-  `events\000006-arm-reboot-confirmed.json`（SHA-256
-  `5f5177ecab5438d04bf8f8f64a12988626f92e51577a51ab32aeab6e13d04a01`）；仅剩人工重启 Windows 后
-  执行 `verify-reboot`。runner 本身不会触发该系统操作。
+  keepalive，以及用户现有 DSH 占用默认 Web 端口时的冲突。真实重启后 `verify-reboot` 确认系统 boot
+  marker 前进、host/child task 以新 startedAt 恢复、heartbeat sequence 继续到 93，并从 checkpoint
+  重建会话；证据为 `events\000008-verify-reboot-confirmed.json`（SHA-256
+  `8dd13064604e3cddeb283cc760ec63c52bb9aef25ec44b8fa94c628b6be53a7b`）。验收任务清理需要管理员
+  令牌，属于运行后清理，不影响 M03-F003 功能结论。

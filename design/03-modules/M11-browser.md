@@ -18,6 +18,7 @@
 | v0.10 | 2026-08-30 | Codex | 收口为真实浏览器/provider 与双平台功能验收 |
 | v0.11 | 2026-08-30 | Codex | 浏览器任务、事件、产物与持久 profile 按登录账号隔离 |
 | v0.12 | 2026-08-30 | Codex | 插件启动时恢复持久化的浏览器任务 claim |
+| v0.13 | 2026-09-01 | Codex | Agent 模型统一复用 DSH 当前默认模型；Ubuntu headless 接受 Chrome/Chromium |
 
 ## 1. 概述与目标
 
@@ -97,7 +98,9 @@ export interface BrowserTaskSpec {
 
 - 域名白名单默认为空=仅手动触发；夜间自动执行必须模板 + 域名白名单齐备（继承 M02 夜间三重防护）。
 - `allowDomains` 仅接受精确域名与 `*.example.com` 子域模式；裸 `*`（及归一化后为 `*` 的写法）在 TS 配置/模板/任务入口和 Python 执行端均拒绝。空列表仍只表示手动无约束，自动任务 fail closed。
-- 登录态凭据只存系统凭据管理器/环境变量，绝不入仓库与模板文件（P6.1）。
+- 网站登录态只存用户配置的浏览器 profile，不入仓库与模板文件。Agent 的模型调用复用 DSH
+  当前默认模型：Host 在进程内调用 `llm.stream()`，通过临时 loopback gateway 交给 Python，
+  不要求 `BROWSER_USE_API_KEY`，也不把 DSH provider 凭据复制到 bridge。
 
 ## 9. checklist 映射
 
@@ -106,8 +109,8 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
 ## 10. 实现与验证记录
 
 - TypeScript Host 通过有界串行队列管理 `uv run --locked` JSONL 子进程；协议覆盖启动、
-  进度、截图、结构化结果、取消、超时和稳定错误码，桥接只接收任务运行所需配置且错误结果不回显
-  provider 凭据。每个
+  进度、截图、结构化结果、取消、超时和稳定错误码，桥接只接收任务运行所需配置。错误保留有界的
+  实际原因，不序列化 traceback。每个
   listener 与 child state 绑定；shutdown 响应后继续等待真实 `close`，超时按 TERM→KILL 收口，
   旧 child 的迟到事件不能影响 replacement，listener/stdin/stdout/stderr 最终全部释放。
 - Python 3.12 桥接项目固定 `browser-use==0.13.8` 并提交 `uv.lock`；发布构建将桥接项目和
@@ -128,20 +131,19 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
   scheduler 独占 complete/fail。持久化 `executionOwner` 防止重复执行和终态重复写入。
 - 本地 ESLint、严格类型、构建、M11 包测试、跨模块集成与 `uv --locked` Python 测试、Ruff、
   compileall、ESM 导入及 npm pack 白名单均通过。真实 uv JSONL 子进程已完成
-  ping→shutdown→exit 0 且剥离模型凭据；本机 browser-use/Chrome 已加载 loopback DOM，并验证
-  临时复制 profile 清理，未访问外部网站或模型提供商。
+  ping→shutdown→exit 0；本机 browser-use/Chrome 已加载 loopback DOM，并验证临时复制 profile 清理。
+  Agent 模型轮次由 DSH 当前默认模型处理，bridge 只持有单次 loopback URL/token。
 - M11-F002/M11-F003 域名策略复核：TS 配置、YAML 模板和任务解析拒绝裸 `*`，自动任务
   仍要求非空白名单；Python 桥接在执行前再次拒绝，精确域名与 `*.example.com` 继续可用。
 - `luban-browser-acceptance` 提供 production run 与双端 aggregate：真实路径固定构造
   `BridgeProcess → BrowserService`，用本地 fixture 验证 progress、结构化结果与 PNG screenshot；Windows
   使用本地 Chrome/Edge，Ubuntu 使用 headless Chromium，并运行相同的 canonical task/fixture。
 - 每个平台按提交的 `uv.lock` 和固定 Python 版本创建 disposable bridge/profile。独立 kernel smoke
-  不调用 provider，直接用 browser-use 启动真实浏览器、访问 loopback fixture、读取 DOM nonce 并干净
+  不调用模型，直接用 browser-use 启动真实浏览器、访问 loopback fixture、读取 DOM nonce 并干净
   停止；Windows Chrome/Edge 与 Ubuntu headless Chrome 均已通过，因此 M11-F004 完成。完整 Agent 任务、
-  结果与截图仍由 M11-F001 的 provider live 验收负责。
+  Windows 挂载式 Agent 验收还验证 DSH 默认模型、结构化结果与截图的完整链路。
 
 ## 11. 开放问题
 
-- browser-use 在 Ubuntu 无桌面环境下的 headless 稳定性实测；若依赖 playwright，其浏览器下载与离线部署方式写入部署文档。
-- M11-F004 已用真实 Windows Chrome/Edge 与 Ubuntu headless Chrome 完成内核 smoke。M11-F001 仍需
-  `BROWSER_USE_API_KEY`，并在两端完成同一 provider 驱动任务；该外部凭据条件不再阻塞内核收口项。
+- M11-F004 已用真实 Windows Chrome/Edge 与 Ubuntu headless Chrome 完成内核 smoke。完整 Agent
+  验收要求目标 DSH profile 的默认模型本身可用；browser-use 不再另行要求 API key。

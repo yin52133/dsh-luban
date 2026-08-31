@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 
-export const LIVE_BROWSER_EVIDENCE_SCHEMA = 'dsh-luban/m11-live-browser/v2' as const
-export const LIVE_BROWSER_DUAL_SCHEMA = 'dsh-luban/m11-live-browser-dual/v2' as const
+export const LIVE_BROWSER_EVIDENCE_SCHEMA = 'dsh-luban/m11-live-browser/v3' as const
+export const LIVE_BROWSER_DUAL_SCHEMA = 'dsh-luban/m11-live-browser-dual/v3' as const
 export const LIVE_BROWSER_BUILD_PROVENANCE_SCHEMA = 'dsh-luban/browser-build-provenance/v2' as const
 export const LIVE_BROWSER_FEATURES = Object.freeze(['M11-F001', 'M11-F004'] as const)
 export const LIVE_BROWSER_CHALLENGE_PORT = 47_631
@@ -11,9 +11,7 @@ export const LIVE_BROWSER_CHALLENGE_URL =
   `http://127.0.0.1:${String(LIVE_BROWSER_CHALLENGE_PORT)}/challenge` as const
 export const LIVE_BROWSER_TEMPLATE_ID = 'luban-live-acceptance-v1' as const
 
-export const LIVE_BROWSER_PROVIDER_ENVIRONMENTS = Object.freeze(['BROWSER_USE_API_KEY'] as const)
-
-export type LiveBrowserProviderEnvironment = (typeof LIVE_BROWSER_PROVIDER_ENVIRONMENTS)[number]
+export const LIVE_BROWSER_MODEL_ROUTE = 'dsh-default' as const
 
 export const LIVE_BROWSER_OUTPUT_SCHEMA = Object.freeze({
   type: 'object',
@@ -52,7 +50,7 @@ export const LIVE_BROWSER_FIXTURE_SHA256 = sha256Text(LIVE_BROWSER_CHALLENGE_HTM
 
 export const LIVE_BROWSER_CHECK_IDS = Object.freeze([
   'optIn',
-  'providerCredentialPresent',
+  'dshModelGatewayPresent',
   'gitClean',
   'buildProvenanceAttested',
   'platformAttested',
@@ -122,7 +120,7 @@ export interface LiveBrowserEvidence {
   readonly build: LiveBrowserBuildEvidence
   readonly taskSha256: string
   readonly fixtureSha256: string
-  readonly providerEnvironment: string
+  readonly modelRoute: typeof LIVE_BROWSER_MODEL_ROUTE
   readonly platform: LiveBrowserPlatformEvidence
   readonly browser: {
     readonly profile: LiveBrowserProfileEvidence
@@ -329,7 +327,7 @@ function assertEvidenceShape(evidence: LiveBrowserEvidence): void {
       'build',
       'taskSha256',
       'fixtureSha256',
-      'providerEnvironment',
+      'modelRoute',
       'platform',
       'browser',
       'challenge',
@@ -360,8 +358,8 @@ function assertEvidenceShape(evidence: LiveBrowserEvidence): void {
       'Evidence does not use the canonical live task and fixture',
     )
   }
-  if (!isProviderEnvironment(evidence.providerEnvironment)) {
-    invalidEvidence('Evidence provider environment is not allowlisted')
+  if (!isExact(evidence.modelRoute, LIVE_BROWSER_MODEL_ROUTE)) {
+    invalidEvidence('Evidence does not use the current DSH default model')
   }
 
   if (
@@ -396,7 +394,7 @@ function assertEvidenceShape(evidence: LiveBrowserEvidence): void {
   const checks = evidence.checks
   if (
     !checks.optIn ||
-    !checks.providerCredentialPresent ||
+    !checks.dshModelGatewayPresent ||
     !checks.buildProvenanceAttested ||
     !checks.platformAttested ||
     !checks.browserProfileResolved ||
@@ -469,7 +467,7 @@ function assertPlatformShape(
     platform.runtimePlatform !== 'linux' ||
     platform.osReleaseId !== 'ubuntu' ||
     browser.profile.kernel !== 'chromium-headless' ||
-    browser.binary.kind !== 'chromium' ||
+    !['chromium', 'chrome'].includes(browser.binary.kind) ||
     !isExact(browser.profile.headless, true)
   ) {
     throw new LiveAcceptanceError(
@@ -590,7 +588,7 @@ function assertAggregatableEvidence(evidence: LiveBrowserEvidence): void {
     platform.runtimePlatform !== 'linux' ||
     platform.osReleaseId !== 'ubuntu' ||
     browser.profile.kernel !== 'chromium-headless' ||
-    browser.binary.kind !== 'chromium' ||
+    !['chromium', 'chrome'].includes(browser.binary.kind) ||
     !browser.profile.headless
   ) {
     throw new LiveAcceptanceError(
@@ -605,13 +603,6 @@ function sameFeatures(value: unknown): value is typeof LIVE_BROWSER_FEATURES {
     Array.isArray(value) &&
     value.length === LIVE_BROWSER_FEATURES.length &&
     value.every((item, index): boolean => item === LIVE_BROWSER_FEATURES[index])
-  )
-}
-
-function isProviderEnvironment(value: unknown): value is LiveBrowserProviderEnvironment {
-  return (
-    typeof value === 'string' &&
-    (LIVE_BROWSER_PROVIDER_ENVIRONMENTS as readonly string[]).includes(value)
   )
 }
 

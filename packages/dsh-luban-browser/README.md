@@ -57,8 +57,6 @@ The integration is tested against DSH `0.1.1-rc.2`, Node.js 22.19+, Python 3.12,
         bridge:
           runner: uv
           python: '3.12'
-          passEnvironment:
-            - BROWSER_USE_API_KEY
         taskboard:
           autoRun: false
 ```
@@ -141,17 +139,17 @@ website, download Chromium, or call an LLM.
 
 ## Live dual-platform acceptance
 
-The opt-in production runner uses the packaged locked bridge, a loopback nonce
-page, an isolated browser profile, and the configured browser-use provider.
-Add `BROWSER_USE_API_KEY` only for an explicit live run; ordinary tests use
-injected engines and do not call a provider.
+The production plugin routes every browser-use model turn through the current
+DSH default model. It does not require a Browser Use Cloud API key and does not
+copy the DSH provider credential into Python. The host creates an ephemeral
+loopback model gateway and passes only its one-run URL and token to the bridge.
 
 Run local Chrome or Edge on Windows and headless Chromium on Ubuntu. Python
 3.12 and browser-use are installed from the packaged `uv.lock` with the
 documented uv version. Each run records browser version, progress, structured
 nonce readback, and a validated PNG screenshot.
 
-Use the provider-free kernel smoke when validating only the platform HAL and
+Use the model-free kernel smoke when validating only the platform HAL and
 installed browser. It starts the real browser, visits a runner-owned loopback
 fixture, reads its nonce from the DOM, and stops the browser cleanly:
 
@@ -160,9 +158,16 @@ uv run --locked --no-dev --project tools/browser-bridge python scripts/acceptanc
 ```
 
 M11-F004 has passed this smoke with Windows Chrome and Edge plus Ubuntu headless
-Chrome. M11-F001 still requires the canonical Agent task with a real provider on
-both platforms. Browser jobs, results, cancellation, and SSE must also remain
-inside the originating M01 account context.
+Chrome. For the complete mounted task, run from a clean commit with an existing
+DSH profile whose default model is already usable:
+
+```console
+node scripts/acceptance/m11-dsh-browser.mjs --profile web --output <new-evidence.json>
+```
+
+The runner adds an overlay only for its process; it does not edit the selected
+profile or ask for a separate browser provider key. Browser jobs, results,
+cancellation, and SSE remain inside the originating M01 account context.
 
 ## Compatibility
 
@@ -174,11 +179,11 @@ inside the originating M01 account context.
 ## Platform Support
 
 - Windows: local Chrome or Edge through the platform HAL
-- Ubuntu: headless Chromium through the same task contract
+- Ubuntu: headless Google Chrome or Chromium through the same task contract
 
 Standard automated tests exercise fake processes and never contact external
-websites or providers. The provider-free live kernel smoke has passed on both
-target platforms; provider-driven Agent acceptance remains explicit and opt-in.
+websites or model services. The model-free live kernel smoke has passed on both
+target platforms; mounted Agent acceptance remains explicit and opt-in.
 
 ## License
 

@@ -100,10 +100,9 @@ contract and does not require alpha-only DSH session controllers.
 - Windows: native Scheduled Tasks HAL, including ONSTART registration and process probing.
 - macOS and other platforms: rejected with `E_PLATFORM_UNSUPPORTED`.
 
-These entries describe implemented HAL support, not completed target-host
-acceptance. Real Ubuntu SSH disconnect/tmux reattach, Windows task installation
-and logout, and authorized Windows/Ubuntu reboot recovery remain blocked checks
-in M03-F001 through M03-F003.
+Target-host acceptance has completed on Ubuntu and Windows: SSH disconnect/tmux
+reattach, Windows task installation/logout, and both reboot-recovery paths have
+direct evidence recorded in `checklist.json`.
 
 ## Staged Windows acceptance
 
