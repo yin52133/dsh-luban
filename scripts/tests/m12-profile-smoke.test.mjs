@@ -556,6 +556,8 @@ describe('M12 real profile smoke runner', () => {
       'realpathSync.native(process.env.RUNNER_TEMP)',
       '"TEMP=$canonicalTemp" >> $env:GITHUB_ENV',
       '"TMP=$canonicalTemp" >> $env:GITHUB_ENV',
+      'Prepare browser bridge environment',
+      'uv sync --locked --no-dev --python 3.12 --project tools/browser-bridge',
       'm12-profile-smoke.mjs --live',
       'm12-profile-smoke.mjs aggregate',
       'm12-profile-smoke-Windows',
@@ -577,6 +579,9 @@ describe('M12 real profile smoke runner', () => {
     )
     expect(workflow.indexOf('Canonicalize Windows temporary directory')).toBeLessThan(
       workflow.indexOf('pnpm/action-setup@'),
+    )
+    expect(workflow.indexOf('Prepare browser bridge environment')).toBeLessThan(
+      workflow.indexOf('pnpm test:integration'),
     )
     expect(workflow).not.toContain('continue-on-error')
   })

@@ -48,6 +48,8 @@ jobs:
           enable-cache: true
           cache-dependency-glob: tools/browser-bridge/uv.lock
       - run: pnpm install --frozen-lockfile
+      - name: Prepare browser bridge environment
+        run: uv sync --locked --no-dev --python 3.12 --project tools/browser-bridge
       - run: pnpm format:check
       - run: pnpm build
       - run: pnpm lint
