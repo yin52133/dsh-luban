@@ -552,6 +552,10 @@ describe('M12 real profile smoke runner', () => {
       'pnpm validate:features',
       'pnpm check:architecture',
       'node-version: 22.19.0',
+      'Canonicalize Windows temporary directory',
+      'realpathSync.native(process.env.RUNNER_TEMP)',
+      '"TEMP=$canonicalTemp" >> $env:GITHUB_ENV',
+      '"TMP=$canonicalTemp" >> $env:GITHUB_ENV',
       'm12-profile-smoke.mjs --live',
       'm12-profile-smoke.mjs aggregate',
       'm12-profile-smoke-Windows',
@@ -570,6 +574,9 @@ describe('M12 real profile smoke runner', () => {
     expect(workflow.match(/--workflow-run-id \$\{\{ github\.run_id \}\}/gu)).toHaveLength(2)
     expect(workflow.match(/--workflow-run-attempt \$\{\{ github\.run_attempt \}\}/gu)).toHaveLength(
       2,
+    )
+    expect(workflow.indexOf('Canonicalize Windows temporary directory')).toBeLessThan(
+      workflow.indexOf('pnpm/action-setup@'),
     )
     expect(workflow).not.toContain('continue-on-error')
   })
