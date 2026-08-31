@@ -230,6 +230,10 @@ M12-F001 ~ M12-F006 共 6 项，与 `checklist.json` 一一对应。
   每次 npm 副作用前原子保存 attempt；部分成功或结果不明时停止。resume/reconcile 根据状态文件、draft
   Release 资产和 registry 中的版本/tarball 内容继续；发布后只读核对 tag、Release 与 npm 三处版本及
   制品清单。
+- 公开 `mainline` 已以正常 fast-forward 推进至脱敏后的 `b809a26`，仓库变量
+  `ENABLE_RELEASE_PUBLISH=true` 已配置。`v0.1.0` 的 12 个真实 tarball 已完成 manifest 校验、
+  publish dry-run、展开内容凭据/隐私检查和 registry 包名可用性核对。仓库尚无 `NPM_TOKEN` Actions
+  secret，因此 tag 保持未创建；配置发布凭据后再触发 tag 工作流，避免产生可预见的部分发布。
 - Windows/Ubuntu 包装脚本共享 schema v3 A 档锁：`dshmarket@1.36.0`、
   `dsh-better-sidebar@0.17.1`、`@furongjun1999/dsh-memory@0.4.0`，并固定 sidebar 的
   `node-pty@1.1.0` 构建边界。dry-run 无 registry/子进程；apply 在目标宿主要求显式 DSH_HOME 与批准人，
