@@ -461,6 +461,19 @@ function posixCommand(argv) {
   return argv.map((value) => `'${value.replaceAll("'", `'"'"'`)}'`).join(' ')
 }
 
+export function tmuxPaneCommandSha256(command, expectedSha256) {
+  const direct = sha256(command)
+  if (direct === expectedSha256) return direct
+
+  // tmux 3.4 may add one display-only double-quote layer around a command
+  // composed entirely from POSIX single-quoted arguments.
+  if (command.startsWith('"') && command.endsWith('"')) {
+    const unwrapped = sha256(command.slice(1, -1))
+    if (unwrapped === expectedSha256) return unwrapped
+  }
+  return direct
+}
+
 function markerFor({ runDir, ledgerPath, evidenceKind, source, host, now }) {
   const runId = randomUUID()
   const sessionId = `luban-m03-${runId.replaceAll('-', '').slice(0, 12)}`
@@ -1719,7 +1732,7 @@ async function inspectTmux(marker, allowMissing = false) {
       tmuxSessionId,
       paneId,
       panePid: Number(panePid),
-      commandSha256: sha256(paneCommand),
+      commandSha256: tmuxPaneCommandSha256(paneCommand, marker.commandSha256),
     },
     marker,
   )

@@ -1,9 +1,12 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { runM03UbuntuKeepaliveAcceptance } from '../acceptance/m03-ubuntu-keepalive.mjs'
+import {
+  runM03UbuntuKeepaliveAcceptance,
+  tmuxPaneCommandSha256,
+} from '../acceptance/m03-ubuntu-keepalive.mjs'
 
 const roots = new Set()
 const MACHINE = 'a'.repeat(64)
@@ -12,6 +15,10 @@ const RUNNER_HASH = 'c'.repeat(64)
 const BOOT_ONE = '11111111-1111-4111-8111-111111111111'
 const BOOT_TWO = '22222222-2222-4222-8222-222222222222'
 const STEP_LIST = ['prepare', 'verify-disconnect', 'observe-attach', 'arm-reboot', 'verify-reboot']
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex')
+}
 
 async function temporaryRun() {
   const root = join(tmpdir(), `m03-ubuntu-acceptance-${randomUUID()}`)
@@ -185,6 +192,15 @@ afterEach(async () => {
 })
 
 describe('M03 Ubuntu staged keepalive acceptance', () => {
+  it('accepts only tmux display quoting around the exact owned command', () => {
+    const command = "'/usr/bin/node' '/srv/dsh/scripts/m03.mjs' '__heartbeat-worker'"
+    const expected = sha256(command)
+
+    expect(tmuxPaneCommandSha256(command, expected)).toBe(expected)
+    expect(tmuxPaneCommandSha256(`"${command}"`, expected)).toBe(expected)
+    expect(tmuxPaneCommandSha256(`"${command} --unexpected"`, expected)).not.toBe(expected)
+  })
+
   it('defaults to a no-write plan and gates prepare/cleanup behind --apply', async () => {
     const paths = await temporaryRun()
     const clock = { now: () => 10_000 }
