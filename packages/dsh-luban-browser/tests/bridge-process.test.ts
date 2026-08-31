@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BridgeProcess } from '../src/bridge-process.js'
 import { resolveConfig } from '../src/config.js'
 
@@ -105,25 +105,56 @@ describe('BridgeProcess', (): void => {
     })
     await expect(bridge.close()).resolves.toBeUndefined()
   })
+
+  it('starts and closes the DSH model gateway around the bridge process', async (): Promise<void> => {
+    const harness = await createHarness({
+      shutdownWithoutNewline: false,
+      exitDelayMs: 20,
+      expectedModelEnvironment: {
+        url: 'http://127.0.0.1:42601/v1/browser-use/complete',
+        token: 'ephemeral-model-token',
+      },
+    })
+    const closeGateway = vi.fn((): Promise<void> => Promise.resolve())
+    const bridge = new BridgeProcess({
+      config: harness.config,
+      spawnProcess: harness.spawnProcess,
+      modelGateway: {
+        start: () => Promise.resolve(harness.expectedModelEnvironment()),
+        close: closeGateway,
+      },
+    })
+
+    await expect(bridge.start({ kernel: 'chromium-headless' })).resolves.toBeDefined()
+    await expect(bridge.close()).resolves.toBeUndefined()
+    expect(closeGateway).toHaveBeenCalledOnce()
+  })
 })
 
 interface HarnessOptions {
   readonly shutdownWithoutNewline: boolean
   readonly exitDelayMs: number
   readonly resolvedProfile?: unknown
+  readonly expectedModelEnvironment?: Readonly<{ url: string; token: string }>
 }
 
 async function createHarness(options: HarnessOptions): Promise<{
   readonly config: ReturnType<typeof resolveConfig>['bridge']
   readonly spawnProcess: typeof spawn
   readonly child: () => ChildProcessWithoutNullStreams
+  readonly expectedModelEnvironment: () => Readonly<{ url: string; token: string }>
 }> {
   const directory = await mkdtemp(join(tmpdir(), 'luban-bridge-process-test-'))
   temporaryDirectories.add(directory)
   let activeChild: ChildProcessWithoutNullStreams | undefined
   const script = bridgeFixtureScript(options)
-  const spawnProcess = ((): ChildProcessWithoutNullStreams => {
+  const spawnProcess = ((
+    _command: unknown,
+    _arguments: unknown,
+    spawnOptions: { readonly env?: NodeJS.ProcessEnv },
+  ): ChildProcessWithoutNullStreams => {
     const child = spawn(process.execPath, ['--input-type=module', '--eval', script], {
+      env: spawnOptions.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     })
@@ -141,6 +172,12 @@ async function createHarness(options: HarnessOptions): Promise<{
       if (activeChild === undefined) throw new Error('Bridge fixture was not spawned')
       return activeChild
     },
+    expectedModelEnvironment: (): Readonly<{ url: string; token: string }> => {
+      if (options.expectedModelEnvironment === undefined) {
+        throw new Error('Model environment was not configured for this fixture')
+      }
+      return options.expectedModelEnvironment
+    },
   }
 }
 
@@ -153,8 +190,15 @@ function bridgeFixtureScript(options: HarnessOptions): string {
       binary: { kind: 'chromium', version: '140.0.7339.80', sha256: 'a'.repeat(64) },
     },
   )
+  const expectedModelEnvironment = JSON.stringify(options.expectedModelEnvironment ?? null)
   return String.raw`
     import { createInterface } from 'node:readline'
+
+    const expectedModelEnvironment = ${expectedModelEnvironment}
+    if (expectedModelEnvironment !== null && (
+      process.env.LUBAN_BROWSER_DSH_LLM_URL !== expectedModelEnvironment.url ||
+      process.env.LUBAN_BROWSER_DSH_LLM_TOKEN !== expectedModelEnvironment.token
+    )) process.exit(41)
 
     const requests = createInterface({ input: process.stdin, crlfDelay: Infinity })
     const response = (request, result) => JSON.stringify({

@@ -26,13 +26,7 @@ const BASE_ENVIRONMENT = [
   'LC_ALL',
 ] as const
 
-export const DEFAULT_PASSED_ENVIRONMENT = [
-  'BROWSER_USE_API_KEY',
-  'BROWSER_USE_DEFAULT_LLM',
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'GOOGLE_API_KEY',
-] as const
+export const DEFAULT_PASSED_ENVIRONMENT = [] as const
 
 export function redactBrowserLog(input: string): string {
   return SECRET_PATTERNS.reduce(

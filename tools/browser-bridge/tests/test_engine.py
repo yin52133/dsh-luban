@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import shutil
 import tempfile
 import types
@@ -59,9 +60,13 @@ class _FakeHistory:
 
 class _FakeAgent:
     closed = False
+    llm: object | None = None
+    use_vision: object | None = None
 
     def __init__(self, **kwargs: object) -> None:
         self._step = kwargs["register_new_step_callback"]
+        type(self).llm = kwargs.get("llm")
+        type(self).use_vision = kwargs.get("use_vision")
 
     async def run(self, *, max_steps: int) -> _FakeHistory:
         assert max_steps == 3
@@ -91,8 +96,11 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         fake_module = types.SimpleNamespace(Agent=_FakeAgent, BrowserProfile=_FakeProfile)
         events: list[dict[str, object]] = []
         _FakeAgent.closed = False
+        _FakeAgent.llm = None
+        _FakeAgent.use_vision = None
         with (
             tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, _model_environment(), clear=False),
             patch("luban_browser_bridge.engine.importlib.metadata.version", return_value="0.13.8"),
             patch("luban_browser_bridge.engine.importlib.import_module", return_value=fake_module),
         ):
@@ -123,6 +131,8 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await asyncio.to_thread(screenshot.read_bytes), b"png-data")
             self.assertEqual([event["type"] for event in events], ["progress", "screenshot"])
             self.assertTrue(_FakeAgent.closed)
+            self.assertEqual(getattr(_FakeAgent.llm, "provider", None), "dsh")
+            self.assertIs(_FakeAgent.use_vision, False)
 
     async def test_rejects_wildcard_before_loading_browser_use(self) -> None:
         with (
@@ -149,6 +159,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_browser_fails_before_loading_browser_use(self) -> None:
         with (
+            patch.dict(os.environ, _model_environment(), clear=False),
             patch("luban_browser_bridge.engine.importlib.metadata.version", return_value="0.13.8"),
             patch.object(hal.sys, "platform", "win32"),
             patch.object(hal, "_browser_candidates", return_value=()),
@@ -235,6 +246,13 @@ def _run_spec(output_dir: Path, run_id: str) -> dict[str, object]:
     }
 
 
+def _model_environment() -> dict[str, str]:
+    return {
+        "LUBAN_BROWSER_DSH_LLM_URL": "http://127.0.0.1:42601/v1/browser-use/complete",
+        "LUBAN_BROWSER_DSH_LLM_TOKEN": "a" * 64,
+    }
+
+
 async def _execute(
     profile_type: type[object],
     agent_type: type[object],
@@ -246,6 +264,7 @@ async def _execute(
     engine = BrowserUseEngine()
     try:
         with (
+            patch.dict(os.environ, _model_environment(), clear=False),
             patch("luban_browser_bridge.engine.importlib.metadata.version", return_value="0.13.8"),
             patch(
                 "luban_browser_bridge.engine.importlib.import_module",

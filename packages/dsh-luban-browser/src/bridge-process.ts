@@ -6,6 +6,7 @@ import type { BrowserEvent, BrowserProfile, BrowserResult, BrowserSession } from
 import { AsyncQueue } from './async-queue.js'
 import type { ResolvedConfig } from './config.js'
 import { BrowserError, type BrowserErrorCode } from './errors.js'
+import type { BrowserModelGateway } from './dsh-model-gateway.js'
 import { bridgeEnvironment, redactBrowserLog } from './security.js'
 import type { BrowserBridge, ResolvedBrowserTask } from './types.js'
 
@@ -38,6 +39,7 @@ export interface BridgeProcessOptions {
   readonly environment?: NodeJS.ProcessEnv
   readonly spawnProcess?: SpawnBridge
   readonly log?: (line: string) => void
+  readonly modelGateway?: BrowserModelGateway
 }
 
 export class BridgeProcess implements BrowserBridge {
@@ -45,6 +47,7 @@ export class BridgeProcess implements BrowserBridge {
   readonly #environment: NodeJS.ProcessEnv
   readonly #spawn: SpawnBridge
   readonly #log: (line: string) => void
+  readonly #modelGateway: BrowserModelGateway | undefined
   readonly #pending = new Map<string, PendingRequest>()
   #state: ChildState | null = null
   #starting: Promise<void> | null = null
@@ -57,6 +60,7 @@ export class BridgeProcess implements BrowserBridge {
     this.#environment = options.environment ?? process.env
     this.#spawn = options.spawnProcess ?? spawn
     this.#log = options.log ?? ((): void => undefined)
+    this.#modelGateway = options.modelGateway
   }
 
   public async start(profile: BrowserProfile): Promise<BrowserSession> {
@@ -133,6 +137,7 @@ export class BridgeProcess implements BrowserBridge {
     if (state === null) {
       await this.#terminating
       this.#rejectAll(new BrowserError('E_BROWSER_CLOSED', 'Browser bridge closed'))
+      await this.#modelGateway?.close()
       return
     }
     let childClosed = false
@@ -151,6 +156,7 @@ export class BridgeProcess implements BrowserBridge {
       if (this.#state === state) this.#state = null
       this.#disposeState(state)
       this.#rejectAll(new BrowserError('E_BROWSER_CLOSED', 'Browser bridge closed'))
+      await this.#modelGateway?.close()
     }
     if (!childClosed) {
       throw new BrowserError(
@@ -195,6 +201,11 @@ export class BridgeProcess implements BrowserBridge {
       this.#config.passEnvironment,
       this.#config.environmentDir,
     )
+    const model = await this.#modelGateway?.start()
+    if (model !== undefined) {
+      environment.LUBAN_BROWSER_DSH_LLM_URL = model.url
+      environment.LUBAN_BROWSER_DSH_LLM_TOKEN = model.token
+    }
     const child = this.#spawn(
       this.#config.runner,
       [

@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {
   AccountId,
@@ -10,6 +11,7 @@ import type {
   TaskStore,
 } from 'dsh-luban-core'
 import { BridgeProcess } from './bridge-process.js'
+import { DshModelGateway, type DshModelSelection } from './dsh-model-gateway.js'
 import { BrowserService } from './browser-service.js'
 import { resolveConfig, type Config } from './config.js'
 import { BrowserHttpApi } from './http-api.js'
@@ -21,6 +23,7 @@ declare module '@deepseek-ai/cordis' {
     lubanTaskStore: TaskStore
     lubanAgentClaim: AgentClaimService
     lubanNightScheduler: NightScheduler
+    agentDefaultModel: { currentSelection(): DshModelSelection }
   }
 
   interface Events {
@@ -42,6 +45,14 @@ export function apply(ctx: Context, config: Config = {}): void {
   const bridge = new BridgeProcess({
     config: resolved.bridge,
     log: (line): void => logger.warn(line),
+    modelGateway: new DshModelGateway(() => {
+      const llm = ctx.get('llm')
+      const defaults = ctx.get('agentDefaultModel')
+      if (llm === undefined || defaults === undefined) {
+        throw new Error('DSH model runtime is unavailable')
+      }
+      return { llm, currentSelection: (): DshModelSelection => defaults.currentSelection() }
+    }),
   })
   const service = new BrowserService({ config: resolved, bridge })
   const auth = ctx.get('lubanAuth') as AuthService
@@ -120,6 +131,7 @@ export { resolveConfig } from './config.js'
 export { BrowserError } from './errors.js'
 export { BrowserHttpApi } from './http-api.js'
 export { BrowserTaskboardAutomation } from './taskboard-automation.js'
+export { DshModelGateway } from './dsh-model-gateway.js'
 export { TemplateRepository, renderTemplate } from './templates.js'
 export type { Config } from './config.js'
 export type * from './types.js'

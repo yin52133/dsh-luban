@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from .dsh_model import DshChatModel
 from .errors import BridgeError
 from .hal import ResolvedProfile, resolve_profile
 from .security import assert_url_allowed
@@ -168,6 +169,7 @@ class BrowserUseEngine:
         owned_profile_copy: Path | None = None
         agent: Any | None = None
         try:
+            llm = DshChatModel.from_environment()
             browser_profile = profile_type(**kwargs)
             owned_profile_copy = _owned_browser_profile_copy(
                 source_user_data_dir,
@@ -175,10 +177,12 @@ class BrowserUseEngine:
             )
             agent = agent_type(
                 task=task,
+                llm=llm,
                 browser_profile=browser_profile,
                 register_new_step_callback=on_step,
                 register_should_stop_callback=should_stop,
                 enable_signal_handler=False,
+                use_vision=False,
                 use_judge=False,
             )
             history = await agent.run(max_steps=max_steps)
