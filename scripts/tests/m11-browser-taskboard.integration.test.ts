@@ -82,7 +82,10 @@ describe('M11 taskboard browser automation integration', (): void => {
 
       await expect(scheduler.triggerOnce(ACCOUNT)).resolves.toBeUndefined()
 
-      const completed = await harness.store.get(task.id)
+      const completed = await harness.waitForTask(
+        task.id,
+        (candidate): boolean => candidate.status === 'review',
+      )
       expect(fallbackExecute).not.toHaveBeenCalled()
       expect(harness.queue.requests).toHaveLength(1)
       expect(schedulerClaim).toMatchObject({ executionOwner: 'night-scheduler' })

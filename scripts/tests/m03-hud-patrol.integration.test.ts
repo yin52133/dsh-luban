@@ -51,10 +51,12 @@ describe('M03 patrol alert deadline integration', (): void => {
     vi.spyOn(TmuxKeepaliveAdapter.prototype, 'create').mockImplementation((spec) =>
       Promise.resolve(managedSession(spec, 'tmux')),
     )
+    vi.spyOn(TmuxKeepaliveAdapter.prototype, 'list').mockResolvedValue([])
     vi.spyOn(TmuxKeepaliveAdapter.prototype, 'isAlive').mockResolvedValue(false)
     vi.spyOn(WindowsTaskKeepaliveAdapter.prototype, 'create').mockImplementation((spec) =>
       Promise.resolve(managedSession(spec, 'service')),
     )
+    vi.spyOn(WindowsTaskKeepaliveAdapter.prototype, 'list').mockResolvedValue([])
     vi.spyOn(WindowsTaskKeepaliveAdapter.prototype, 'isAlive').mockResolvedValue(false)
 
     const unregisterHealth = context.on('luban.keepalive.health', (payload): void => {
