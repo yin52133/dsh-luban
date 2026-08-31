@@ -36,9 +36,9 @@ jobs:
           cache-dependency-glob: tools/browser-bridge/uv.lock
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
+      - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm build
       - run: pnpm test
       - run: pnpm test:integration
       - run: uv lock --check --project tools/browser-bridge

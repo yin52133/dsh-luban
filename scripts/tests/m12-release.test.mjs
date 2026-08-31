@@ -1047,9 +1047,9 @@ describe('M12 release policy', () => {
       'astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9',
       'pnpm install --frozen-lockfile',
       'pnpm format:check',
+      'pnpm build',
       'pnpm lint',
       'pnpm typecheck',
-      'pnpm build',
       'pnpm test',
       'pnpm test:integration',
       'uv lock --check --project tools/browser-bridge',
@@ -1082,6 +1082,25 @@ describe('M12 release policy', () => {
     expect(validateJob).toContain('cache-dependency-glob: tools/browser-bridge/uv.lock')
     expect(workflow).not.toContain('gitleaks')
     expect(workflow).not.toContain('verify-secret-gate')
+  })
+
+  it('builds workspace declarations before typed lint in both CI workflows', async () => {
+    const workflows = await Promise.all(
+      ['ci.yml', 'release.yml'].map((name) =>
+        readFile(join(REPOSITORY_ROOT, '.github', 'workflows', name), 'utf8'),
+      ),
+    )
+
+    for (const workflow of workflows) {
+      const format = workflow.indexOf('pnpm format:check')
+      const build = workflow.indexOf('pnpm build')
+      const lint = workflow.indexOf('pnpm lint')
+      const typecheck = workflow.indexOf('pnpm typecheck')
+      expect(format).toBeGreaterThan(-1)
+      expect(build).toBeGreaterThan(format)
+      expect(lint).toBeGreaterThan(build)
+      expect(typecheck).toBeGreaterThan(lint)
+    }
   })
 
   it('rejects files outside the npm payload allowlist', async () => {
