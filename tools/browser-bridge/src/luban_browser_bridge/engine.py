@@ -191,7 +191,7 @@ class BrowserUseEngine:
             text = history.final_result() or ""
             structured = _structured_result(text, output_schema)
             successful = history.is_successful()
-            status = "failed" if successful is False else "ok"
+            status = "ok" if successful is True else "failed"
             result: dict[str, Any] = {
                 "runId": run_id,
                 "status": status,
@@ -344,8 +344,13 @@ def _task_prompt(goal: str, start_url: str | None, schema: Any) -> str:
 
 
 def _structured_result(text: str, schema: Any) -> Any:
-    if schema is None or not text.strip():
+    if schema is None:
         return None
+    if not text.strip():
+        raise BridgeError(
+            "E_BROWSER_OUTPUT_INVALID",
+            "Browser result is empty but outputSchema requires JSON",
+        )
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as error:

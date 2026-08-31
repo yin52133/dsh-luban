@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from luban_browser_bridge import hal
-from luban_browser_bridge.engine import BrowserUseEngine
+from luban_browser_bridge.engine import BrowserUseEngine, _structured_result
 from luban_browser_bridge.errors import BridgeError
 
 
@@ -92,6 +92,11 @@ class _FailingConstructorAgent:
 
 
 class EngineTests(unittest.IsolatedAsyncioTestCase):
+    def test_rejects_empty_structured_result(self) -> None:
+        with self.assertRaises(BridgeError) as raised:
+            _structured_result("", {"type": "object"})
+        self.assertEqual(raised.exception.payload.code, "E_BROWSER_OUTPUT_INVALID")
+
     async def test_streams_inline_screenshot_and_structured_result(self) -> None:
         fake_module = types.SimpleNamespace(Agent=_FakeAgent, BrowserProfile=_FakeProfile)
         events: list[dict[str, object]] = []
