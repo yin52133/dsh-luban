@@ -48,15 +48,17 @@ export function bridgeEnvironment(
   passEnvironment: readonly string[],
   uvEnvironmentDirectory: string,
 ): NodeJS.ProcessEnv {
-  const names = new Set<string>([...BASE_ENVIRONMENT, ...passEnvironment])
-  const output: NodeJS.ProcessEnv = Object.create(null) as NodeJS.ProcessEnv
-  for (const name of names) {
+  for (const name of passEnvironment) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
       throw new BrowserError(
         'E_BROWSER_INVALID_PROFILE',
         `Invalid environment variable name: ${name}`,
       )
     }
+  }
+  const names = new Set<string>([...BASE_ENVIRONMENT, ...passEnvironment])
+  const output: NodeJS.ProcessEnv = Object.create(null) as NodeJS.ProcessEnv
+  for (const name of names) {
     const value = source[name]
     if (value !== undefined) output[name] = value
   }
