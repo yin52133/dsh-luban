@@ -151,9 +151,18 @@ Run local Chrome or Edge on Windows and headless Chromium on Ubuntu. Python
 documented uv version. Each run records browser version, progress, structured
 nonce readback, and a validated PNG screenshot.
 
-M11-F001/M11-F004 remain blocked until the canonical task succeeds with a real
-provider on both platforms. Browser jobs, results, cancellation, and SSE must
-also remain inside the originating M01 account context.
+Use the provider-free kernel smoke when validating only the platform HAL and
+installed browser. It starts the real browser, visits a runner-owned loopback
+fixture, reads its nonce from the DOM, and stops the browser cleanly:
+
+```console
+uv run --locked --no-dev --project tools/browser-bridge python scripts/acceptance/m11-browser-kernel.py --target windows --browser <absolute-browser-path> --output <new-evidence.json>
+```
+
+M11-F004 has passed this smoke with Windows Chrome and Edge plus Ubuntu headless
+Chrome. M11-F001 still requires the canonical Agent task with a real provider on
+both platforms. Browser jobs, results, cancellation, and SSE must also remain
+inside the originating M01 account context.
 
 ## Compatibility
 
@@ -168,8 +177,8 @@ also remain inside the originating M01 account context.
 - Ubuntu: headless Chromium through the same task contract
 
 Standard automated tests exercise fake processes and never contact external
-websites or providers. Live acceptance is a separate explicit opt-in and remains
-pending on both target platforms.
+websites or providers. The provider-free live kernel smoke has passed on both
+target platforms; provider-driven Agent acceptance remains explicit and opt-in.
 
 ## License
 

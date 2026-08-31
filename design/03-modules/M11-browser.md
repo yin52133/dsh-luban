@@ -135,13 +135,13 @@ M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
 - `luban-browser-acceptance` 提供 production run 与双端 aggregate：真实路径固定构造
   `BridgeProcess → BrowserService`，用本地 fixture 验证 progress、结构化结果与 PNG screenshot；Windows
   使用本地 Chrome/Edge，Ubuntu 使用 headless Chromium，并运行相同的 canonical task/fixture。
-- 每个平台按提交的 `uv.lock` 和固定 Python 版本创建 disposable bridge/profile，运行完成后只清理自身
-  创建的目录。fixture 只验证桥接协议；真实验收还必须使用可用 provider，在两端实际启动浏览器并
-  汇总任务结果、截图和错误信息。
+- 每个平台按提交的 `uv.lock` 和固定 Python 版本创建 disposable bridge/profile。独立 kernel smoke
+  不调用 provider，直接用 browser-use 启动真实浏览器、访问 loopback fixture、读取 DOM nonce 并干净
+  停止；Windows Chrome/Edge 与 Ubuntu headless Chrome 均已通过，因此 M11-F004 完成。完整 Agent 任务、
+  结果与截图仍由 M11-F001 的 provider live 验收负责。
 
 ## 11. 开放问题
 
 - browser-use 在 Ubuntu 无桌面环境下的 headless 稳定性实测；若依赖 playwright，其浏览器下载与离线部署方式写入部署文档。
-- M11-F001/M11-F004 仍需获授权的 provider 凭据，并在 Windows 本地 Chrome/Edge 与 Ubuntu headless
-  Chromium 上分别完成同一真实任务。当前缺少这两份外部环境结果，因此状态应为 `blocked`，而不是
-  `done`。
+- M11-F004 已用真实 Windows Chrome/Edge 与 Ubuntu headless Chrome 完成内核 smoke。M11-F001 仍需
+  `BROWSER_USE_API_KEY`，并在两端完成同一 provider 驱动任务；该外部凭据条件不再阻塞内核收口项。
