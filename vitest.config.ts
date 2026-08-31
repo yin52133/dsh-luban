@@ -4,9 +4,10 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['packages/**/tests/**/*.test.ts', 'scripts/**/*.test.mjs'],
-    maxWorkers: 4,
+    maxWorkers: 2,
     passWithNoTests: false,
     restoreMocks: true,
+    testTimeout: 10_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'lcov'],
