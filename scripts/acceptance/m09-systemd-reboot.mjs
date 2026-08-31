@@ -1939,7 +1939,8 @@ async function runPackageManager(toolchain, packageManager, args, options = {}) 
 
 async function packageStorePath(toolchain, packageManager) {
   const result = await runPackageManager(toolchain, packageManager, ['store', 'path', '--silent'], {
-    cwd: parse(REPOSITORY_ROOT).root,
+    // pnpm probes cwd and selects a per-filesystem store; use the repository's writable parent.
+    cwd: dirname(REPOSITORY_ROOT),
   })
   const storePath = pathInput(commandValue(result))
   if (!outsideRepository(storePath)) fail('E_UNAVAILABLE')
