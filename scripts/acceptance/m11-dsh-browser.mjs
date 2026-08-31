@@ -102,12 +102,17 @@ try {
 }
 
 if (operationError !== undefined) throw operationError
+const jobPath = join(runDirectory, `${basename(output, '.json')}.job.json`)
+await writeFile(jobPath, `${JSON.stringify(job, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
 assert(
   job?.status === 'succeeded',
   `Browser job finished as ${String(job?.status)}: ${JSON.stringify(job)}`,
 )
 assert(job.result?.status === 'ok', 'Browser result is not ok')
-assert(job.result?.structured?.nonce === nonce, 'Browser result did not return the challenge nonce')
+assert(
+  job.result?.structured?.nonce === nonce,
+  `Browser result did not return the challenge nonce: ${JSON.stringify(job.result)}`,
+)
 assert(challenge.requestCount() >= 1, 'The real browser did not fetch the challenge')
 assert(job.progressStep >= 1, 'No browser progress was observed')
 assert(Array.isArray(job.screenshots) && job.screenshots.length >= 1, 'No screenshot was produced')
@@ -165,6 +170,7 @@ const evidence = Object.freeze({
     screenshotVerified: true,
   }),
   logPath,
+  jobPath,
 })
 await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
 process.stdout.write(`${JSON.stringify({ ok: true, output, gitHead })}\n`)
