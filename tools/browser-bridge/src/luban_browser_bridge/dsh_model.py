@@ -170,9 +170,7 @@ def _usage(value: Any) -> ChatInvokeUsage | None:
     input_tokens = _token_count(value.get("inputTokens"), "inputTokens")
     output_tokens = _token_count(value.get("outputTokens"), "outputTokens")
     cache_read_tokens = _optional_token_count(value.get("cacheReadTokens"), "cacheReadTokens")
-    cache_write_tokens = _optional_token_count(
-        value.get("cacheWriteTokens"), "cacheWriteTokens"
-    )
+    cache_write_tokens = _optional_token_count(value.get("cacheWriteTokens"), "cacheWriteTokens")
     return ChatInvokeUsage(
         prompt_tokens=input_tokens + (cache_read_tokens or 0) + (cache_write_tokens or 0),
         prompt_cached_tokens=cache_read_tokens,
