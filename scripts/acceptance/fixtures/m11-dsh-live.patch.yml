@@ -1,0 +1,31 @@
+- id: webserver
+  config:
+    host: 127.0.0.1
+    port: !!js Number(process.env.LUBAN_M11_DSH_PORT)
+- insert:
+    - id: luban-auth
+      name: !!js process.env.LUBAN_M11_AUTH_PLUGIN
+      config:
+        host: 127.0.0.1
+        port: !!js Number(process.env.LUBAN_M11_AUTH_PORT)
+        upstream: !!js >-
+          `http://127.0.0.1:${process.env.LUBAN_M11_DSH_PORT}`
+        sessionTtlHours: 1
+        usersFile: !!js process.env.LUBAN_M11_USERS_FILE
+        auditDirectory: !!js process.env.LUBAN_M11_AUDIT_DIRECTORY
+    - id: luban-browser
+      name: !!js process.env.LUBAN_M11_BROWSER_PLUGIN
+      config:
+        kernel: !!js >-
+          process.platform === 'win32' ? 'chrome' : 'chromium-headless'
+        headless: true
+        dataDir: !!js process.env.LUBAN_M11_BROWSER_DATA
+        templatesDir: !!js process.env.LUBAN_M11_TEMPLATES_DIRECTORY
+        defaults:
+          maxSteps: 12
+          timeoutSec: 180
+          allowDomains:
+            - 127.0.0.1
+        bridge:
+          projectDir: !!js process.env.LUBAN_M11_BRIDGE_PROJECT
+          environmentDir: !!js process.env.LUBAN_M11_BRIDGE_ENVIRONMENT
