@@ -2335,7 +2335,8 @@ async function buildJavaScriptFiles(root) {
 }
 
 async function freshHeadBuild(toolchain, inputs) {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-luban-m09-head-build-'))
+  const createdRoot = await mkdtemp(join(tmpdir(), 'dsh-luban-m09-head-build-'))
+  const root = await realpath(createdRoot)
   try {
     await writeBuildSnapshot(root, inputs)
     const isolatedToolchain = await installIsolatedBuildToolchain(root, toolchain, inputs)
