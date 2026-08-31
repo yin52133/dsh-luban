@@ -1,0 +1,2 @@
+# Keep text files byte-stable across Windows and Ubuntu checkouts.
+* text=auto eol=lf
