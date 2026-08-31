@@ -389,6 +389,7 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
   const automation = new BrowserTaskboardAutomation(queue, claims)
   const errors: unknown[] = []
   const taskListeners = new Set<(task: Task) => void>()
+  const pendingReads = new Set<Promise<void>>()
   const stopCapture = store.subscribe((event): void => {
     for (const listener of taskListeners) listener(event.task)
   })
@@ -435,6 +436,8 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
     waitForTask: (id, predicate): Promise<Task> => {
       return new Promise<Task>((resolveTask, rejectTask): void => {
         let settled = false
+        let snapshotComplete = false
+        let pendingTask: Task | undefined
         const fail = (error: unknown): void => {
           if (settled) return
           settled = true
@@ -448,6 +451,10 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
         }
         const finish = (task: Task): void => {
           if (settled || task.id !== id || !predicate(task)) return
+          if (!snapshotComplete) {
+            pendingTask = task
+            return
+          }
           settled = true
           clearTimeout(timer)
           taskListeners.delete(listener)
@@ -460,14 +467,30 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
           finish(task)
         }
         taskListeners.add(listener)
-        void store.get(id).then((task): void => {
-          if (task !== null) finish(task)
-        }, fail)
+        const snapshotRead = store.get(id).then(
+          (task): void => {
+            snapshotComplete = true
+            if (task !== null && predicate(task)) {
+              finish(task)
+              return
+            }
+            if (pendingTask !== undefined) finish(pendingTask)
+          },
+          (error: unknown): void => {
+            snapshotComplete = true
+            fail(error)
+          },
+        )
+        pendingReads.add(snapshotRead)
+        void snapshotRead.then((): void => {
+          pendingReads.delete(snapshotRead)
+        })
       })
     },
     dispose: async (): Promise<void> => {
       unbind()
       stopCapture()
+      await Promise.all(pendingReads)
       await rm(directory, { recursive: true, force: true })
     },
   }
