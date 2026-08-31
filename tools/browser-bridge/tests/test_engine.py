@@ -194,6 +194,7 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
                                 f"run-{label}",
                             )
                         self.assertEqual(raised.exception.payload.code, "E_BROWSER_RUN")
+                        self.assertIn("simulated", raised.exception.payload.message)
                     else:
                         result = await _execute(
                             _CopyingFakeProfile,

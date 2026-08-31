@@ -208,10 +208,11 @@ class BrowserUseEngine:
         except BridgeError:
             raise
         except Exception as error:
-            # Never attach a traceback: exception chains may contain credentials from
-            # provider SDKs, while the redacting log filter sanitizes this message.
             self._logger.error("browser-use run failed: %s", error)
-            raise BridgeError("E_BROWSER_RUN", "browser-use task failed") from error
+            raise BridgeError(
+                "E_BROWSER_RUN",
+                f"browser-use task failed: {_bounded_error_detail(error)}",
+            ) from error
         finally:
             try:
                 if agent is not None:
@@ -236,6 +237,14 @@ def _required_string(source: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise BridgeError("E_BROWSER_INVALID_TASK", f"{key} must be a non-empty string")
     return value.strip()
+
+
+def _bounded_error_detail(error: Exception) -> str:
+    """Keep the actionable cause without returning a traceback or unbounded payload."""
+
+    detail = "".join(character if character.isprintable() else " " for character in str(error))
+    normalized = " ".join(detail.split())
+    return (normalized or type(error).__name__)[:500]
 
 
 def _prepare_output_root(value: str) -> Path:
