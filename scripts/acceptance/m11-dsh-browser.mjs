@@ -39,8 +39,10 @@ const startedAt = new Date().toISOString()
 const runDirectory = dirname(output)
 const runtimeDirectory = join(runDirectory, 'runtime')
 const templateDirectory = join(runtimeDirectory, 'templates')
+const overlayPath = join(runtimeDirectory, 'm11-dsh-live.patch.yml')
 const logPath = join(runDirectory, `${basename(output, '.json')}.dsh.log`)
 await mkdir(templateDirectory, { recursive: true })
+await writeAcceptanceOverlay(overlayPath)
 
 const gitHead = await gitOutput(['rev-parse', 'HEAD'])
 if (!/^[a-f0-9]{40}$/u.test(gitHead)) throw new Error('Git HEAD is invalid')
@@ -62,6 +64,7 @@ const child = startDsh({
   authPort,
   runtimeDirectory,
   templateDirectory,
+  overlayPath,
   password,
 })
 const logs = []
@@ -158,18 +161,11 @@ await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`, { encoding: 'u
 process.stdout.write(`${JSON.stringify({ ok: true, output, gitHead })}\n`)
 
 function startDsh(input) {
-  const patch = resolve(
-    repositoryRoot,
-    'scripts',
-    'acceptance',
-    'fixtures',
-    'm11-dsh-live.patch.yml',
-  )
   const args = [
     '--profile',
     input.profile,
     '--patch',
-    patch,
+    input.overlayPath,
     '--no-open',
     '--host',
     '127.0.0.1',
@@ -181,12 +177,6 @@ function startDsh(input) {
     LUBAN_ADMIN_PASSWORD: input.password,
     LUBAN_M11_DSH_PORT: String(input.dshPort),
     LUBAN_M11_AUTH_PORT: String(input.authPort),
-    LUBAN_M11_AUTH_PLUGIN: pathToFileURL(
-      resolve(repositoryRoot, 'packages', 'dsh-luban-auth', 'dist', 'index.js'),
-    ).href,
-    LUBAN_M11_BROWSER_PLUGIN: pathToFileURL(
-      resolve(repositoryRoot, 'packages', 'dsh-luban-browser', 'dist', 'index.js'),
-    ).href,
     LUBAN_M11_USERS_FILE: join(input.runtimeDirectory, 'auth', 'users.json'),
     LUBAN_M11_AUDIT_DIRECTORY: join(input.runtimeDirectory, 'auth', 'audit'),
     LUBAN_M11_BROWSER_DATA: join(input.runtimeDirectory, 'browser'),
@@ -207,6 +197,28 @@ function startDsh(input) {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+}
+
+async function writeAcceptanceOverlay(path) {
+  const templatePath = resolve(
+    repositoryRoot,
+    'scripts',
+    'acceptance',
+    'fixtures',
+    'm11-dsh-live.patch.yml',
+  )
+  const authPlugin = pathToFileURL(
+    resolve(repositoryRoot, 'packages', 'dsh-luban-auth', 'dist', 'index.js'),
+  ).href
+  const browserPlugin = pathToFileURL(
+    resolve(repositoryRoot, 'packages', 'dsh-luban-browser', 'dist', 'index.js'),
+  ).href
+  const template = await readFile(templatePath, 'utf8')
+  const overlay = template
+    .replace('__LUBAN_M11_AUTH_PLUGIN__', JSON.stringify(authPlugin))
+    .replace('__LUBAN_M11_BROWSER_PLUGIN__', JSON.stringify(browserPlugin))
+  if (overlay.includes('__LUBAN_M11_')) throw new Error('Acceptance overlay is incomplete')
+  await writeFile(path, overlay, { encoding: 'utf8', flag: 'wx' })
 }
 
 async function waitForLogin(baseUrl, child) {

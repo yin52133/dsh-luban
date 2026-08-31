@@ -4,7 +4,7 @@
     port: !!js Number(process.env.LUBAN_M11_DSH_PORT)
 - insert:
     - id: luban-auth
-      name: !!js process.env.LUBAN_M11_AUTH_PLUGIN
+      name: __LUBAN_M11_AUTH_PLUGIN__
       config:
         host: 127.0.0.1
         port: !!js Number(process.env.LUBAN_M11_AUTH_PORT)
@@ -14,7 +14,7 @@
         usersFile: !!js process.env.LUBAN_M11_USERS_FILE
         auditDirectory: !!js process.env.LUBAN_M11_AUDIT_DIRECTORY
     - id: luban-browser
-      name: !!js process.env.LUBAN_M11_BROWSER_PLUGIN
+      name: __LUBAN_M11_BROWSER_PLUGIN__
       config:
         kernel: !!js >-
           process.platform === 'win32' ? 'chrome' : 'chromium-headless'
