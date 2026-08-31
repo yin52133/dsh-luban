@@ -388,10 +388,8 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
   const queue = new ControlledQueue(outcomes)
   const automation = new BrowserTaskboardAutomation(queue, claims)
   const errors: unknown[] = []
-  const latestTasks = new Map<Task['id'], Task>()
   const taskListeners = new Set<(task: Task) => void>()
   const stopCapture = store.subscribe((event): void => {
-    latestTasks.set(event.task.id, event.task)
     for (const listener of taskListeners) listener(event.task)
   })
   const unbind = await automation.bind(store, (error: unknown): void => {
@@ -435,20 +433,36 @@ async function createHarness(outcomes: readonly Outcome[]): Promise<Harness> {
     },
     claim,
     waitForTask: (id, predicate): Promise<Task> => {
-      const current = latestTasks.get(id)
-      if (current !== undefined && predicate(current)) return Promise.resolve(current)
       return new Promise<Task>((resolveTask, rejectTask): void => {
-        const timer = setTimeout((): void => {
+        let settled = false
+        const fail = (error: unknown): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
           taskListeners.delete(listener)
-          rejectTask(new Error(`Timed out waiting for task ${id}`))
-        }, 5_000)
-        const listener = (task: Task): void => {
-          if (task.id !== id || !predicate(task)) return
+          rejectTask(
+            error instanceof Error
+              ? error
+              : new Error('Failed to read task state', { cause: error }),
+          )
+        }
+        const finish = (task: Task): void => {
+          if (settled || task.id !== id || !predicate(task)) return
+          settled = true
           clearTimeout(timer)
           taskListeners.delete(listener)
           resolveTask(task)
         }
+        const timer = setTimeout((): void => {
+          fail(new Error(`Timed out waiting for task ${id}`))
+        }, 5_000)
+        const listener = (task: Task): void => {
+          finish(task)
+        }
         taskListeners.add(listener)
+        void store.get(id).then((task): void => {
+          if (task !== null) finish(task)
+        }, fail)
       })
     },
     dispose: async (): Promise<void> => {
