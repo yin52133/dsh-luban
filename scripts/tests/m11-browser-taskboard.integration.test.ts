@@ -90,7 +90,7 @@ describe('M11 taskboard browser automation integration', (): void => {
       expect(harness.queue.requests).toHaveLength(1)
       expect(schedulerClaim).toMatchObject({ executionOwner: 'night-scheduler' })
       expect(completed).toMatchObject({ status: 'review', claim: null, autoDone: true })
-      expect(completed?.outputs.map((output) => output.ref)).toEqual([
+      expect(completed.outputs.map((output) => output.ref)).toEqual([
         'progress:0',
         'progress:100',
         '/artifacts/night-browser.png',
