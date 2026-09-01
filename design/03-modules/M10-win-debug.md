@@ -87,7 +87,7 @@ export interface WinDebugService {
 ```yaml
 - insert:
     - id: luban-win-debug
-      name: dsh-luban-win-debug
+      name: '@yin52133/dsh-luban-win-debug'
       config:
         serial: { defaultBaud: 115200, timestamp: true }
         # 首批烧录/调试模板由插件内置；外部 profile 扩展暂未开放

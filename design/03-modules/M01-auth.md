@@ -103,7 +103,7 @@ export type AuthEvent =
 ```yaml
 - insert:
     - id: luban-auth
-      name: dsh-luban-auth
+      name: '@yin52133/dsh-luban-auth'
       config:
         port: 42600            # 默认端口（可自定义）
         host: 0.0.0.0

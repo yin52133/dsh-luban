@@ -139,7 +139,7 @@ export interface NightScheduler {
 ```yaml
 - insert:
     - id: luban-taskboard
-      name: dsh-luban-taskboard
+      name: '@yin52133/dsh-luban-taskboard'
       config:
         store: { type: json, dir: "~/.dsh/luban/taskboard" }
         hostScope: auto          # auto=按当前机器类型推断；可强制 win/ubuntu

@@ -71,7 +71,7 @@ export interface ImageIngestService {
 ```yaml
 - insert:
     - id: luban-image-paste
-      name: dsh-luban-image-paste
+      name: '@yin52133/dsh-luban-image-paste'
       config:
         workspaceRoot: .
         attachDir: .luban/attachments

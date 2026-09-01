@@ -78,7 +78,7 @@ export interface PlanGuard {
 ```yaml
 - insert:
     - id: luban-plan
-      name: dsh-luban-plan
+      name: '@yin52133/dsh-luban-plan'
       config:
         plansDir: "docs/plans"          # 相对 workspace
         requireApprovalFor: ["edit", "bash", "write"]   # 受门禁工具清单

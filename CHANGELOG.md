@@ -40,9 +40,10 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 - Initial DSH Luban monorepo foundation and module implementations.
 - M12 plugin scaffolding with optional DSH `0.1.1-rc.2` lazy-CJS client output.
 - Cross-platform pinned A-class installer previews and dual profile templates.
-- Fixed-version, README, manifest, and npm payload release checks.
-- Protected tag release workflow that reuses identical tarballs for npm and
-  GitHub Release artifacts.
+- Fixed-version, README, manifest, and package payload release checks for 12
+  scoped `@yin52133/dsh-luban-*` packages.
+- Protected tag workflow that publishes identical tarballs to GitHub Packages
+  and attaches them to the GitHub Release using the repository `GITHUB_TOKEN`.
 
 [Unreleased]: https://github.com/yin52133/dsh-luban/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.0

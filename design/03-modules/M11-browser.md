@@ -79,7 +79,7 @@ export interface BrowserTaskSpec {
 ```yaml
 - insert:
     - id: luban-browser
-      name: dsh-luban-browser
+      name: '@yin52133/dsh-luban-browser'
       config:
         engine: browser-use        # B 档，唯一引擎；接口留多引擎余地但不过度设计
         kernel: auto               # auto | chrome | edge | chromium-headless

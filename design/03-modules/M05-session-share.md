@@ -71,7 +71,7 @@ export interface SessionRegistry {
 ```yaml
 - insert:
     - id: luban-session-share
-      name: dsh-luban-session-share
+      name: '@yin52133/dsh-luban-session-share'
       config:
         host: auto
         ownerUser: owner          # 测试/旧装配 fallback；生产归属只读取 M01 session map

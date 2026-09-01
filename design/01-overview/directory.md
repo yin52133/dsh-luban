@@ -8,6 +8,7 @@
 | v0.2 | 2026-08-30 | Codex | 对齐 DSH 0.1.1 bundle/client manifest 契约    |
 | v0.3 | 2026-08-30 | Codex | 校正 A 档三方包身份并记录受控安装入口          |
 | v0.4 | 2026-08-30 | Codex | 移除安全扫描目标并保留发布质量门禁              |
+| v0.5 | 2026-09-01 | Codex | 12 包切换为 GitHub Packages scoped 发布         |
 
 ## 1. 总览
 
@@ -20,7 +21,7 @@ dsh-luban/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml               # lint + typecheck + build + test
-│       └── release.yml          # tag → GitHub Release → npm publish 同步
+│       └── release.yml          # tag → GitHub Packages → GitHub Release
 ├── design/                      # 设计文档（本目录，唯一设计权威来源）
 │   ├── README.md
 │   ├── TEMPLATE.md
@@ -36,9 +37,9 @@ dsh-luban/
 │   ├── install-3rd-party.ps1    # A 档：Windows 受控安装 dshmarket / dsh-better-sidebar / @furongjun1999/dsh-memory
 │   ├── install-3rd-party.sh     # A 档：Ubuntu 同上
 │   ├── deploy/                  # 双端 profile 生成与部署脚本
-│   └── release/                 # 版本对齐、tag、npm publish 辅助
+│   └── release/                 # 版本对齐、tag、GitHub Packages 发布辅助
 ├── packages/
-│   ├── core/                    # dsh-luban-core：L1 HAL + L2 服务 + 契约定义（不发布到市场）
+│   ├── core/                    # @yin52133/dsh-luban-core：L1 HAL + L2 服务 + 契约定义
 │   ├── dsh-luban-auth/          # M01
 │   ├── dsh-luban-taskboard/     # M02
 │   ├── dsh-luban-keepalive/     # M03
@@ -73,12 +74,12 @@ packages/dsh-luban-<name>/
 
 | 项 | 规范 |
 | --- | --- |
-| 插件包名 | `dsh-luban-<module>`（无 scope，与 dsh 社区惯例一致，利于市场检索） |
-| 内部核心包 | `dsh-luban-core`（私有用途，仍随仓库发布 npm 以便插件 peer 依赖） |
+| 插件包名 | `@yin52133/dsh-luban-<module>`；源码目录仍为 `packages/dsh-luban-<module>` |
+| 内部核心包 | `@yin52133/dsh-luban-core`（随套件发布到 GitHub Packages，供其他包解析依赖） |
 | cordis 插件 id | `luban-<module>`（patch 中的 `id:`） |
 | HTTP 路由前缀 | `/luban-<module>/...`（如 `/luban-auth/login`） |
 | 版本 | 全仓库统一版本号（fixed locking），见 06-release |
-| 依赖方向 | 插件包 → `dsh-luban-core` → 仅外部依赖；**禁止**插件包互相依赖，跨插件协作只走 `04-interfaces` 契约与事件总线 |
+| 依赖方向 | 插件包 → `@yin52133/dsh-luban-core` → 仅外部依赖；**禁止**插件包互相依赖，跨插件协作只走 `04-interfaces` 契约与事件总线 |
 | 平台专属依赖 | 用 `optionalDependencies` + 运行时平台守卫（如 serialport 仅 win 使用路径加载） |
 
 ## 4. 设计阶段与本目录的对应关系

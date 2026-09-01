@@ -101,7 +101,7 @@ runCheckpointedTask({
 ```yaml
 - insert:
     - id: luban-keepalive
-      name: dsh-luban-keepalive
+      name: '@yin52133/dsh-luban-keepalive'
       config:
         strategy: auto            # auto | tmux | service
         patrolIntervalSec: 60

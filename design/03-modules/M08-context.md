@@ -82,7 +82,7 @@ export interface CompactionEngine {
 ```yaml
 - insert:
     - id: luban-context
-      name: dsh-luban-context
+      name: '@yin52133/dsh-luban-context'
       config:
         trigger: { ratio: 0.80, minGapRounds: 4 }   # 触发阈值 + 最小间隔回合
         strategy: summarize+virtualfile

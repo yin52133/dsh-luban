@@ -75,7 +75,7 @@ export interface ServerModeService {
 ```yaml
 - insert:
     - id: luban-server-mode
-      name: dsh-luban-server-mode
+      name: '@yin52133/dsh-luban-server-mode'
       config:
         service: { name: dsh-luban, user: "" }   # user 级 unit；留空=当前用户
         build: { maxConcurrent: 1, defaultTimeoutMin: 30 }

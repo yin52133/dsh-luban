@@ -1,17 +1,18 @@
 # M12 发布基础设施（legacy filename: market-release）
 
-仓库级发布设施：插件脚手架、manifest 规范、第三方插件安装器，以及 tag → GitHub Release → npm 的标准发布流程。插件市场注册已退出当前目标。
+仓库级发布设施：插件脚手架、manifest 规范、第三方插件安装器，以及 tag → GitHub Packages → GitHub Release 的标准发布流程。插件市场注册与 npmjs 发布已退出当前目标。
 
 ## 版本记录
 
 | 版本 | 日期 | 作者 | 变更说明 |
 | --- | --- | --- | --- |
-| v1.0 | 2026-09-01 | Codex | 收敛到标准 GitHub/npm 发布，移除市场交接、恢复账本和证据编排 |
+| v1.0 | 2026-09-01 | Codex | 收敛发布设施，移除市场交接、恢复账本和证据编排 |
+| v1.1 | 2026-09-01 | Codex | 12 包改为 `@yin52133/*` 并发布到 GitHub Packages |
 
 ## 1. 目标与边界
 
-- 统一 12 个 `dsh-luban-*` 包的版本、manifest、README 和发布文件清单。
-- 用一个 tag 生成 GitHub Release，并按 core-first 顺序发布同版本 npm 包。
+- 统一 12 个 `@yin52133/dsh-luban-*` 包的版本、manifest、README 和发布文件清单。
+- 用一个 tag 按 core-first 顺序发布同版本 GitHub Packages 包，再生成 GitHub Release。
 - 发布前运行项目质量门禁、制品校验和 dry-run。
 - 多包发布失败时立即停止，人工确认 registry 状态后从标准命令重试。
 - 不建设插件市场、不自动提交市场 PR，也不维护自定义发布事务或证明系统。
@@ -22,7 +23,7 @@
 | --- | --- | --- | --- | --- |
 | M12-F001 | 包脚手架与 DSH manifest 规范 | P0 | MS1 | 生成包可构建，host/client manifest 可校验 |
 | M12-F002 | **已废弃**：市场注册 PR 与 topic 打标 | P1 | MS2 | `dropped`，不进入发布范围 |
-| M12-F003 | tag → GitHub Release → npm 流水线 | P1 | MS2 | tag、Release、npm 版本和制品一致 |
+| M12-F003 | tag → GitHub Packages → GitHub Release 流水线 | P1 | MS2 | tag、Release、Packages 版本和制品一致 |
 | M12-F004 | Windows/Ubuntu 第三方插件安装脚本 | P1 | MS2 | pinned 安装幂等且安装后核验通过 |
 | M12-F005 | **已废弃**：独立安全加固门禁 | P0 | MS1 | `dropped`；files/dry-run 作为发布稳定性检查 |
 | M12-F006 | README、版本、CHANGELOG 与 engines.dsh 规范 | P1 | MS2 | 校验器和包模板通过 |
@@ -36,12 +37,14 @@ flowchart TD
     C --> D["publish dry-run"]
     D --> E["push v<semver> tag"]
     E --> F["GitHub Actions downloads artifacts"]
-    F --> G["npm publish in core-first order"]
+    F --> G["publish GitHub Packages in core-first order"]
     G --> H["create GitHub Release with tarballs"]
-    H --> I["verify tag / Release / npm version"]
+    H --> I["verify tag / Release / package versions"]
 ```
 
-`.github/workflows/release.yml` 只在 `v*` tag 触发。真实 npm 发布要求 GitHub Actions 中配置 `NPM_TOKEN`，并由工作流设置 `LUBAN_RELEASE_APPROVED=true`。
+`.github/workflows/release.yml` 只在 `v*` tag 触发。publish job 使用仓库自带的
+`GITHUB_TOKEN` 和 `packages: write` 权限，不需要 npmjs 账号、`NPM_TOKEN` 或额外仓库 secret；
+工作流只在受保护的 release environment 中设置 `LUBAN_RELEASE_APPROVED=true`。
 
 核心命令：
 
@@ -51,7 +54,8 @@ node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.0 --output .release
 node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.0
 ```
 
-发布脚本校验 manifest、tarball SHA-256、包名、版本和 core-first 顺序。真实模式会先查询 npm：同版本已存在则跳过，不存在才发布；任一错误立即停止。
+发布脚本校验 manifest、GitHub Packages registry、tarball SHA-256、scoped 包名、版本和
+core-first 顺序。真实模式会先查询 registry：同版本已存在则跳过，不存在才发布；任一错误立即停止。
 
 ## 4. 包规范
 
@@ -63,7 +67,7 @@ node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.0
 - 将 Cordis/DSH/React 等宿主依赖保持为 external/peer dependency；
 - client bundle 使用 DSH loader 需要的 lazy-CJS 格式。
 
-`dsh-luban-core` 先发布，其他包依赖 `workspace:^` 并在 pack 阶段解析为实际版本。
+`@yin52133/dsh-luban-core` 先发布，其他包依赖 `workspace:^` 并在 pack 阶段解析为实际版本。
 
 ## 5. 第三方插件安装
 
@@ -71,13 +75,13 @@ node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.0
 
 ## 6. 失败处理
 
-npm 多包发布不是事务：
+GitHub Packages 多包发布不是事务：
 
 1. 当前包失败时立即停止后续包；
-2. 用 `npm view <package>@<version>` 判断版本是否已经存在；
+2. 用 `npm view <package>@<version> --registry https://npm.pkg.github.com` 判断版本是否已经存在；
 3. 不存在则修复原因后重新运行；已存在则由脚本跳过；
 4. 不使用 unpublish、覆盖版本或复杂的本地恢复账本；
-5. 完成后核对 GitHub Release 与 npm 的实际版本。
+5. 完成后核对 GitHub Release 与 GitHub Packages 的实际版本。
 
 ## 7. 验证
 
