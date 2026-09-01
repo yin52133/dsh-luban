@@ -4,7 +4,7 @@
     "project": "dsh-luban",
     "description": "功能进度台账：与 design/01-overview/trace-matrix.md 及各模块文档功能清单三处一致，由 scripts/validate-design.mjs 校验",
     "version": "0.1.0",
-    "updatedAt": "2026-09-01",
+    "updatedAt": "2026-09-02",
     "idRules": "R=需求(只增不改) M=模块 F=功能点(只增不改，废弃置dropped) MS=里程碑"
   },
   "statusLegend": {
@@ -72,7 +72,7 @@
     { "id": "R01", "title": "Ubuntu 端可直接用网页操作 dsh", "modules": ["M01", "M09"], "status": "done" },
     { "id": "R02", "title": "tmux 等保活；重启后后台继续工作直到完成", "modules": ["M03"], "status": "done" },
     { "id": "R03", "title": "任务看板（todo/执行中/已完成）+ agent 自主领单", "modules": ["M02"], "status": "done" },
-    {"id":"R04","title":"插件包通过 GitHub Release 与 npm 发布","modules":["M12"],"status":"review"},
+    {"id":"R04","title":"插件包通过 GitHub Release 与 npm 发布","modules":["M12"],"status":"done"},
     { "id": "R05", "title": "plan 工作模式", "modules": ["M04"], "status": "done" },
     { "id": "R06", "title": "Ubuntu 与 Windows 共享 session 与控制权限", "modules": ["M05"], "status": "done" },
     { "id": "R07", "title": "粘贴图片让 dsh 能访问", "modules": ["M06"], "status": "review" },
@@ -157,7 +157,7 @@
 
     {"id":"M12-F001","requirement":"R04","module":"M12","title":"包脚手架与 dsh manifest 规范落地","priority":"P0","milestone":"MS1","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-01","notes":["12 个包统一为 `@yin52133/dsh-luban-*`；manifest、内部 imports/external、lockfile、Cordis patch、Web loader ID、core-first 顺序、脚手架、架构与发布校验均已迁移，并由 build/typecheck/定向测试和 pack dry-run 直接验证。"]},
     {"id":"M12-F002","requirement":"R04","module":"M12","title":"市场注册 PR + topic 打标","priority":"P1","milestone":"MS2","status":"dropped","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-01","notes":["dsh 插件市场注册不再属于当前发布目标；保留 ID 并按 statusLegend 标记 dropped，当前发布目标为 GitHub Packages 与 GitHub Release。"]},
-    {"id":"M12-F003","requirement":"R04","module":"M12","title":"发布流水线（tag→GitHub Packages→Release）","priority":"P1","milestone":"MS2","status":"review","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-01","notes":["tag→GitHub Packages→GitHub Release 流程、GITHUB_TOKEN 权限、12 包 core-first 计划、制品校验和 publish dry-run 已实现并通过定向测试；按 statusLegend 保持 review，等待本轮全量验收和真实发布后转为 done。"]},
+    {"id":"M12-F003","requirement":"R04","module":"M12","title":"发布流水线（tag→GitHub Packages→Release）","priority":"P1","milestone":"MS2","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-02","notes":["v0.1.0 发布流水线已在 GitHub Actions 完整通过：12 个 scoped 包按 core-first 顺序发布到 GitHub Packages，随后创建包含 12 个 tarball 与 SHA-256 manifest 的 GitHub Release；发布阶段报告 12 published、0 skipped。"]},
     {"id":"M12-F004","requirement":"R04","module":"M12","title":"A 档第三方插件安装脚本","priority":"P1","milestone":"MS2","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-08-31","notes":["Windows 与 Ubuntu disposable profile 均已使用 production wrapper 完成 pinned 三插件的幂等安装、plugin list、dump-config、bundle/manifest/LICENSE 核验及 node-pty 原生加载。"]},
     { "id": "M12-F005", "requirement": "R04", "module": "M12", "title": "安全门禁（gitleaks + files 白名单 + publish dry-run）", "priority": "P0", "milestone": "MS1", "status": "dropped", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-30", "notes": ["安全扫描与供应链加固不再作为独立产品 feature；ID 按规则保留。files 白名单、pack/publish dry-run 作为防误发与发布稳定性并入 M12-F003/M12-F006"] },
     { "id": "M12-F006", "requirement": "R04", "module": "M12", "title": "README 与版本记录规范落地（每包模板/engines.dsh 对齐）", "priority": "P1", "milestone": "MS2", "status": "done", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-09-01", "notes": ["中英根 README 以登录后的真实 Taskboard 组件为主展示，并覆盖功能闭环、GitHub stars、GitHub Packages 登录/安装和 Release tarball 回退；各包 README、CHANGELOG、部署与发布文档、模板、统一版本、DSH rc2 基线和 manifest/engines.dsh 验证器已对齐，具体测试数以当前门禁输出为准。"] }

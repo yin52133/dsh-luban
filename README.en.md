@@ -156,9 +156,10 @@ for design notes and [checklist.json](checklist.json) for current implementation
 
 ## Project status
 
-The repository is preparing its first public release. The code passes Windows/Ubuntu CI and module
-tests. Items that still require an external model or real hardware remain marked `review` or
-`blocked` in `checklist.json` and are not presented as released capabilities.
+The first public release, [v0.1.0](https://github.com/yin52133/dsh-luban/releases/tag/v0.1.0), is live.
+All 12 scoped packages were published to GitHub Packages, and the Release includes the matching
+tarballs and SHA-256 manifest. The code passed Windows/Ubuntu host acceptance and CI; items that
+still require an external model or real hardware remain marked honestly in `checklist.json`.
 
 ## License
 

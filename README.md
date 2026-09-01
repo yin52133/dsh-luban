@@ -161,8 +161,9 @@ flowchart LR
 
 ## 当前状态
 
-仓库正在准备首次公开版本。代码已完成 Windows/Ubuntu CI 与模块测试；个别需要外部模型或真实设备的
-验收项，以 `checklist.json` 中的 `review` 或 `blocked` 标记，不会被描述为已发布能力。
+首个公开版本 [v0.1.0](https://github.com/yin52133/dsh-luban/releases/tag/v0.1.0) 已发布：12 个 scoped 包
+同步进入 GitHub Packages，Release 提供对应 tarball 与 SHA-256 清单。代码已完成 Windows/Ubuntu
+实机及 CI 验收；个别需要外部模型或真实设备的项目仍在 `checklist.json` 中如实标记。
 
 ## 许可
 
