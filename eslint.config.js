@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/.acceptance/**',
       '**/.runtime/**',
       '**/.luban/**',
+      '**/.release-artifacts/**',
     ],
   },
   eslint.configs.recommended,
