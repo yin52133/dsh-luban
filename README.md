@@ -1,86 +1,121 @@
 # dsh-luban
 
-🛠️ Custom workbench plugin suite for DeepSeek Harness (DSH) — simple account-separated contexts, task board, SSH + tmux keep-alive, shared Windows/Ubuntu sessions, context HUD & serial/debug tooling. Built for embedded devs: Windows debug box + LAN Ubuntu build server. Monorepo of dsh-luban-* plugins.
+[简体中文](README.md) | [English](README.en.md)
 
-> 鲁班（Luban）：为嵌入式工程师打造的 DSH 定制工作台。
+[![CI](https://github.com/yin52133/dsh-luban/actions/workflows/ci.yml/badge.svg?branch=mainline)](https://github.com/yin52133/dsh-luban/actions/workflows/ci.yml)
+[![GitHub Stars](https://img.shields.io/github/stars/yin52133/dsh-luban?style=flat-square)](https://github.com/yin52133/dsh-luban/stargazers)
+[![GitHub Release](https://img.shields.io/github/v/release/yin52133/dsh-luban?display_name=tag&style=flat-square)](https://github.com/yin52133/dsh-luban/releases)
+[![npm](https://img.shields.io/npm/v/dsh-luban-auth?style=flat-square&label=npm)](https://www.npmjs.com/package/dsh-luban-auth)
+[![License](https://img.shields.io/github/license/yin52133/dsh-luban?style=flat-square)](LICENSE)
 
-## 项目定位
+面向嵌入式开发的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+插件套件：把 Windows 调试机和 Ubuntu 编译服务器连接成一个可从浏览器操作、可持续运行、
+可按账号隔离上下文的 DSH 工作台。
 
-dsh-luban 是一套运行在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh，MIT）之上的**自研插件套件**，服务于两种部署形态：
+## 为什么使用 dsh-luban
 
-| 形态                 | 宿主机  | 角色                                            |
-| -------------------- | ------- | ----------------------------------------------- |
-| A · 本地调试机       | Windows | dsh 本机运行 + 串口/adb/GDB 调试 + 桌面自动化   |
-| B · 局域网编译服务器 | Ubuntu  | dsh 后台常驻（tmux 保活）+ 网页访问 + 编译/构建 |
+- **双机协作**：Windows 负责串口、ADB、烧录和 GDB，Ubuntu 负责后台构建与长任务。
+- **一个入口**：通过 `/luban-auth/login` 登录，任务、会话、附件和上下文按账号隔离。
+- **任务闭环**：六列任务看板支持人工操作、Agent 领单、进度回写和人工复核。
+- **不中断工作**：tmux、Windows 计划任务与 systemd 负责会话保活和重启恢复。
+- **上下文可见**：HUD 展示上下文占用、模型、推理档位、RPM/TPM，并支持可回放压缩。
+- **嵌入式工具链**：统一接入串口、ADB/Fastboot、OpenOCD、GDB、SSH、Telnet 和网络串口。
+- **模块化安装**：每项能力都是独立的 `dsh-luban-*` 包，只安装当前主机需要的插件。
 
-核心能力：简单账号登录与账号级上下文隔离（端口可配）、任务看板（agent 可自主领单、夜间无人值守研究）、会话保活与跨机共享、上下文 HUD、上下文压缩、plan 工作模式、串口/远程/浏览器自动化集成。本项目以功能和稳定性为主，不把可信局域网内的攻击防护或安全加固证明作为产品目标。
+本项目面向可信局域网，账号系统用于隔离少量用户的工作上下文，不定位为企业级身份与安全防护系统。
 
-## 文档导航
+## 部署形态
 
-全部设计文档在 [design/](design/README.md)，配套进度看板 [checklist.json](checklist.json)：
+| 主机              | 主要职责                                             | 推荐插件                                              |
+| ----------------- | ---------------------------------------------------- | ----------------------------------------------------- |
+| Windows 调试机    | 串口、ADB/Fastboot、烧录、GDB、桌面与浏览器自动化    | auth、taskboard、keepalive、HUD、win-debug、browser   |
+| Ubuntu 编译服务器 | Web 入口、后台会话、构建队列、产物管理、浏览器自动化 | auth、taskboard、keepalive、HUD、server-mode、browser |
 
-| 分册                                                        | 内容                                            |
-| ----------------------------------------------------------- | ----------------------------------------------- |
-| [01-overview](design/01-overview/vision.md)                 | 愿景、分层总体架构、monorepo 目录、需求追踪矩阵 |
-| [02-principles](design/02-principles/principles.md)         | 设计原则专章（分层/契约/复用三档/许可合规）     |
-| [03-modules](design/03-modules/M01-auth.md)                 | 12 个模块详细设计（功能/流程图/接口/数据模型）  |
-| [04-interfaces](design/04-interfaces/api-overview.md)       | 跨模块契约与数据结构                            |
-| [05-deployment](design/05-deployment/deploy-windows.md)     | Windows / Ubuntu 双端部署设计                   |
-| [06-release](design/06-release/release-principles.md)       | 发布流程、版本一致性、失败恢复与仓库卫生        |
-| [07-references](design/07-references/reference-analysis.md) | 参考项目分析与复用档位（license 合规）          |
+两个主机可以安装 plan、context、image-paste 和 session-share，共享同一账号下的任务与会话视图。
+
+## 插件一览
+
+| npm 包                    | 功能                                       | 平台             |
+| ------------------------- | ------------------------------------------ | ---------------- |
+| `dsh-luban-auth`          | 本地账号登录、认证 sidecar、账号上下文隔离 | Windows / Ubuntu |
+| `dsh-luban-taskboard`     | 六列看板、Agent 领单、夜间任务与 `taskctl` | Windows / Ubuntu |
+| `dsh-luban-keepalive`     | tmux/计划任务保活、心跳、重启恢复与检查点  | Windows / Ubuntu |
+| `dsh-luban-plan`          | 计划草稿、批准、驳回和修订闭环             | Windows / Ubuntu |
+| `dsh-luban-session-share` | 跨主机会话观察、重连与显式控制权交接       | Windows / Ubuntu |
+| `dsh-luban-image-paste`   | Web/剪贴板图片落盘、预览与会话引用         | Windows / Ubuntu |
+| `dsh-luban-hud`           | Web/CLI 状态栏、上下文与速率统计           | Windows / Ubuntu |
+| `dsh-luban-context`       | 上下文压缩、虚拟文件归档、检索与回放       | Windows / Ubuntu |
+| `dsh-luban-server-mode`   | systemd 常驻、构建队列、资源看护与产物下载 | Ubuntu           |
+| `dsh-luban-win-debug`     | 串口、烧录、GDB、ADB、远程通道与桌面 MCP   | Windows          |
+| `dsh-luban-browser`       | browser-use 桥接、任务模板和看板自动执行   | Windows / Ubuntu |
+| `dsh-luban-core`          | 插件共用契约、路由、错误与存储工具         | 内部依赖         |
 
 ## 快速开始
 
-本仓库使用 Node.js 22.19+、pnpm 11；Python 桥接环境只通过 `uv` 创建和运行。
+### 使用插件
 
-```powershell
+需要 Node.js 22.19+、pnpm 11 和 DeepSeek Harness 0.1.1-rc.2。先安装认证插件，再按需添加业务插件：
+
+```sh
+dsh plugin --profile web add dsh-luban-auth
+dsh plugin --profile web add dsh-luban-taskboard dsh-luban-hud dsh-luban-plan
+```
+
+启动 profile 后，从认证 sidecar 进入：
+
+```text
+http://<host>:42600/luban-auth/login
+```
+
+插件统一使用 `/luban-<module>` 路由，例如 `/luban-taskboard`、`/luban-plan` 和
+`/luban-browser`。完整安装与服务注册见 [Windows 部署](design/05-deployment/deploy-windows.md)
+和 [Ubuntu 部署](design/05-deployment/deploy-ubuntu.md)。
+
+### 开发仓库
+
+Python 浏览器桥接只通过 `uv` 的锁定环境运行，不使用全局 pip：
+
+```sh
 corepack enable
 pnpm install
 pnpm check
+uv run --project tools/browser-bridge --locked python -m unittest discover -s tools/browser-bridge/tests
 ```
 
-本地联调时先构建工作区，再把所需 `dsh-luban-*` 包加入目标 profile。浏览器入口使用
-`dsh-luban-auth` sidecar（默认 `http://<host>:42600/luban-auth/login`）；登录后，各插件按
-当前账号读取对应的会话与上下文。各插件路由遵循 `/luban-<module>`，例如
-`/luban-taskboard/tasks` 与 `/luban-browser/jobs`。
+## 网络说明
 
-Ubuntu 服务器只需向实际局域网地址范围开放认证 sidecar 端口。不要把验收环境的真实网段
-提交到仓库；应使用路由器或网络管理员提供的客户端 CIDR：
+Ubuntu 只需向实际局域网客户端范围开放认证 sidecar 端口。下面的 CIDR 是占位符，应替换为
+路由器或网络管理员提供的实际地址范围，不要把私有部署信息提交到仓库：
 
 ```sh
-# Example only: replace this value with the actual LAN client CIDR.
 LAN_CIDR=<lan-client-cidr>
 sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
 ```
 
-该规则只控制哪些设备能连接端口；访问 DSH 仍需通过 `/luban-auth/login` 使用本地账号登录。
-除非明确需要接受所有可路由来源，否则不要使用无来源限制的 `ufw allow 42600/tcp`。
+防火墙规则限制可以连接该端口的设备；访问 DSH 仍需通过 `/luban-auth/login` 登录。
 
-浏览器桥接使用仓库锁文件，不使用全局 pip：
+## 架构
 
-```powershell
-uv run --project tools/browser-bridge --locked python -m unittest discover -s tools/browser-bridge/tests
+```mermaid
+flowchart LR
+    Browser[浏览器 / CLI] --> Auth[dsh-luban-auth]
+    Auth --> DSH[DeepSeek Harness]
+    DSH --> Shared[任务 / Plan / HUD / 上下文 / 会话]
+    DSH --> Windows[Windows 调试工具]
+    DSH --> Ubuntu[Ubuntu 构建与保活]
+    Shared --> Store[(账号级本地数据)]
 ```
 
-安装、认证初始化和双端服务注册的完整步骤见
-[Windows 部署](design/05-deployment/deploy-windows.md)与
-[Ubuntu 部署](design/05-deployment/deploy-ubuntu.md)。夜间任务与浏览器自动执行默认关闭，
-必须在白名单和目标环境验收完成后显式启用。
+插件之间不直接依赖：共享类型和基础工具来自 `dsh-luban-core`，运行时协作通过 DSH 服务、
+事件和 HTTP 契约完成。设计说明与当前状态分别见 [design](design/README.md) 和
+[checklist.json](checklist.json)。
 
-## 仓库现状
+## 当前状态
 
-- 设计与实现按 [checklist.json](checklist.json) 的 MS1 → MS4 证据化推进。
-- 已进入插件实现与逐模块验收阶段；`review` 表示实现已完成、明确验收当前可执行，但尚无
-  覆盖完整口径的直接证据；`blocked` 表示明确验收因环境、设备、授权或外部依赖暂时无法继续。
-  `done` 只表示设计验收已有直接证据，不等同于已经发布。
-- npm 发布、GitHub Release、市场 PR 与 topic 修改均是独立的外部操作，未经明确授权不会执行。
-- 市场交接使用 `scripts/release/prepare-market-handoff.mjs`：默认仅预览；`--write` 在
-  `.luban/market-handoffs/` 生成包含包版本、上游 schema 与候选 diff 的本地审核物。产物中的
-  PR/topic 命令均为未执行计划，不能替代维护者明确批准。
-- A 档第三方安装验收使用 `scripts/acceptance/m12-third-party-install.mjs`，默认仅输出零写入计划。
-  真实验收安装到仓库外的 disposable profile，分别检查 Windows/Ubuntu 的安装、重复执行、启动、
-  列表/config 与卸载结果。脚本和 workflow 就绪不等于已获准修改目标环境；真实双端运行仍需明确授权。
+仓库正在准备首次公开版本。代码已完成 Windows/Ubuntu CI 与模块测试；个别需要外部模型、
+插件市场权限或真实设备的验收项，以 `checklist.json` 中的 `review` 或 `blocked` 标记，不会被描述为已发布能力。
 
 ## 许可
 
-MIT（见 [LICENSE](LICENSE)）。第三方依赖与参考项目的许可处置见[参考项目分析](design/07-references/reference-analysis.md)。
+[MIT](LICENSE)。第三方依赖和参考项目的许可说明见
+[参考项目分析](design/07-references/reference-analysis.md)及各包的 `THIRD-PARTY-NOTICES.md`。
