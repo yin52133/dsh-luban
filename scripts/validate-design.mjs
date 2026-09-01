@@ -4,11 +4,11 @@
  *
  * Enforces the invariants documented in design/README.md and
  * design/04-interfaces/data-models.md §13 (checklist-json-v1):
- *   1. checklist.json parses and satisfies its schema invariants.
+ *   1. design/checklist.json parses and satisfies its schema invariants.
  *   2. Every design doc (except TEMPLATE) carries a version-record table.
  *   3. Feature IDs (M<NN>-F<NNN>) found in module spec tables match
- *      checklist.json features exactly (both directions).
- *   4. Requirement IDs (R<NN>) in trace-matrix.md match checklist.json.
+ *      design/checklist.json features exactly (both directions).
+ *   4. Requirement IDs (R<NN>) in trace-matrix.md match design/checklist.json.
  *   5. Milestone membership is consistent in both directions.
  *   6. Every feature's designDoc path exists on disk.
  *
@@ -35,12 +35,12 @@ function walkMd(dir) {
   return out
 }
 
-// --- 1. checklist.json schema ---
+// --- 1. design/checklist.json schema ---
 let checklist
 try {
-  checklist = JSON.parse(readFileSync(join(ROOT, 'checklist.json'), 'utf8'))
+  checklist = JSON.parse(readFileSync(join(ROOT, 'design/checklist.json'), 'utf8'))
 } catch (e) {
-  console.error(`FAIL: checklist.json is not valid JSON: ${e.message}`)
+  console.error(`FAIL: design/checklist.json is not valid JSON: ${e.message}`)
   process.exit(1)
 }
 
@@ -89,11 +89,11 @@ for (const file of readdirSync(MODULES_DIR)
 const checkFeatureIds = new Set((checklist.features ?? []).map((f) => f.id))
 for (const id of docFeatureIds)
   if (!checkFeatureIds.has(id))
-    problems.push(`ids: ${id} in module docs but missing from checklist.json`)
+    problems.push(`ids: ${id} in module docs but missing from design/checklist.json`)
 for (const id of checkFeatureIds)
   if (!docFeatureIds.has(id))
     problems.push(
-      `ids: ${id} in checklist.json but not found in any module spec table (design/03-modules)`,
+      `ids: ${id} in design/checklist.json but not found in any module spec table (design/03-modules)`,
     )
 
 // --- 4. requirement IDs in trace-matrix vs checklist ---
@@ -103,7 +103,7 @@ const traceReqs = new Set([...traceText.matchAll(/\bR\d{2}\b/g)].map((m) => m[0]
 const checklistReqs = new Set([...reqIds])
 for (const id of traceReqs)
   if (!checklistReqs.has(id))
-    problems.push(`trace-matrix: ${id} not defined in checklist.json requirements`)
+    problems.push(`trace-matrix: ${id} not defined in design/checklist.json requirements`)
 for (const id of checklistReqs)
   if (!traceReqs.has(id))
     problems.push(`trace-matrix: requirement ${id} not referenced in trace-matrix.md`)

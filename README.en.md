@@ -6,7 +6,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/yin52133/dsh-luban?style=flat-square)](https://github.com/yin52133/dsh-luban/stargazers)
 [![GitHub Release](https://img.shields.io/github/v/release/yin52133/dsh-luban?display_name=tag&style=flat-square)](https://github.com/yin52133/dsh-luban/releases)
 [![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-%40yin52133-24292f?style=flat-square&logo=github)](https://github.com/yin52133/dsh-luban/pkgs/npm/dsh-luban-auth)
-[![License](https://img.shields.io/github/license/yin52133/dsh-luban?style=flat-square)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square)](LICENSE)
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin suite for
 embedded development. It connects a Windows debug workstation and an Ubuntu build server into a
@@ -20,7 +20,7 @@ browser-accessible DSH workbench with persistent jobs and account-separated cont
 - **Persistent work**: tmux, Windows Task Scheduler, and systemd keep sessions alive and recover them after restart.
 - **Visible context**: the HUD reports context pressure, model, reasoning level, RPM/TPM, and replayable compaction.
 - **Embedded toolchain**: one surface integrates serial, ADB/Fastboot, OpenOCD, GDB, SSH, Telnet, and TCP serial.
-- **Modular installation**: every capability is an independent `@yin52133/dsh-luban-*` package.
+- **Complete or selective installation**: install `@yin52133/dsh-luban` for the full suite, or add only the standalone plugins a host needs.
 
 The project targets a trusted LAN. Its simple account system separates a small number of users'
 working contexts; it is not an enterprise identity or network-hardening product.
@@ -67,6 +67,7 @@ the same account session after sign-in. Anonymous API requests return 401, and
 
 | GitHub Packages package             | Capability                                                              | Platform            |
 | ----------------------------------- | ----------------------------------------------------------------------- | ------------------- |
+| `@yin52133/dsh-luban`               | Complete Luban suite with pinned companion plugins                      | Windows / Ubuntu    |
 | `@yin52133/dsh-luban-auth`          | Local login, authentication sidecar, and account context separation     | Windows / Ubuntu    |
 | `@yin52133/dsh-luban-taskboard`     | Six-column board, agent claims, night jobs, and `taskctl`               | Windows / Ubuntu    |
 | `@yin52133/dsh-luban-keepalive`     | tmux/Task Scheduler persistence, heartbeat, recovery, and checkpoints   | Windows / Ubuntu    |
@@ -92,16 +93,24 @@ username and PAT in this interactive command (never commit the PAT):
 npm login --scope=@yin52133 --auth-type=legacy --registry=https://npm.pkg.github.com
 ```
 
-Install the authentication plugin first, then add only the capabilities needed by the profile:
+The complete installation mounts every Luban plugin plus pinned versions of `dshmarket`,
+`dsh-better-sidebar`, and `@furongjun1999/dsh-memory`:
+
+```sh
+dsh plugin --profile web add @yin52133/dsh-luban@0.1.1
+```
+
+Alternatively, install authentication first and then add only the capabilities needed by the profile:
 
 ```sh
 dsh plugin --profile web add @yin52133/dsh-luban-auth
 dsh plugin --profile web add @yin52133/dsh-luban-taskboard @yin52133/dsh-luban-hud @yin52133/dsh-luban-plan
 ```
 
-Publishing from CI needs no npmjs account or token: the Release workflow publishes all 12 packages
-with the repository's `GITHUB_TOKEN`. For a token-free client path, download the validated `.tgz`
-files from the GitHub Release and install them locally.
+Do not install the aggregate together with duplicate standalone packages, because that would mount a
+plugin twice. Publishing from CI needs no npmjs account or token: the Release workflow publishes all
+13 packages with the repository's `GITHUB_TOKEN`. For a token-free client path, download the validated
+`.tgz` files from the GitHub Release and install them locally.
 
 After starting the profile, enter through the authentication sidecar:
 
@@ -142,24 +151,25 @@ The firewall rule limits which devices can connect to the port. DSH access still
 
 ```mermaid
 flowchart LR
-    Browser[Browser / CLI] --> Auth[@yin52133/dsh-luban-auth]
-    Auth --> DSH[DeepSeek Harness]
-    DSH --> Shared[Tasks / Plan / HUD / Context / Sessions]
-    DSH --> Windows[Windows debug tools]
-    DSH --> Ubuntu[Ubuntu builds and persistence]
-    Shared --> Store[(Account-scoped local data)]
+    Browser["Browser / CLI"] --> Auth["@yin52133/dsh-luban-auth"]
+    Auth --> DSH["DeepSeek Harness"]
+    DSH --> Shared["Tasks / Plan / HUD / Context / Sessions"]
+    DSH --> Windows["Windows debug tools"]
+    DSH --> Ubuntu["Ubuntu builds and persistence"]
+    Shared --> Store[("Account-scoped local data")]
 ```
 
-Plugins do not depend on each other directly. Shared types and utilities live in `@yin52133/dsh-luban-core`,
-while runtime cooperation uses DSH services, events, and HTTP contracts. See [design](design/README.md)
-for design notes and [checklist.json](checklist.json) for current implementation status.
+Standalone plugins do not depend on each other directly. Shared types and utilities live in
+`@yin52133/dsh-luban-core`, while runtime cooperation uses DSH services, events, and HTTP contracts.
+The aggregate only coordinates installation. See [design](design/README.md) for design notes and
+[design/checklist.json](design/checklist.json) for current implementation status.
 
 ## Project status
 
-The first public release, [v0.1.0](https://github.com/yin52133/dsh-luban/releases/tag/v0.1.0), is live.
-All 12 scoped packages were published to GitHub Packages, and the Release includes the matching
-tarballs and SHA-256 manifest. The code passed Windows/Ubuntu host acceptance and CI; items that
-still require an external model or real hardware remain marked honestly in `checklist.json`.
+The current version is **0.1.1**. All 13 scoped packages are published to GitHub Packages, and the
+Release includes the matching tarballs and SHA-256 manifest. The code passed Windows/Ubuntu host
+acceptance and CI; items that still require an external model or real hardware remain marked honestly
+in `design/checklist.json`.
 
 ## License
 

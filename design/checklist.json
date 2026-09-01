@@ -1,9 +1,9 @@
 {
-  "$schema": "./design/04-interfaces/data-models.md#checklist-json-v1",
+  "$schema": "./04-interfaces/data-models.md#checklist-json-v1",
   "meta": {
     "project": "dsh-luban",
     "description": "功能进度台账：与 design/01-overview/trace-matrix.md 及各模块文档功能清单三处一致，由 scripts/validate-design.mjs 校验",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "updatedAt": "2026-09-02",
     "idRules": "R=需求(只增不改) M=模块 F=功能点(只增不改，废弃置dropped) MS=里程碑"
   },
@@ -38,7 +38,7 @@
         "M10-F001", "M10-F002", "M10-F003", "M10-F004", "M10-F005", "M10-F006", "M10-F007", "M10-F008",
         "M11-F001", "M11-F002", "M11-F004",
         "M02-F004", "M02-F007", "M02-F008", "M02-F009",
-        "M12-F002", "M12-F003", "M12-F004", "M12-F006"
+        "M12-F002", "M12-F003", "M12-F004", "M12-F006", "M12-F007"
       ]
     },
     {
@@ -155,11 +155,12 @@
     { "id": "M11-F003", "requirement": "R11", "module": "M11", "title": "看板联动自动执行", "priority": "P3", "milestone": "MS3", "status": "done", "designDoc": "design/03-modules/M11-browser.md", "updatedAt": "2026-08-30", "notes": ["同一受控夜间窗口直接完成 scheduler claim→唯一 browser executor route→queue→progress→artifact→review(autoDone) 闭环，fallback 未执行且持久 quota=1；结构化 executionOwner、HTTP 防伪、Cordis 注册/注销与终态唯一所有权回归通过"] },
     {"id":"M11-F004","requirement":"R11","module":"M11","title":"双平台浏览器内核收口","priority":"P2","milestone":"MS2","status":"done","designDoc":"design/03-modules/M11-browser.md","updatedAt":"2026-09-01","notes":["HAL 配置分支及 browser-use 内核已在 Windows Chrome/Edge 与 Ubuntu headless Chrome 验证，均能访问 fixture、读取 DOM 并干净停止；默认模型驱动的完整 Agent 任务归 M11-F001。"]},
 
-    {"id":"M12-F001","requirement":"R04","module":"M12","title":"包脚手架与 dsh manifest 规范落地","priority":"P0","milestone":"MS1","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-01","notes":["12 个包统一为 `@yin52133/dsh-luban-*`；manifest、内部 imports/external、lockfile、Cordis patch、Web loader ID、core-first 顺序、脚手架、架构与发布校验均已迁移，并由 build/typecheck/定向测试和 pack dry-run 直接验证。"]},
+    {"id":"M12-F001","requirement":"R04","module":"M12","title":"包脚手架与 dsh manifest 规范落地","priority":"P0","milestone":"MS1","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-02","notes":["13 个包使用统一版本，其中 `@yin52133/dsh-luban` 为完整套件入口，其余包遵循 `@yin52133/dsh-luban-*` 命名；manifest、内部 imports/external、lockfile、Cordis patch、Web loader ID、core-first 顺序、脚手架、架构与发布校验均由 build/typecheck/定向测试和 pack dry-run 直接验证。"]},
     {"id":"M12-F002","requirement":"R04","module":"M12","title":"市场注册 PR + topic 打标","priority":"P1","milestone":"MS2","status":"dropped","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-01","notes":["dsh 插件市场注册不再属于当前发布目标；保留 ID 并按 statusLegend 标记 dropped，当前发布目标为 GitHub Packages 与 GitHub Release。"]},
-    {"id":"M12-F003","requirement":"R04","module":"M12","title":"发布流水线（tag→GitHub Packages→Release）","priority":"P1","milestone":"MS2","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-02","notes":["v0.1.0 发布流水线已在 GitHub Actions 完整通过：12 个 scoped 包按 core-first 顺序发布到 GitHub Packages，随后创建包含 12 个 tarball 与 SHA-256 manifest 的 GitHub Release；发布阶段报告 12 published、0 skipped。"]},
+    {"id":"M12-F003","requirement":"R04","module":"M12","title":"发布流水线（tag→GitHub Packages→Release）","priority":"P1","milestone":"MS2","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-02","notes":["v0.1.0 发布流水线已在 GitHub Actions 完整通过；v0.1.1 流水线扩展为 13 个 scoped 包、明确的 Release 版本标题/正文，并要求 tag commit 已有成功的 mainline CI。"]},
     {"id":"M12-F004","requirement":"R04","module":"M12","title":"A 档第三方插件安装脚本","priority":"P1","milestone":"MS2","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-08-31","notes":["Windows 与 Ubuntu disposable profile 均已使用 production wrapper 完成 pinned 三插件的幂等安装、plugin list、dump-config、bundle/manifest/LICENSE 核验及 node-pty 原生加载。"]},
     { "id": "M12-F005", "requirement": "R04", "module": "M12", "title": "安全门禁（gitleaks + files 白名单 + publish dry-run）", "priority": "P0", "milestone": "MS1", "status": "dropped", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-30", "notes": ["安全扫描与供应链加固不再作为独立产品 feature；ID 按规则保留。files 白名单、pack/publish dry-run 作为防误发与发布稳定性并入 M12-F003/M12-F006"] },
-    { "id": "M12-F006", "requirement": "R04", "module": "M12", "title": "README 与版本记录规范落地（每包模板/engines.dsh 对齐）", "priority": "P1", "milestone": "MS2", "status": "done", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-09-01", "notes": ["中英根 README 以登录后的真实 Taskboard 组件为主展示，并覆盖功能闭环、GitHub stars、GitHub Packages 登录/安装和 Release tarball 回退；各包 README、CHANGELOG、部署与发布文档、模板、统一版本、DSH rc2 基线和 manifest/engines.dsh 验证器已对齐，具体测试数以当前门禁输出为准。"] }
+    { "id": "M12-F006", "requirement": "R04", "module": "M12", "title": "README 与版本记录规范落地（每包模板/engines.dsh 对齐）", "priority": "P1", "milestone": "MS2", "status": "done", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-09-02", "notes": ["中英根 README 覆盖完整套件与单包安装、明确版本、稳定 MIT 徽章、可渲染 Mermaid、GitHub Packages 登录和 Release tarball 回退；各包 README、CHANGELOG、部署与发布文档、模板、统一版本、DSH rc2 基线和 manifest/engines.dsh 验证器已对齐。"] },
+    { "id": "M12-F007", "requirement": "R04", "module": "M12", "title": "GitHub dsh-plugin topic 可发现性", "priority": "P1", "milestone": "MS2", "status": "done", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-09-02", "notes": ["GitHub 仓库已添加 `dsh-plugin` repository topic，插件目录可按 topic 检索；该 topic 与版本 tag 分开管理。"] }
   ]
 }

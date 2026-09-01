@@ -5,8 +5,13 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-02
+
 ### Added
 
+- Added `@yin52133/dsh-luban`, a complete aggregate package that installs all
+  standalone Luban plugins together with pinned `dshmarket`,
+  `dsh-better-sidebar`, and `@furongjun1999/dsh-memory` companions.
 - Added a fail-closed M12 target-host profile smoke runner for isolated DSH
   fixture installation, host/client lifecycle checks, restart, and cleanup.
 - Added an opt-in M11 production browser runner and Windows/Ubuntu result
@@ -17,6 +22,11 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 
 ### Changed
 
+- Moved the implementation status ledger from the repository root to
+  `design/checklist.json` and updated all validators and documentation links.
+- Made generated GitHub Release notes and titles display the exact suite
+  version prominently, and require a successful mainline CI run for the tag commit.
+- Documented complete-suite and standalone installation paths in both READMEs.
 - Standardized the canonical authentication entry at `/luban-auth/login`.
 - Corrected the Ubuntu user systemd launcher to run
   `dsh --profile ubuntu-server --no-open` and made the exact
@@ -33,6 +43,13 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 - Reconciled checklist notes with the canonical status legend: runner availability
   no longer implies target-host or provider acceptance.
 
+### Fixed
+
+- Replaced the unreliable dynamic repository-license badge with an explicit MIT
+  badge linked to the tracked license.
+- Quoted Mermaid node labels in the Chinese and English architecture diagrams so
+  GitHub can render package names and slash-separated labels correctly.
+
 ## [0.1.0] - 2026-08-30
 
 ### Added
@@ -45,5 +62,6 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 - Protected tag workflow that publishes identical tarballs to GitHub Packages
   and attaches them to the GitHub Release using the repository `GITHUB_TOKEN`.
 
-[Unreleased]: https://github.com/yin52133/dsh-luban/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/yin52133/dsh-luban/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.0

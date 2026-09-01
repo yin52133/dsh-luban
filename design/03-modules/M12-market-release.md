@@ -8,11 +8,13 @@
 | --- | --- | --- | --- |
 | v1.0 | 2026-09-01 | Codex | 收敛发布设施，移除市场交接、恢复账本和证据编排 |
 | v1.1 | 2026-09-01 | Codex | 12 包改为 `@yin52133/*` 并发布到 GitHub Packages |
+| v1.2 | 2026-09-02 | Codex | 增加完整套件包、CI 前置门禁与 topic 可发现性 |
 
 ## 1. 目标与边界
 
-- 统一 12 个 `@yin52133/dsh-luban-*` 包的版本、manifest、README 和发布文件清单。
-- 用一个 tag 按 core-first 顺序发布同版本 GitHub Packages 包，再生成 GitHub Release。
+- 统一 13 个 `@yin52133/dsh-luban*` 包的版本、manifest、README 和发布文件清单。
+- 同时支持完整套件 `@yin52133/dsh-luban` 与独立插件按需安装。
+- 用一个 tag 按 core-first、聚合包最后的顺序发布同版本 GitHub Packages 包，再生成 GitHub Release。
 - 发布前运行项目质量门禁、制品校验和 dry-run。
 - 多包发布失败时立即停止，人工确认 registry 状态后从标准命令重试。
 - 不建设插件市场、不自动提交市场 PR，也不维护自定义发布事务或证明系统。
@@ -27,17 +29,18 @@
 | M12-F004 | Windows/Ubuntu 第三方插件安装脚本 | P1 | MS2 | pinned 安装幂等且安装后核验通过 |
 | M12-F005 | **已废弃**：独立安全加固门禁 | P0 | MS1 | `dropped`；files/dry-run 作为发布稳定性检查 |
 | M12-F006 | README、版本、CHANGELOG 与 engines.dsh 规范 | P1 | MS2 | 校验器和包模板通过 |
+| M12-F007 | GitHub `dsh-plugin` topic 可发现性 | P1 | MS2 | 仓库可被 topic 目录检索，且与版本 tag 分开管理 |
 
 ## 3. 发布流程
 
 ```mermaid
 flowchart TD
     A["mainline CI green"] --> B["validate release metadata"]
-    B --> C["build + pack 12 packages"]
+    B --> C["build + pack 13 packages"]
     C --> D["publish dry-run"]
     D --> E["push v<semver> tag"]
     E --> F["GitHub Actions downloads artifacts"]
-    F --> G["publish GitHub Packages in core-first order"]
+    F --> G["publish GitHub Packages: core first, aggregate last"]
     G --> H["create GitHub Release with tarballs"]
     H --> I["verify tag / Release / package versions"]
 ```
@@ -50,12 +53,12 @@ flowchart TD
 
 ```bash
 node scripts/release/validate-release.mjs
-node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.0 --output .release-artifacts/v0.1.0
-node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.0
+node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.1 --output .release-artifacts/v0.1.1
+node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.1
 ```
 
 发布脚本校验 manifest、GitHub Packages registry、tarball SHA-256、scoped 包名、版本和
-core-first 顺序。真实模式会先查询 registry：同版本已存在则跳过，不存在才发布；任一错误立即停止。
+core-first、聚合包最后的顺序。真实模式会先查询 registry：同版本已存在则跳过，不存在才发布；任一错误立即停止。
 
 ## 4. 包规范
 
@@ -90,7 +93,7 @@ GitHub Packages 多包发布不是事务：
 - format、lint、typecheck、build、unit/integration tests；
 - uv lock、Ruff、Python tests 和 compileall；
 - design/checklist/architecture 校验；
-- 12 包 audit、pack 和 publish dry-run；
+- 13 包 audit、pack 和 publish dry-run；
 - README 与 CHANGELOG 版本一致性。
 
 具体测试数量以当次门禁输出为准，不固化在设计文档中。

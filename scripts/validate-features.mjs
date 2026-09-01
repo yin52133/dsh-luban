@@ -230,7 +230,7 @@ export function formatMilestoneRollup(rollup) {
 
 async function main() {
   const root = resolve(import.meta.dirname, '..')
-  const checklist = JSON.parse(await readFile(resolve(root, 'checklist.json'), 'utf8'))
+  const checklist = JSON.parse(await readFile(resolve(root, 'design/checklist.json'), 'utf8'))
   const result = validateFeatureLedger(checklist)
 
   for (const rollup of result.milestoneRollups) {

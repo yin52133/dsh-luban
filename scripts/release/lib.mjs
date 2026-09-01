@@ -11,6 +11,7 @@ export const POLICY_PATH = join(RELEASE_DIR, 'policy.json')
 export const PACKAGE_SCOPE = '@yin52133/'
 export const PACKAGE_REGISTRY = 'https://npm.pkg.github.com'
 export const CORE_PACKAGE_NAME = `${PACKAGE_SCOPE}dsh-luban-core`
+export const AGGREGATE_PACKAGE_NAME = `${PACKAGE_SCOPE}dsh-luban`
 
 export async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf8'))
@@ -25,6 +26,16 @@ export async function loadPolicy(path = POLICY_PATH) {
 
 export function isPublishable(manifest) {
   return manifest.private !== true
+}
+
+export function compareReleasePackageOrder(left, right) {
+  const leftName = String(left.manifest.name)
+  const rightName = String(right.manifest.name)
+  if (leftName === CORE_PACKAGE_NAME) return rightName === CORE_PACKAGE_NAME ? 0 : -1
+  if (rightName === CORE_PACKAGE_NAME) return 1
+  if (leftName === AGGREGATE_PACKAGE_NAME) return rightName === AGGREGATE_PACKAGE_NAME ? 0 : 1
+  if (rightName === AGGREGATE_PACKAGE_NAME) return -1
+  return leftName.localeCompare(rightName)
 }
 
 export async function discoverPackages(root = REPOSITORY_ROOT) {
@@ -42,13 +53,7 @@ export async function discoverPackages(root = REPOSITORY_ROOT) {
       if (error?.code !== 'ENOENT') throw error
     }
   }
-  return packages.sort((left, right) => {
-    const leftName = String(left.manifest.name)
-    const rightName = String(right.manifest.name)
-    if (leftName === CORE_PACKAGE_NAME) return rightName === CORE_PACKAGE_NAME ? 0 : -1
-    if (rightName === CORE_PACKAGE_NAME) return 1
-    return leftName.localeCompare(rightName)
-  })
+  return packages.sort(compareReleasePackageOrder)
 }
 
 export function pathIsWithin(root, target) {

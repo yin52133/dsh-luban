@@ -7,7 +7,7 @@
 | v0.1 | 2026-08-29 | Maintainers | 初稿：R01-R11 ↔ 模块 ↔ 功能点 ↔ 里程碑全量映射 |
 | v0.2 | 2026-08-30 | Codex | 增加账号上下文隔离并标记已取消的安全加固功能 |
 
-> 本表是 R（需求）、M（模块）、F（功能点）、MS（里程碑）四套编号的权威对照。`scripts/validate-design.mjs` 校验本表与 `checklist.json`、各模块文档三处一致。新增需求按 `design/README.md` SOP 在此追加行。
+> 本表是 R（需求）、M（模块）、F（功能点）、MS（里程碑）四套编号的权威对照。`scripts/validate-design.mjs` 校验本表与 `design/checklist.json`、各模块文档三处一致。新增需求按 `design/README.md` SOP 在此追加行。
 
 ## 1. 需求 → 模块 → 里程碑总览
 
@@ -75,6 +75,7 @@
 | M12-F003 | 发布流水线（tag→Release→npm 同步） | P1 |
 | M12-F004 | A 档第三方插件安装脚本 | P1 |
 | M12-F006 | README 与版本记录规范落地 | P1 |
+| M12-F007 | GitHub dsh-plugin topic 可发现性 | P1 |
 
 ### MS3 · HUD/上下文线
 
@@ -119,5 +120,5 @@
 
 ## 3. 校验口径
 
-- 本表功能点总数 = `checklist.json` features 数 = 各模块文档「功能清单」行数之和（校验脚本强制）。
-- 里程碑排序调整：只改 checklist.json 的 `milestones` 与本表归属列，功能编号永不复用。
+- 本表功能点总数 = `design/checklist.json` features 数 = 各模块文档「功能清单」行数之和（校验脚本强制）。
+- 里程碑排序调整：只改 `design/checklist.json` 的 `milestones` 与本表归属列，功能编号永不复用。

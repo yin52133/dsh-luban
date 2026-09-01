@@ -27,7 +27,7 @@
 | Mxx-F001  | <功能名>         | P0     | MS1    | <验收口径，一句话>         |
 
 > 编号规则：`M<两位模块号>-F<三位序号>`，全仓库唯一、只增不改不复用。
-> 废弃功能不删除行，标记「已废弃」并在 checklist.json 同步状态为 `dropped`。
+> 废弃功能不删除行，标记「已废弃」并在 `design/checklist.json` 同步状态为 `dropped`。
 
 ## 3. 流程图
 
@@ -57,7 +57,7 @@ TypeScript 签名（契约先行的载体）。只定义跨模块可见的接口
 
 ## 9. checklist 映射
 
-列出本模块所有 F 编号，与 `checklist.json` 一一对应（校验脚本会检查双向一致）。
+列出本模块所有 F 编号，与 `design/checklist.json` 一一对应（校验脚本会检查双向一致）。
 
 ## 10. 开放问题
 
@@ -67,5 +67,5 @@ TypeScript 签名（契约先行的载体）。只定义跨模块可见的接口
 ## 模板使用规则
 
 1. **版本记录表必须存在**，每次修改文档都要追加一行，`scripts/validate-design.mjs` 会检查。
-2. **F 编号三处一致**：模块文档 ↔ `checklist.json` ↔ `01-overview/trace-matrix.md`，脚本自动校验。
+2. **F 编号三处一致**：模块文档 ↔ `design/checklist.json` ↔ `01-overview/trace-matrix.md`，脚本自动校验。
 3. 新增需求走 `design/README.md` 的 SOP 流程，不要在旧章节里无痕修改。

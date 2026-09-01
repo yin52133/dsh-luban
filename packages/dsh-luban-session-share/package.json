@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-session-share",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Authenticated cross-host DSH session views and exclusive takeover",
   "type": "module",
   "main": "./dist/index.js",

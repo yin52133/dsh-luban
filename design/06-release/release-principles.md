@@ -5,6 +5,7 @@
 | 版本 | 日期 | 作者 | 变更说明 |
 | --- | --- | --- | --- |
 | v1.0 | 2026-09-01 | Codex | 收敛到标准 GitHub Release 与 npm 发布流程 |
+| v1.1 | 2026-09-02 | Codex | 增加完整套件、13 包发布与成功 CI 前置门禁 |
 
 ## 1. 发布目标
 
@@ -14,7 +15,7 @@
 
 根 README 使用中英双语，展示项目定位、功能亮点、界面、快速开始、兼容性、文档导航和许可证。
 
-每个 npm 包 README 至少包含功能、安装、配置、平台支持、演示/截图和许可证。文档不得宣传 `checklist.json` 中尚未完成或已废弃的功能。
+每个 npm 包 README 至少包含功能、安装、配置、平台支持、演示/截图和许可证。文档不得宣传 `design/checklist.json` 中尚未完成或已废弃的功能。
 
 包 manifest 必须声明：
 
@@ -29,24 +30,25 @@
 | 版本 | 全仓 fixed versioning，任一发布包变更统一升版 |
 | 分支 | `mainline`，发布前 CI 必须通过 |
 | tag | `v<semver>`，tag 版本必须与 package.json、CHANGELOG 一致 |
-| 制品 | 12 个 tarball 与 manifest，`dsh-luban-core` 排在最前 |
+| 制品 | 13 个 tarball 与 manifest，`dsh-luban-core` 排在最前 |
 | npm | public access；同版本存在时跳过，不覆盖 |
 | Release | 附 changelog、manifest 和全部 tarball |
 
 ## 4. 标准流程
 
 1. 运行 format、lint、typecheck、build、tests 和设计校验。
-2. 运行 release metadata 校验与 12 包 audit。
+2. 运行 release metadata 校验与 13 包 audit。
 3. 生成 tarball 与 manifest，并执行 publish dry-run。
 4. 确认仓库无凭据或私人部署信息。
-5. 推送 `mainline` 与 `v<semver>` tag。
-6. GitHub Actions 按 core-first 顺序发布 npm，再创建 GitHub Release。
-7. 核对 tag、Release、npm 包名和版本。
+5. 推送 `mainline` 并等待该 commit 的 CI 成功。
+6. 仅在 CI 成功后推送 `v<semver>` tag。
+7. GitHub Actions 再次验证 tag commit 的成功 CI，按 core-first、聚合包最后的顺序发布 npm，并创建 GitHub Release。
+8. 核对 tag、Release、npm 包名和版本。
 
 ```bash
 node scripts/release/validate-release.mjs
-node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.0 --output .release-artifacts/v0.1.0
-node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.0
+node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.1 --output .release-artifacts/v0.1.1
+node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.1
 ```
 
 ## 5. 发布失败
@@ -67,7 +69,7 @@ npm 多包发布不是事务。任何包失败时立即停止：
 - [ ] uv lock、Ruff、Python tests 与 compileall 通过
 - [ ] design/checklist/architecture 校验通过
 - [ ] 版本、CHANGELOG、README 与 `engines.dsh` 一致
-- [ ] 12 包 files、pack、manifest 与 publish dry-run 通过
+- [ ] 13 包 files、pack、manifest 与 publish dry-run 通过
 - [ ] 当前树和待公开历史中无凭据、token 或私人部署信息
 - [ ] npm 发布凭据与 GitHub Actions 发布变量已配置
 - [ ] tag、GitHub Release 与 npm 发布结果一致

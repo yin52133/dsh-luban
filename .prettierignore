@@ -9,4 +9,4 @@ coverage
 pnpm-lock.yaml
 uv.lock
 design/**/*.md
-checklist.json
+design/checklist.json

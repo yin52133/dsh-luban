@@ -104,7 +104,7 @@ export interface BrowserTaskSpec {
 
 ## 9. checklist 映射
 
-M11-F001 ~ M11-F004 共 4 项，与 `checklist.json` 一一对应。
+M11-F001 ~ M11-F004 共 4 项，与 `design/checklist.json` 一一对应。
 
 ## 10. 实现与验证记录
 

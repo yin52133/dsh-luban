@@ -1,0 +1,150 @@
+# Complete DSH Luban aggregate. Install either this package or selected
+# standalone packages; do not mount the same plugin through both channels.
+- insert:
+    - id: luban-auth
+      name: '@yin52133/dsh-luban-auth'
+      config:
+        host: 0.0.0.0
+        port: 42600
+        upstream: http://127.0.0.1:3080
+        sessionTtlHours: 72
+        maxFailures: 5
+        lockoutMinutes: 15
+        usersFile: ~/.dsh/luban/auth/users.json
+        auditDirectory: ~/.dsh/luban/logs/auth
+- insert:
+    - id: luban-taskboard
+      name: '@yin52133/dsh-luban-taskboard'
+      config:
+        store:
+          dir: ~/.dsh/luban/taskboard
+        hostScope: auto
+        claim:
+          requireAcceptance: true
+        night:
+          enabled: false
+          window: 23:30-06:30
+          dailyQuota: 5
+          hostScopeWhitelist: [ubuntu]
+          tagWhitelist: [auto-ok]
+          model:
+            provider: ''
+            id: ''
+          toolAllowlist: []
+          circuitBreaker:
+            maxConsecutiveFailures: 3
+- insert:
+    - id: luban-keepalive
+      name: '@yin52133/dsh-luban-keepalive'
+      config:
+        strategy: auto
+        patrolIntervalSec: 60
+        ledgerFile: ~/.dsh/luban/keepalive/ledger.json
+        bootRestore: true
+        alertToTaskboard: true
+- insert:
+    - id: luban-plan
+      name: '@yin52133/dsh-luban-plan'
+      config:
+        plansDir: docs/plans
+        stateFile: ~/.dsh/luban/plan/plans.json
+        requireApprovalFor: [edit, bash, write]
+        autoApproveFor: []
+        template: bundled-default
+- insert:
+    - id: luban-session-share
+      name: '@yin52133/dsh-luban-session-share'
+      config:
+        host: auto
+        ownerUser: owner
+        takeoverTimeoutSec: 120
+        peerRefreshSec: 10
+        requestTimeoutSec: 10
+        replayLimit: 256
+        peers: []
+- insert:
+    - id: luban-image-paste
+      name: '@yin52133/dsh-luban-image-paste'
+      config:
+        workspaceRoot: .
+        attachDir: .luban/attachments
+        maxBytes: 10485760
+        maxSidePx: 2000
+        compression: true
+        compressionQuality: 82
+        retainDays: 14
+        recentLimit: 50
+        cleanupIntervalMinutes: 60
+        injectStyle: markdown
+        clipboardTimeoutMs: 10000
+- insert:
+    - id: luban-hud
+      name: '@yin52133/dsh-luban-hud'
+      config:
+        refreshSec: 1
+        thresholds: { warn: 0.70, danger: 0.85, critical: 0.95 }
+        display:
+          fields: [context, workspace, model, thinking, tpm, rpm]
+          compact: false
+        history: { enabled: true, retainMinutes: 60 }
+- insert:
+    - id: luban-context
+      name: '@yin52133/dsh-luban-context'
+      config:
+        trigger: { ratio: 0.80, minGapRounds: 4 }
+        strategy: summarize+virtualfile
+        keepRecentTokens: 24000
+        archiveDir: .luban/context-archive
+        nightProfile:
+          trigger: { ratio: 0.70 }
+          keepRecentTokens: 16000
+- insert:
+    - id: luban-server-mode
+      name: '@yin52133/dsh-luban-server-mode'
+      config:
+        service:
+          name: dsh-luban
+          user: ''
+          profile: ubuntu-server
+          dshExecutable: dsh
+        build:
+          maxConcurrent: 1
+          defaultTimeoutMin: 30
+          workspaceRoots: [~/workspace, ~/projects]
+        guard:
+          diskMinGb: 10
+          loadMax: 8
+          checkIntervalSec: 15
+        artifacts:
+          dir: ~/builds
+          retainRuns: 10
+          linkTtlSec: 300
+        store:
+          file: ~/.dsh/luban/server-mode/ledger.json
+- insert:
+    - id: luban-win-debug
+      name: '@yin52133/dsh-luban-win-debug'
+      config:
+        serial:
+          defaultBaud: 115200
+          timestamp: true
+          pollIntervalMs: 1500
+        snippet:
+          dir: ~/.dsh/luban/win-debug/snippets
+          maxLines: 500
+        desktopMcp:
+          enabled: false
+          command: ''
+- insert:
+    - id: luban-browser
+      name: '@yin52133/dsh-luban-browser'
+      config: {}
+- insert:
+    - id: dsh-market
+      name: 'dshmarket'
+- insert:
+    - id: better-sidebar
+      name: 'dsh-better-sidebar'
+- insert:
+    - id: dsh-memory
+      name: '@furongjun1999/dsh-memory'

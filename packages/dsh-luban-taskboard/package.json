@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-taskboard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Durable six-column taskboard and autonomous agent work queue for DSH",
   "type": "module",
   "main": "./dist/index.js",

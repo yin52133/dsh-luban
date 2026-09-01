@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-win-debug",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Safe Windows embedded-debug channels and DSH session injection",
   "type": "module",
   "main": "./dist/index.js",

@@ -120,7 +120,7 @@ export interface WinDebugService {
 
 ## 9. checklist 映射
 
-M10-F001 ~ M10-F008 共 8 项，与 `checklist.json` 一一对应。
+M10-F001 ~ M10-F008 共 8 项，与 `design/checklist.json` 一一对应。
 
 ## 10. 开放问题
 

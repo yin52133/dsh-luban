@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-keepalive",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cross-platform managed sessions, restart recovery, health patrol, and checkpoints for DSH",
   "type": "module",
   "main": "./dist/index.js",

@@ -80,7 +80,7 @@
 - **P7.1** 设计文档是唯一权威来源；实现与文档不符 = bug。
 - **P7.2** 每次文档修改追加版本记录行（校验脚本强制）。
 - **P7.3** 新增需求走 `design/README.md` SOP；F/R 编号只增不改不复用。
-- **P7.4** checklist.json 是进度唯一台账；完成的功能必须同步 `status` 与 `updatedAt`。
+- **P7.4** `design/checklist.json` 是进度唯一台账；完成的功能必须同步 `status` 与 `updatedAt`。
 
 ## 8. 偏离记录
 

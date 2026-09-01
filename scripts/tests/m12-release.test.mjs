@@ -17,13 +17,14 @@ import {
 import { verifyThirdPartyProfile } from '../verify-3rd-party-install.mjs'
 import { auditPackedFiles } from '../release/audit-packages.mjs'
 import {
+  compareReleasePackageOrder,
   extractChangelogSection,
   loadPolicy,
   packedManifestIssues,
   readPackedManifest,
   sha256,
 } from '../release/lib.mjs'
-import { releasePlan } from '../release/pack-artifacts.mjs'
+import { releaseNotes, releasePlan } from '../release/pack-artifacts.mjs'
 import { verifyArtifactManifest } from '../release/publish.mjs'
 import { validateDshEngineRange, validateRepository } from '../release/validate-release.mjs'
 import { createStagedDirectoryPublisher, pathIsWithin } from '../path-boundary.mjs'
@@ -31,6 +32,20 @@ import { createStagedDirectoryPublisher, pathIsWithin } from '../path-boundary.m
 const TEST_DIR = fileURLToPath(new URL('.', import.meta.url))
 const REPOSITORY_ROOT = resolve(TEST_DIR, '..', '..')
 const temporaryRoots = []
+
+it('publishes the core first and the aggregate package last', () => {
+  const packages = [
+    { manifest: { name: '@yin52133/dsh-luban' } },
+    { manifest: { name: '@yin52133/dsh-luban-auth' } },
+    { manifest: { name: '@yin52133/dsh-luban-core' } },
+  ]
+
+  expect(packages.sort(compareReleasePackageOrder).map(({ manifest }) => manifest.name)).toEqual([
+    '@yin52133/dsh-luban-core',
+    '@yin52133/dsh-luban-auth',
+    '@yin52133/dsh-luban',
+  ])
+})
 
 async function temporaryRoot() {
   const root = await mkdtemp(join(resolve(REPOSITORY_ROOT, 'scripts'), '.m12-test-'))
@@ -1118,6 +1133,29 @@ describe('M12 release policy', () => {
     }
   })
 
+  it('keeps repository metadata, diagrams, and the design ledger discoverable', async () => {
+    const [chineseReadme, englishReadme, releaseWorkflow, checklist] = await Promise.all([
+      readFile(join(REPOSITORY_ROOT, 'README.md'), 'utf8'),
+      readFile(join(REPOSITORY_ROOT, 'README.en.md'), 'utf8'),
+      readFile(join(REPOSITORY_ROOT, '.github/workflows/release.yml'), 'utf8'),
+      readFile(join(REPOSITORY_ROOT, 'design/checklist.json'), 'utf8'),
+    ])
+
+    for (const readme of [chineseReadme, englishReadme]) {
+      expect(readme).toContain('img.shields.io/badge/license-MIT-2ea44f')
+      expect(readme).not.toContain('img.shields.io/github/license/')
+      expect(readme).toContain('Auth["@yin52133/dsh-luban-auth"]')
+      expect(readme).toContain('[design/checklist.json](design/checklist.json)')
+    }
+    expect(JSON.parse(checklist).meta.version).toBe('0.1.1')
+    await expect(access(join(REPOSITORY_ROOT, 'LICENSE'))).resolves.toBeUndefined()
+    await expect(access(join(REPOSITORY_ROOT, 'checklist.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    expect(releaseWorkflow).toContain('Require successful CI for the release commit')
+    expect(releaseWorkflow).toContain('--title "dsh-luban ${GITHUB_REF_NAME}"')
+  })
+
   it('rejects files outside the npm payload allowlist', async () => {
     const policy = await loadPolicy()
     const manifest = {
@@ -1137,6 +1175,9 @@ describe('M12 release policy', () => {
     const changelog =
       '# Changelog\n\n## [Unreleased]\n\nNone.\n\n## [1.2.3] - 2026-01-01\n\n- Shipped.\n\n## [1.2.2]\n\n- Old.\n'
     expect(extractChangelogSection(changelog, '1.2.3')).toContain('- Shipped.')
+    expect(releaseNotes('1.2.3', changelog)).toMatch(
+      /^# dsh-luban v1\.2\.3\n\n\*\*Version:\*\* `1\.2\.3`/u,
+    )
     const policy = await loadPolicy()
     expect(
       releasePlan('1.2.3', 'v1.2.3', [{ manifest: { name: 'x', version: '1.2.3' } }], policy).tag,

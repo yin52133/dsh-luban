@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   validate-and-pack:
@@ -21,6 +22,19 @@ jobs:
         run: |
           git fetch --no-tags origin +refs/heads/mainline:refs/remotes/origin/mainline
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/mainline
+      - name: Require successful CI for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          successful_runs="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+            -f head_sha="$GITHUB_SHA" \
+            -f branch=mainline \
+            -f event=push \
+            -f status=success \
+            --jq '.workflow_runs | length')"
+          test "$successful_runs" -gt 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.19.0
@@ -105,5 +119,5 @@ jobs:
           .release-artifacts/*.tgz
           .release-artifacts/release-manifest.json
           --verify-tag
-          --title "${GITHUB_REF_NAME}"
+          --title "dsh-luban ${GITHUB_REF_NAME}"
           --notes-file .release-artifacts/RELEASE_NOTES.md

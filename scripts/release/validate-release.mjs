@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   CORE_PACKAGE_NAME,
+  AGGREGATE_PACKAGE_NAME,
   discoverPackages,
   isPublishable,
   loadPolicy,
@@ -30,7 +31,14 @@ const SEMVER =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
 function isPluginPackage(name) {
-  return name.startsWith(`${PACKAGE_SCOPE}dsh-luban-`) && name !== CORE_PACKAGE_NAME
+  return (
+    name === AGGREGATE_PACKAGE_NAME ||
+    (name.startsWith(`${PACKAGE_SCOPE}dsh-luban-`) && name !== CORE_PACKAGE_NAME)
+  )
+}
+
+function isLubanPackage(name) {
+  return name === AGGREGATE_PACKAGE_NAME || name.startsWith(`${PACKAGE_SCOPE}dsh-luban-`)
 }
 
 function hasString(value) {
@@ -123,8 +131,10 @@ function validateFiles(manifest, policy, label, issues) {
 
 function validateManifest(manifest, rootVersion, policy, label, issues) {
   if (!hasString(manifest.name)) issues.push(`${label}: name is required`)
-  else if (!String(manifest.name).startsWith(`${PACKAGE_SCOPE}dsh-luban-`))
-    issues.push(`${label}: name must use the ${PACKAGE_SCOPE}dsh-luban-* scope`)
+  else if (!isLubanPackage(String(manifest.name)))
+    issues.push(
+      `${label}: name must be ${AGGREGATE_PACKAGE_NAME} or use the ${PACKAGE_SCOPE}dsh-luban-* scope`,
+    )
   if (manifest.version !== rootVersion)
     issues.push(`${label}: version ${String(manifest.version)} must equal root ${rootVersion}`)
   if (manifest.license !== 'MIT') issues.push(`${label}: license must be MIT`)

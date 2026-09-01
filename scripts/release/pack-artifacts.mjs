@@ -63,6 +63,10 @@ export function releasePlan(version, tag, packages, policy) {
   }
 }
 
+export function releaseNotes(version, changelog) {
+  return `# dsh-luban v${version}\n\n**Version:** \`${version}\`\n\n${extractChangelogSection(changelog, version)}`
+}
+
 export async function packArtifacts(options = {}) {
   const root = resolve(options.root ?? REPOSITORY_ROOT)
   const rootManifest = await readJson(join(root, 'package.json'))
@@ -119,7 +123,7 @@ export async function packArtifacts(options = {}) {
   }
 
   const changelog = await readFile(join(root, 'CHANGELOG.md'), 'utf8')
-  const notes = extractChangelogSection(changelog, rootManifest.version)
+  const notes = releaseNotes(rootManifest.version, changelog)
   const manifest = { ...plan, dryRun: false, packages: records }
   await writeFile(join(output, 'RELEASE_NOTES.md'), notes, { encoding: 'utf8', flag: 'wx' })
   await writeFile(join(output, 'release-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, {

@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-plan",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Approval-gated, durable plan workflow for DSH",
   "type": "module",
   "main": "./dist/index.js",

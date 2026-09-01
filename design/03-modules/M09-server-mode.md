@@ -101,7 +101,7 @@ export interface ServerModeService {
 
 ## 9. checklist 映射
 
-M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
+M09-F001 ~ M09-F004 共 4 项，与 `design/checklist.json` 一一对应。
 
 ## 10. 开放问题
 

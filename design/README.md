@@ -27,14 +27,14 @@
 - **需求编号** `R01-R11`：来自最初需求清单，永久固定，不复用。
 - **模块编号** `M01-M12`：一个模块 = 一个自研插件包（或发布基础设施），模块与插件包一一对应。
 - **功能编号** `M<NN>-F<NNN>`：模块内功能点，只增不改不复用；废弃标记 `dropped` 不删行。
-- **里程碑** `MS1-MS4`：排序见 checklist.json，与优先级（P0 最高）共同决定开发顺序。
+- **里程碑** `MS1-MS4`：排序见 `design/checklist.json`，与优先级（P0 最高）共同决定开发顺序。
 
 ## 新增需求 SOP
 
 1. **立项**：在 `01-overview/vision.md` 的需求清单追加 `R<NN>`（新编号），写清验收口径。
 2. **映射**：判断归属模块。落入现有模块 → 在该模块文档「功能清单」追加 F 条目；新模块 → 复制 `TEMPLATE.md` 新建 `M<NN>-<短名>.md` 并更新总体架构的模块矩阵。
 3. **接口**：若产生新的跨模块契约，更新 `04-interfaces/`；仅模块内部的接口写在模块文档内。
-4. **追踪**：同步 `01-overview/trace-matrix.md` 与 `checklist.json`（新增 feature 条目，状态 `todo`，标里程碑）。
+4. **追踪**：同步 `01-overview/trace-matrix.md` 与 `design/checklist.json`（新增 feature 条目，状态 `todo`，标里程碑）。
 5. **自检**：运行 `node scripts/validate-design.mjs`，必须全绿。
 6. **提交**：commit message 用 `docs(<模块>): <一句话>`；每个被修改的文档追加版本记录行。
 

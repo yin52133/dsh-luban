@@ -132,7 +132,7 @@ runCheckpointedTask({
 
 ## 9. checklist 映射
 
-M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
+M03-F001 ~ M03-F005 共 5 项，与 `design/checklist.json` 一一对应。
 
 ## 10. 开放问题
 

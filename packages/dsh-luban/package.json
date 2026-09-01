@@ -1,7 +1,7 @@
 {
-  "name": "@yin52133/dsh-luban-auth",
+  "name": "@yin52133/dsh-luban",
   "version": "0.1.1",
-  "description": "Authenticated LAN sidecar for every DSH HTTP, SSE, and WebSocket route",
+  "description": "Complete DSH Luban plugin suite with pinned companion plugins",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -24,7 +24,7 @@
     "build": "tsdown",
     "clean": "node ../../scripts/clean-package.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --root ../.. packages/dsh-luban-auth/tests"
+    "test": "vitest run --root ../.. packages/dsh-luban/tests"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
@@ -37,19 +37,24 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yin52133/dsh-luban.git",
-    "directory": "packages/dsh-luban-auth"
+    "directory": "packages/dsh-luban"
   },
   "license": "MIT",
   "dependencies": {
-    "@yin52133/dsh-luban-core": "workspace:^"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-host-webserver": ">=0.1.1-rc.1"
-  },
-  "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-host-webserver": "0.1.1-rc.2"
+    "@furongjun1999/dsh-memory": "0.4.0",
+    "@yin52133/dsh-luban-auth": "workspace:0.1.1",
+    "@yin52133/dsh-luban-browser": "workspace:0.1.1",
+    "@yin52133/dsh-luban-context": "workspace:0.1.1",
+    "@yin52133/dsh-luban-hud": "workspace:0.1.1",
+    "@yin52133/dsh-luban-image-paste": "workspace:0.1.1",
+    "@yin52133/dsh-luban-keepalive": "workspace:0.1.1",
+    "@yin52133/dsh-luban-plan": "workspace:0.1.1",
+    "@yin52133/dsh-luban-server-mode": "workspace:0.1.1",
+    "@yin52133/dsh-luban-session-share": "workspace:0.1.1",
+    "@yin52133/dsh-luban-taskboard": "workspace:0.1.1",
+    "@yin52133/dsh-luban-win-debug": "workspace:0.1.1",
+    "dsh-better-sidebar": "0.17.1",
+    "dshmarket": "1.36.0"
   },
   "dsh": {
     "bundle": {

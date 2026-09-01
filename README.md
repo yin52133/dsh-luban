@@ -6,7 +6,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/yin52133/dsh-luban?style=flat-square)](https://github.com/yin52133/dsh-luban/stargazers)
 [![GitHub Release](https://img.shields.io/github/v/release/yin52133/dsh-luban?display_name=tag&style=flat-square)](https://github.com/yin52133/dsh-luban/releases)
 [![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-%40yin52133-24292f?style=flat-square&logo=github)](https://github.com/yin52133/dsh-luban/pkgs/npm/dsh-luban-auth)
-[![License](https://img.shields.io/github/license/yin52133/dsh-luban?style=flat-square)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square)](LICENSE)
 
 面向嵌入式开发的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 插件套件：把 Windows 调试机和 Ubuntu 编译服务器连接成一个可从浏览器操作、可持续运行、
@@ -25,7 +25,7 @@ dsh-luban 面向个人与小团队的可信局域网开发环境，以功能闭�
 - **不中断工作**：tmux、Windows 计划任务与 systemd 负责会话保活和重启恢复。
 - **上下文可见**：HUD 展示上下文占用、模型、推理档位、RPM/TPM，并支持可回放压缩。
 - **嵌入式工具链**：统一接入串口、ADB/Fastboot、OpenOCD、GDB、SSH、Telnet 和网络串口。
-- **模块化安装**：每项能力都是独立的 `@yin52133/dsh-luban-*` 包，只安装当前主机需要的插件。
+- **整包或按需安装**：使用 `@yin52133/dsh-luban` 一次安装完整套件，或只安装当前主机需要的独立插件。
 
 本项目面向可信局域网，账号系统用于隔离少量用户的工作上下文，不定位为企业级身份与安全防护系统。
 
@@ -68,6 +68,7 @@ dsh-luban 面向个人与小团队的可信局域网开发环境，以功能闭�
 
 | GitHub Packages 包                  | 功能                                       | 平台             |
 | ----------------------------------- | ------------------------------------------ | ---------------- |
+| `@yin52133/dsh-luban`               | 全部 Luban 能力及固定版本的配套插件        | Windows / Ubuntu |
 | `@yin52133/dsh-luban-auth`          | 本地账号登录、认证 sidecar、账号上下文隔离 | Windows / Ubuntu |
 | `@yin52133/dsh-luban-taskboard`     | 六列看板、Agent 领单、夜间任务与 `taskctl` | Windows / Ubuntu |
 | `@yin52133/dsh-luban-keepalive`     | tmux/计划任务保活、心跳、重启恢复与检查点  | Windows / Ubuntu |
@@ -92,14 +93,22 @@ dsh-luban 面向个人与小团队的可信局域网开发环境，以功能闭�
 npm login --scope=@yin52133 --auth-type=legacy --registry=https://npm.pkg.github.com
 ```
 
-然后先安装认证插件，再按需添加业务插件：
+完整安装会同时挂载全部 Luban 插件，以及固定版本的 `dshmarket`、`dsh-better-sidebar` 和
+`@furongjun1999/dsh-memory`：
+
+```sh
+dsh plugin --profile web add @yin52133/dsh-luban@0.1.1
+```
+
+也可以先安装认证插件，再按需添加业务插件：
 
 ```sh
 dsh plugin --profile web add @yin52133/dsh-luban-auth
 dsh plugin --profile web add @yin52133/dsh-luban-taskboard @yin52133/dsh-luban-hud @yin52133/dsh-luban-plan
 ```
 
-CI 发布不需要额外 npmjs 账号或 token：Release workflow 使用仓库的 `GITHUB_TOKEN` 发布 12 个包。
+整包与重复的单包不要同时安装，以免同一插件被挂载两次。CI 发布不需要额外 npmjs 账号或 token：
+Release workflow 使用仓库的 `GITHUB_TOKEN` 发布 13 个包。
 不希望登录 Packages 时，也可以从 GitHub Release 下载已验收的 `.tgz` 文件进行本地安装。
 
 启动 profile 后，从认证 sidecar 进入：
@@ -139,33 +148,33 @@ sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
 
 ```mermaid
 flowchart LR
-    Browser[浏览器 / CLI] --> Auth[@yin52133/dsh-luban-auth]
-    Auth --> DSH[DeepSeek Harness]
-    DSH --> Shared[任务 / Plan / HUD / 上下文 / 会话]
-    DSH --> Windows[Windows 调试工具]
-    DSH --> Ubuntu[Ubuntu 构建与保活]
-    Shared --> Store[(账号级本地数据)]
+    Browser["浏览器 / CLI"] --> Auth["@yin52133/dsh-luban-auth"]
+    Auth --> DSH["DeepSeek Harness"]
+    DSH --> Shared["任务 / Plan / HUD / 上下文 / 会话"]
+    DSH --> Windows["Windows 调试工具"]
+    DSH --> Ubuntu["Ubuntu 构建与保活"]
+    Shared --> Store[("账号级本地数据")]
 ```
 
-插件之间不直接依赖：共享类型和基础工具来自 `@yin52133/dsh-luban-core`，运行时协作通过 DSH 服务、
-事件和 HTTP 契约完成。设计说明与当前状态分别见 [design](design/README.md) 和
-[checklist.json](checklist.json)。
+各独立插件之间不直接依赖：共享类型和基础工具来自 `@yin52133/dsh-luban-core`，运行时协作通过 DSH
+服务、事件和 HTTP 契约完成。整包仅负责聚合安装。设计说明与当前状态分别见
+[design](design/README.md) 和 [design/checklist.json](design/checklist.json)。
 
 ## 文档导航
 
 - [Windows 部署](design/05-deployment/deploy-windows.md)
 - [Ubuntu 部署](design/05-deployment/deploy-ubuntu.md)
 - [架构与模块设计](design/README.md)
-- [功能状态台账](checklist.json)
+- [功能状态台账](design/checklist.json)
 - [English README](README.en.md)
 
 ## 当前状态
 
-首个公开版本 [v0.1.0](https://github.com/yin52133/dsh-luban/releases/tag/v0.1.0) 已发布：12 个 scoped 包
-同步进入 GitHub Packages，Release 提供对应 tarball 与 SHA-256 清单。代码已完成 Windows/Ubuntu
-实机及 CI 验收；个别需要外部模型或真实设备的项目仍在 `checklist.json` 中如实标记。
+当前版本为 **0.1.1**：13 个 scoped 包同步进入 GitHub Packages，Release 提供对应 tarball 与
+SHA-256 清单。代码已经过 Windows/Ubuntu 实机及 CI 验收；个别需要外部模型或真实设备的项目仍在
+`design/checklist.json` 中如实标记。
 
 ## 许可
 
 [MIT](LICENSE)。第三方依赖和参考项目的许可说明见
-[参考项目分析](design/07-references/reference-analysis.md)及各包的 `THIRD-PARTY-NOTICES.md`。
+[参考项目分析](design/07-references/reference-analysis.md) 及各包的 `THIRD-PARTY-NOTICES.md`。

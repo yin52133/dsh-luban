@@ -4,7 +4,7 @@
 
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
-| v0.1 | 2026-08-29 | Maintainers | 初稿：任务/认证/保活/遥测等公共结构 + checklist.json schema |
+| v0.1 | 2026-08-29 | Maintainers | 初稿：任务/认证/保活/遥测等公共结构 + design/checklist.json schema |
 | v0.2 | 2026-08-30 | Codex | 增加 claim lease 身份及压缩前后 surface 快照兼容类型 |
 | v0.3 | 2026-08-30 | Codex | 明确 checklist 状态类型、需求汇总规则与里程碑派生状态 |
 | v0.4 | 2026-08-30 | Codex | 增加夜间调度 claim 的执行来源标记 |
@@ -13,7 +13,7 @@
 | v0.7 | 2026-08-30 | Codex | 增加 M01-F008 账号归属模型并将发布账本收敛为失败恢复模型 |
 | v0.8 | 2026-08-30 | Codex | 明确角色字段仅作兼容操作提示，不构成复杂权限或安全边界 |
 
-> 本文档定义跨模块公共数据结构与 `checklist.json` 的 schema。模块专属字段在各模块文档「数据模型」章节补充。通用字段约定（version 乐观锁、epoch ms、Actor、LubanError）见 [api-overview.md](api-overview.md) §2。
+> 本文档定义跨模块公共数据结构与 `design/checklist.json` 的 schema。模块专属字段在各模块文档「数据模型」章节补充。通用字段约定（version 乐观锁、epoch ms、Actor、LubanError）见 [api-overview.md](api-overview.md) §2。
 
 <a id="account-context"></a>
 ## 0. AccountContext 账号上下文（M01-F008）
@@ -262,7 +262,7 @@ export interface ReleaseManifest {
 
 发布清单由 pack 阶段生成，按 core-first 顺序记录 12 个 tarball。发布脚本在 dry-run 和真实发布前校验包名、版本、文件名与 SHA-256；同版本已存在时跳过，不维护额外恢复账本。
 <a id="checklist-json-v1"></a>
-## 13. checklist.json Schema（checklist-json-v1）
+## 13. design/checklist.json Schema（checklist-json-v1）
 
 ```typescript
 export type ChecklistStatus = 'todo' | 'doing' | 'review' | 'done' | 'blocked' | 'dropped';
