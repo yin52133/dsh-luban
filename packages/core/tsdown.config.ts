@@ -11,6 +11,6 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   deps: {
-    neverBundle: ['argon2', 'yaml'],
+    neverBundle: ['yaml'],
   },
 })

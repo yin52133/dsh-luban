@@ -48,8 +48,8 @@ function decodeAccount(value: unknown): AccountRecord {
   const record = expectRecord(value, 'account')
   const username = expectString(record.username, 'account.username')
   const passwordHash = expectString(record.passwordHash, 'account.passwordHash')
-  if (!passwordHash.startsWith('$argon2id$')) {
-    throw new TypeError('luban-auth: account password hash must use Argon2id')
+  if (!passwordHash.startsWith('$scrypt$')) {
+    throw new TypeError('luban-auth: account password hash must use scrypt')
   }
   const role = expectRole(record.role)
   const createdAt = expectTimestamp(record.createdAt, 'account.createdAt')

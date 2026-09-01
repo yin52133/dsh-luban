@@ -38,7 +38,7 @@ export class DeterministicHasher implements PasswordHasher {
 
   public hash(password: string): Promise<string> {
     this.hashCount += 1
-    return Promise.resolve(`$argon2id$test$${Buffer.from(password, 'utf8').toString('base64url')}`)
+    return Promise.resolve(`$scrypt$test$${Buffer.from(password, 'utf8').toString('base64url')}`)
   }
 
   public async verify(encodedHash: string, password: string): Promise<boolean> {

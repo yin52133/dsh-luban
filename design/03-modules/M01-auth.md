@@ -96,7 +96,7 @@ export type AuthEvent =
 
 ## 5. 数据模型
 
-见 `04-interfaces/data-models.md#auth`。要点：账户文件只存 `argon2id` 哈希与盐；token 为随机 256bit，服务端会话表以账号归属和过期时间为功能字段。来源地址仅作临时运行诊断，不是锁定、限速或长期审计需求。
+见 `04-interfaces/data-models.md#auth`。要点：账户文件只存 Node 内置 `scrypt` 生成的参数、盐与哈希；token 为随机 256bit，服务端会话表以账号归属和过期时间为功能字段。来源地址仅作临时运行诊断，不是锁定、限速或长期审计需求。
 
 ## 6. 配置设计（cordis patch 的 `config:` 段）
 

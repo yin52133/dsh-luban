@@ -88,7 +88,7 @@ export interface TaskOutput {
 export interface UserRecord {
   id: AccountId;
   username: string;
-  passwordHash: string;              // argon2id（哈希+盐合一编码）
+  passwordHash: string;              // scrypt（参数、盐和哈希合一编码）
   role: 'admin' | 'operator' | 'observer'; // 兼容提示，不扩展为业务 RBAC
   createdAt: number;
 }

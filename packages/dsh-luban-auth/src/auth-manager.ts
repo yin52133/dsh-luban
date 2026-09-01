@@ -1,5 +1,4 @@
-import { createHash, randomBytes as systemRandomBytes, timingSafeEqual } from 'node:crypto'
-import { argon2id, hash as argonHash, verify as argonVerify } from 'argon2'
+import { createHash, randomBytes as systemRandomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import {
   AtomicJsonStore,
   LubanError,
@@ -26,19 +25,60 @@ const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/u
 const PASSWORD_MIN_LENGTH = 8
 const PASSWORD_MAX_LENGTH = 1_024
 const RATE_WINDOW_MS = 60_000
+const SCRYPT_COST = 16_384
+const SCRYPT_BLOCK_SIZE = 8
+const SCRYPT_PARALLELISM = 1
+const SCRYPT_KEY_BYTES = 32
+const SCRYPT_SALT_BYTES = 16
 
 const defaultPasswordHasher: PasswordHasher = Object.freeze({
-  hash: async (password: string): Promise<string> =>
-    argonHash(password, {
-      type: argon2id,
-      memoryCost: 19_456,
-      timeCost: 2,
-      parallelism: 1,
-      hashLength: 32,
-    }),
-  verify: async (encodedHash: string, password: string): Promise<boolean> =>
-    argonVerify(encodedHash, password),
+  hash: async (password: string): Promise<string> => {
+    const salt = systemRandomBytes(SCRYPT_SALT_BYTES)
+    const key = await deriveScryptKey(password, salt)
+    return `$scrypt$${String(SCRYPT_COST)}$${String(SCRYPT_BLOCK_SIZE)}$${String(SCRYPT_PARALLELISM)}$${salt.toString('base64url')}$${key.toString('base64url')}`
+  },
+  verify: async (encodedHash: string, password: string): Promise<boolean> => {
+    const parts = encodedHash.split('$')
+    if (
+      parts.length !== 7 ||
+      parts[1] !== 'scrypt' ||
+      parts[2] !== String(SCRYPT_COST) ||
+      parts[3] !== String(SCRYPT_BLOCK_SIZE) ||
+      parts[4] !== String(SCRYPT_PARALLELISM)
+    ) {
+      return false
+    }
+    try {
+      const salt = Buffer.from(parts[5] ?? '', 'base64url')
+      const expected = Buffer.from(parts[6] ?? '', 'base64url')
+      if (salt.length !== SCRYPT_SALT_BYTES || expected.length !== SCRYPT_KEY_BYTES) return false
+      const actual = await deriveScryptKey(password, salt)
+      return timingSafeEqual(actual, expected)
+    } catch {
+      return false
+    }
+  },
 })
+
+function deriveScryptKey(password: string, salt: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(
+      password,
+      salt,
+      SCRYPT_KEY_BYTES,
+      {
+        N: SCRYPT_COST,
+        r: SCRYPT_BLOCK_SIZE,
+        p: SCRYPT_PARALLELISM,
+        maxmem: 64 * 1024 * 1024,
+      },
+      (error, key) => {
+        if (error === null) resolve(key)
+        else reject(error)
+      },
+    )
+  })
+}
 
 /** Persistence-backed authentication state machine, independent from HTTP and Cordis. */
 export class AuthManager {

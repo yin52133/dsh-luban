@@ -135,8 +135,8 @@ describe('AuthManager', () => {
   })
 })
 
-describe('production Argon2id hashing', () => {
-  it('writes an encoded Argon2id hash and no plaintext password', async () => {
+describe('production scrypt hashing', () => {
+  it('writes an encoded scrypt hash and no plaintext password', async () => {
     const fixture = await createManagerFixture()
     const { directory, filePath } = fixture
     await fixture.cleanup()
@@ -152,11 +152,11 @@ describe('production Argon2id hashing', () => {
       loginRateLimit: 10,
     })
     try {
-      await manager.initialize({ username: 'admin', password: 'argon secret' })
+      await manager.initialize({ username: 'admin', password: 'scrypt secret' })
       const persisted = await readFile(filePath, 'utf8')
-      expect(persisted).toContain('$argon2id$')
-      expect(persisted).not.toContain('argon secret')
-      expect(await manager.verify('admin', 'argon secret', '127.0.0.1')).toEqual({ ok: true })
+      expect(persisted).toContain('$scrypt$')
+      expect(persisted).not.toContain('scrypt secret')
+      expect(await manager.verify('admin', 'scrypt secret', '127.0.0.1')).toEqual({ ok: true })
     } finally {
       await manager.close()
       const { rm } = await import('node:fs/promises')

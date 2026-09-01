@@ -79,7 +79,7 @@ describe('JsonlAuditLogger', () => {
     expect(persisted).not.toContain('wrong-audit-password')
     expect(persisted).not.toContain(issued.cookieToken)
     expect(persisted).not.toContain(issued.csrfToken)
-    expect(persisted).toContain('$argon2id$')
+    expect(persisted).toContain('$scrypt$')
     expect(persisted).toContain('bad-credentials')
   }, 30_000)
 })

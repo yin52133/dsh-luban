@@ -63,7 +63,7 @@ the service is intentionally meant to accept every routable source.
 ### First start
 
 Set `LUBAN_ADMIN_PASSWORD` to a password of at least eight characters for the
-first start. The plugin creates the initial `admin` account with an Argon2id
+first start. The plugin creates the initial `admin` account with a salted scrypt
 hash and never writes or logs the plaintext value. Remove the environment
 variable after the account has been created.
 

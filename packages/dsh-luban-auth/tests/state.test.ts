@@ -6,7 +6,7 @@ const validState = {
   users: {
     admin: {
       username: 'admin',
-      passwordHash: '$argon2id$valid',
+      passwordHash: '$scrypt$valid',
       role: 'admin',
       createdAt: 1,
       updatedAt: 2,

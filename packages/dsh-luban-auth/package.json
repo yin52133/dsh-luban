@@ -40,8 +40,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "dsh-luban-core": "workspace:^",
-    "argon2": "^0.45.1"
+    "dsh-luban-core": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
