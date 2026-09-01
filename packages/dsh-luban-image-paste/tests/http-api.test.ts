@@ -3,16 +3,10 @@ import type { AddressInfo } from 'node:net'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Context } from '@deepseek-ai/cordis'
 import type { AccountId, AuthMiddlewareRequest, AuthService, SessionId } from 'dsh-luban-core'
 import { asAccountId } from 'dsh-luban-core'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ImagePasteHttpApi } from '../src/http-api.js'
-import type {
-  MountedVisualAcceptanceOptions,
-  VisualAcceptanceEvidence,
-} from '../src/live-visual-acceptance.js'
-import { MountedVisualAcceptanceService } from '../src/live-visual-acceptance.js'
 import { AttachmentRepository } from '../src/repository.js'
 import { FileImageIngestService } from '../src/service.js'
 import {
@@ -24,7 +18,6 @@ import {
   testConfig,
 } from './helpers.js'
 
-const VISUAL_CHALLENGE = 'A'.repeat(43)
 const ALICE_ACCOUNT = asAccountId('account-alice')
 const BOB_ACCOUNT = asAccountId('account-bob')
 
@@ -82,9 +75,6 @@ describe('authenticated image HTTP API', () => {
   let clock: MutableClock
   let injector: RecordingInjector
   let service: FileImageIngestService
-  let visualRun: ReturnType<
-    typeof vi.fn<(options: MountedVisualAcceptanceOptions) => Promise<VisualAcceptanceEvidence>>
-  >
 
   beforeEach(async () => {
     workspace = await mkdtemp(join(tmpdir(), 'luban-image-http-'))
@@ -104,30 +94,7 @@ describe('authenticated image HTTP API', () => {
       processor: passThroughProcessor,
       config: testConfig(workspace, { recentLimit: 2 }),
     })
-    visualRun = vi.fn((options: MountedVisualAcceptanceOptions) =>
-      Promise.resolve({
-        schemaVersion: 2,
-        featureId: 'M06-F003',
-        runId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        execution: 'production',
-        evidenceKind: 'live',
-        status: 'pass',
-        acceptancePassed: true,
-        session: { requestedId: options.sessionId },
-        platform: {
-          target: 'windows',
-          runtimePlatform: 'win32',
-          arch: 'x64',
-          node: 'v22.0.0',
-        },
-        checks: [],
-        cleanup: 'not-needed',
-        providerRawResponse: 'provider-secret-response',
-        startedAt: new Date(1).toISOString(),
-        finishedAt: new Date(2).toISOString(),
-      } as unknown as VisualAcceptanceEvidence),
-    )
-    const api = new ImagePasteHttpApi(service, auth, { run: visualRun })
+    const api = new ImagePasteHttpApi(service, auth)
     server = createServer((request, response): void => {
       void api.handler(request, response)
     })
@@ -186,162 +153,6 @@ describe('authenticated image HTTP API', () => {
     })
     expect(mismatch.status).toBe(400)
     await expect(json(mismatch)).resolves.toHaveProperty('error')
-  })
-
-  it('exposes an authenticated mounted visual entry only for explicit live requests', async () => {
-    await expect(
-      fetch(`${baseUrl}/visual-acceptance`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ live: true, sessionId: 'session-live' }),
-      }),
-    ).resolves.toMatchObject({ status: 401 })
-    const planned = await fetch(`${baseUrl}/visual-acceptance`, {
-      method: 'POST',
-      headers: { ...authHeaders, 'content-type': 'application/json' },
-      body: JSON.stringify({ live: false, sessionId: 'session-live' }),
-    })
-    expect(planned.status).toBe(400)
-    expect(visualRun).not.toHaveBeenCalled()
-
-    const live = await fetch(`${baseUrl}/visual-acceptance`, {
-      method: 'POST',
-      headers: { ...authHeaders, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        live: true,
-        sessionId: 'session-live',
-        timeoutMs: 10_000,
-        challenge: VISUAL_CHALLENGE,
-      }),
-    })
-    expect(live.status).toBe(200)
-    expect(visualRun).toHaveBeenCalledExactlyOnceWith({
-      accountId: ALICE_ACCOUNT,
-      live: true,
-      sessionId: 'session-live',
-      timeoutMs: 10_000,
-      challenge: VISUAL_CHALLENGE,
-    })
-    const liveBody = await json(live)
-    expect(liveBody).toMatchObject({
-      evidence: { execution: 'test-double', evidenceKind: 'simulated' },
-    })
-    expect(JSON.stringify(liveBody)).not.toContain('provider-secret-response')
-  })
-
-  it('does not let a mounted production runner be replaced after API construction', async () => {
-    const mounted = new MountedVisualAcceptanceService(
-      { agents: { get: (): undefined => undefined } } as unknown as Context,
-      workspace,
-    )
-    const hardenedApi = new ImagePasteHttpApi(service, authentication(), mounted)
-    const replacedRun = vi.fn(() => Promise.resolve({} as VisualAcceptanceEvidence))
-    Object.defineProperty(mounted, 'run', { configurable: true, value: replacedRun })
-    const hardenedServer = createServer((request, response): void => {
-      void hardenedApi.handler(request, response)
-    })
-    await new Promise<void>((resolve, reject): void => {
-      hardenedServer.once('error', reject)
-      hardenedServer.listen(0, '127.0.0.1', resolve)
-    })
-
-    try {
-      const address = hardenedServer.address() as AddressInfo
-      const response = await fetch(
-        `http://127.0.0.1:${String(address.port)}/luban-image-paste/visual-acceptance`,
-        {
-          method: 'POST',
-          headers: { ...authHeaders, 'content-type': 'application/json' },
-          body: JSON.stringify({
-            live: true,
-            sessionId: 'session-live',
-            challenge: VISUAL_CHALLENGE,
-          }),
-        },
-      )
-
-      expect(response.status).toBe(200)
-      expect(replacedRun).not.toHaveBeenCalled()
-      await expect(json(response)).resolves.toMatchObject({
-        evidence: {
-          execution: 'production',
-          evidenceKind: 'live',
-          status: 'blocked',
-          session: { requestedId: 'session-live' },
-        },
-      })
-    } finally {
-      await new Promise<void>((resolve, reject): void => {
-        hardenedServer.close((error): void => (error === undefined ? resolve() : reject(error)))
-      })
-    }
-  })
-
-  it('does not let the production runner prototype be replaced after API construction', async () => {
-    const mounted = new MountedVisualAcceptanceService(
-      { agents: { get: (): undefined => undefined } } as unknown as Context,
-      workspace,
-    )
-    const hardenedApi = new ImagePasteHttpApi(service, authentication(), mounted)
-    const replacement = vi
-      .spyOn(MountedVisualAcceptanceService.prototype, 'run')
-      .mockResolvedValue({
-        schemaVersion: 2,
-        featureId: 'M06-F003',
-        runId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        execution: 'production',
-        evidenceKind: 'live',
-        status: 'pass',
-        acceptancePassed: true,
-        platform: {
-          target: 'windows',
-          runtimePlatform: 'win32',
-          arch: 'x64',
-          node: 'v22.0.0',
-        },
-        checks: [],
-        cleanup: 'pass',
-        startedAt: new Date(1).toISOString(),
-        finishedAt: new Date(2).toISOString(),
-      })
-    const hardenedServer = createServer((request, response): void => {
-      void hardenedApi.handler(request, response)
-    })
-    await new Promise<void>((resolve, reject): void => {
-      hardenedServer.once('error', reject)
-      hardenedServer.listen(0, '127.0.0.1', resolve)
-    })
-
-    try {
-      const address = hardenedServer.address() as AddressInfo
-      const response = await fetch(
-        `http://127.0.0.1:${String(address.port)}/luban-image-paste/visual-acceptance`,
-        {
-          method: 'POST',
-          headers: { ...authHeaders, 'content-type': 'application/json' },
-          body: JSON.stringify({
-            live: true,
-            sessionId: 'session-live',
-            challenge: VISUAL_CHALLENGE,
-          }),
-        },
-      )
-
-      expect(response.status).toBe(200)
-      expect(replacement).not.toHaveBeenCalled()
-      await expect(json(response)).resolves.toMatchObject({
-        evidence: {
-          execution: 'production',
-          evidenceKind: 'live',
-          status: 'blocked',
-          acceptancePassed: false,
-        },
-      })
-    } finally {
-      await new Promise<void>((resolve, reject): void => {
-        hardenedServer.close((error): void => (error === undefined ? resolve() : reject(error)))
-      })
-    }
   })
 
   it('uploads, lists, previews, injects, and reference-protects an image', async () => {

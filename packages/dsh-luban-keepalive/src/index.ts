@@ -13,7 +13,6 @@ import { KeepaliveLedgerStore } from './ledger.js'
 import { ManagedKeepaliveService } from './service.js'
 import { TmuxKeepaliveAdapter } from './tmux-adapter.js'
 import { WindowsTaskKeepaliveAdapter } from './windows-adapter.js'
-import { startWindowsLiveAcceptance } from './windows-live-acceptance.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -157,13 +156,7 @@ export function apply(ctx: Context, input: Partial<KeepaliveConfig> = {}): void 
     if (resolveBootRestore(config.bootRestore, process.env.LUBAN_BOOT_RESTORE)) {
       void service.restore().catch((error: unknown): void => ctx.logger.warn(error))
     }
-    const liveAcceptance = startWindowsLiveAcceptance(service).catch((error: unknown): null => {
-      ctx.logger.warn(error)
-      return null
-    })
     return async (): Promise<void> => {
-      const acceptance = await liveAcceptance
-      await acceptance?.dispose()
       controller.abort()
       await service.dispose()
     }

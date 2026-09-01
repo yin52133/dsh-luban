@@ -5,7 +5,6 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {
   AccountId,
   AuthService,
-  ProviderRequestIdentityAdapter,
   TaskStore,
   TelemetryAggregator,
   TelemetrySnapshot,
@@ -13,11 +12,6 @@ import type {
 import { asSessionId, LubanError, modulePrefix, systemClock } from 'dsh-luban-core'
 import { DefaultTelemetryAggregator } from './aggregator.js'
 import { TaskboardHudAlertSink } from './alerts.js'
-import {
-  HUD_BUILD_PROVENANCE_SCHEMA,
-  inspectHudBuildProvenance,
-  type HudBuildProvenance,
-} from './build-provenance.js'
 import { Config as ConfigSchema, type Config as HudConfig, parseConfig } from './config.js'
 import {
   DshContextEstimatorProvider,
@@ -27,9 +21,7 @@ import {
 } from './dsh-telemetry.js'
 import { HudHttpApi } from './http-api.js'
 import { HudKeepaliveHealthStore } from './keepalive-health.js'
-import { HudRateLedger } from './rate-ledger.js'
 import { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
-import { inspectHudRuntimeArtifact, type HudRuntimeArtifactIdentity } from './runtime-artifact.js'
 import type { KeepaliveHealthPayload } from './types.js'
 
 declare module '@deepseek-ai/cordis' {
@@ -37,7 +29,6 @@ declare module '@deepseek-ai/cordis' {
     lubanAuth: AuthService
     lubanTaskStore: TaskStore
     lubanTelemetry: TelemetryAggregator
-    lubanProviderRequestIdentity: ProviderRequestIdentityAdapter
   }
 
   interface Events {
@@ -55,12 +46,6 @@ export type Config = HudConfig
 export { DefaultTelemetryAggregator } from './aggregator.js'
 export type { AccountTelemetryProvider, TelemetryAggregatorOptions } from './aggregator.js'
 export { TaskboardHudAlertSink } from './alerts.js'
-export {
-  HUD_BUILD_PROVENANCE_SCHEMA,
-  inspectHudBuildProvenance,
-  parseHudBuildProvenance,
-} from './build-provenance.js'
-export type { HudBuildProvenance, HudLoadedBuildIdentity } from './build-provenance.js'
 export { renderCliHeader, sanitizeTerminalText } from './cli-render.js'
 export { parseConfig } from './config.js'
 export type { HudDisplayField, HudThresholds } from './config.js'
@@ -74,46 +59,12 @@ export {
   selectTelemetryAgent,
   tokenUsageTotal,
 } from './dsh-telemetry.js'
-export type { AgentLookup, HudRateEventSink } from './dsh-telemetry.js'
+export type { AgentLookup } from './dsh-telemetry.js'
 export type { SessionProjectionReader, SessionProjectionResolver } from './dsh-telemetry.js'
 export { HudEventStream, HudHttpApi } from './http-api.js'
 export { HudKeepaliveHealthStore } from './keepalive-health.js'
-export { HUD_RATE_CAPTURE_SCHEMA, HudRateLedger } from './rate-ledger.js'
-export type { HudRateCapture, HudRateCaptureMetadata, HudRateLedgerOptions } from './rate-ledger.js'
-export { attestHudProviderRequest } from './provider-request-identity.js'
-export type {
-  HudProviderRequestIdentityEvidence,
-  ResolvedHudProviderRequestIdentity,
-} from './provider-request-identity.js'
 export { RateTelemetryProvider, SlidingRateWindow, systemMonotonicClock } from './rate-window.js'
 export type { MonotonicClock } from './rate-window.js'
-export {
-  HUD_RUNTIME_ARTIFACT_SCHEMA,
-  hudRuntimeArtifactBundleSha256,
-  inspectHudRuntimeArtifact,
-  parseHudRuntimeArtifactIdentity,
-} from './runtime-artifact.js'
-export type { HudRuntimeArtifactFile, HudRuntimeArtifactIdentity } from './runtime-artifact.js'
-export {
-  HUD_RATE_EXPORT_SCHEMA,
-  PROVIDER_RATE_EXPORT_SCHEMA,
-  RATE_RECONCILIATION_SCHEMA,
-  RATE_TOKEN_TOLERANCE,
-  RateReconciliationError,
-  reconcileRateExports,
-} from './rate-reconcile.js'
-export type {
-  HudRateExport,
-  HudRateOrigin,
-  ProviderRateExport,
-  ProviderRateOrigin,
-  RateLedgerRecord,
-  RateMetricDelta,
-  RateReconciliation,
-  RateTotals,
-  RateWindowUtc,
-  ReconciledTokenUsage,
-} from './rate-reconcile.js'
 export { HUD_TELEMETRY_EVENT } from './types.js'
 export type {
   HudLevel,
@@ -144,33 +95,8 @@ function diagnostic(error: unknown): string {
   }
 }
 
-function readHudBuildDiagnostic(
-  entrypoint: URL,
-  runtimeArtifact: HudRuntimeArtifactIdentity,
-): HudBuildProvenance {
-  try {
-    return inspectHudBuildProvenance(entrypoint, runtimeArtifact)
-  } catch {
-    // Build metadata is diagnostic only. A dirty or unpacked dist must not prevent HUD mounting.
-    return Object.freeze({
-      schemaVersion: HUD_BUILD_PROVENANCE_SCHEMA,
-      gitHead: '0'.repeat(40),
-      buildId: '00000000-0000-4000-8000-000000000000',
-      dirty: true,
-      runtime: 'repo-dist',
-      manifestSha256: '0'.repeat(64),
-      runtimeBundleSha256: runtimeArtifact.bundleSha256,
-    })
-  }
-}
-
 /** Mount rc2 telemetry providers, authenticated API/SSE, and the shared aggregator service. */
-export function apply(
-  ctx: Context,
-  input: Partial<HudConfig> = {},
-  runtimeArtifact: HudRuntimeArtifactIdentity = inspectHudRuntimeArtifact(new URL(import.meta.url)),
-  build: HudBuildProvenance = readHudBuildDiagnostic(new URL(import.meta.url), runtimeArtifact),
-): void {
+export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth')
   if (auth === undefined) throw new LubanError('E_UNAVAILABLE', 'lubanAuth is required')
@@ -205,19 +131,10 @@ export function apply(
     ownerOf: resolveSessionAccount,
   })
   const window = new SlidingRateWindow(systemMonotonicClock)
-  const rateLedger = new HudRateLedger({
-    runtimeArtifact,
-    build,
-    clock: systemClock,
-    monotonicClock: systemMonotonicClock,
-    resolveProviderRequestIdentity: (): ProviderRequestIdentityAdapter | undefined =>
-      ctx.get('lubanProviderRequestIdentity'),
-  })
   const collector = new DshRateCollector({
     window,
     clock: systemClock,
     monotonicClock: systemMonotonicClock,
-    rateLedger,
   })
   const adoptedSessions = new Map<string, AccountId>()
   let acceptingEvents = true
@@ -291,20 +208,6 @@ export function apply(
     auth,
     config: publicConfig,
     keepalive,
-    rateCapture: {
-      capture: async (windowValue, challenge, accountId) => {
-        try {
-          await refreshOwnedSessions()
-        } catch (error: unknown) {
-          throw new LubanError(
-            'E_UNAVAILABLE',
-            `HUD session ownership refresh failed: ${diagnostic(error)}`,
-            { retriable: true, cause: error },
-          )
-        }
-        return rateLedger.capture(windowValue, challenge, accountId)
-      },
-    },
     onError: (error: unknown): void =>
       ctx.logger.warn(`luban-hud: stream refresh failed: ${diagnostic(error)}`),
   })

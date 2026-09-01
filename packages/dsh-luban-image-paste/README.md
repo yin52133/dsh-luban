@@ -17,9 +17,6 @@ session injection for Windows and Ubuntu.
   decode failure, or unverifiable size bound fails closed before persistence.
 - Real DSH rc2 `AgentRegistry` injection in Markdown or absolute-path form,
   limited to live, top-level sessions in the configured workspace.
-- Opt-in mounted live acceptance that renders an unpredictable code as PNG
-  pixels, injects it through the production repository/service path, and binds
-  the readback to one exact DSH message, turn, session, provider, and model.
 - Authenticated recent-image previews, reference-safe manual deletion, and TTL
   cleanup that always retains attachments referenced by a session. Recent
   responses are server-bounded by `recentLimit`.
@@ -103,36 +100,6 @@ attachments older than `retainDays`.
 For CLI capture, copy an image, export `LUBAN_SESSION_COOKIE` and
 `LUBAN_CSRF_TOKEN` from the authenticated session, then run `luban-img capture`.
 The CLI sends `x-luban-csrf` on both upload and injection writes.
-
-## Live visual acceptance
-
-Live M06-F003 evidence must run through the standalone CLI and the already
-mounted plugin so it can use the Host-owned `AgentRegistry`, LLM registry, and
-existing top-level session.
-
-The runner requires Windows or Ubuntu, an idle session owned by the logged-in
-account, and an actual response route whose model metadata declares image input.
-The nonce exists only in PNG pixels and model-authored output; evidence stores
-hashes, never the nonce or provider credential. It waits for the exact queued
-message's turn and removes only the attachment it created after that turn
-settles. A timeout or uncertain queue state retains the referenced attachment
-and fails closed.
-
-`luban-img-visual-acceptance` defaults to a plan and cannot call a provider
-unless `--live` is explicit. Live mode calls the authenticated endpoint on the
-already-mounted production plugin; it requires `LUBAN_SESSION_COOKIE`,
-`LUBAN_CSRF_TOKEN`, and `--session <idle-top-level-session>`. Each run creates a
-new evidence file and refuses to overwrite an existing path. The test uploads
-one image, injects it into the selected account-owned session, waits for the
-turn to settle, and checks the model response plus attachment state:
-
-```console
-luban-img-visual-acceptance
-luban-img-visual-acceptance --live --session <session-id>
-```
-
-Real acceptance requires a mounted production plugin and a model/provider that
-supports image input. Injected transports remain test-only.
 
 ## Compatibility
 

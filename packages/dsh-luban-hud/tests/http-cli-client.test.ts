@@ -16,17 +16,7 @@ import { apply as applyClient, keepaliveIndicator } from '../src/client/index.js
 import { DshSessionTelemetryProvider } from '../src/dsh-telemetry.js'
 import { HudEventStream, HudHttpApi } from '../src/http-api.js'
 import { HudKeepaliveHealthStore } from '../src/keepalive-health.js'
-import {
-  HUD_RATE_CAPTURE_SCHEMA,
-  type HudRateCapture,
-  type HudRateLedger,
-} from '../src/rate-ledger.js'
-import { HUD_RATE_EXPORT_SCHEMA, type RateWindowUtc } from '../src/rate-reconcile.js'
 import { HUD_TELEMETRY_EVENT, type HudSnapshotResponse } from '../src/types.js'
-import {
-  HUD_BUILD_PROVENANCE_FIXTURE,
-  HUD_RUNTIME_ARTIFACT_FIXTURE,
-} from './runtime-artifact-fixture.js'
 
 class MockResponse extends EventEmitter {
   public statusCode = 200
@@ -334,93 +324,6 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     bobRequest.emit('close')
     api.dispose()
     telemetry.dispose()
-  })
-
-  it('authenticates and validates mounted rate capture requests', async (): Promise<void> => {
-    const telemetry = new DefaultTelemetryAggregator({ refreshMs: 1_000, providerTimeoutMs: 100 })
-    const capture = vi.fn((window: RateWindowUtc, challenge: string): Promise<HudRateCapture> =>
-      Promise.resolve({
-        schemaVersion: HUD_RATE_CAPTURE_SCHEMA,
-        source: {
-          kind: 'mounted-hud-capture',
-          exportedAt: window.endUtc,
-          coverageStartUtc: window.startUtc,
-          processId: 123,
-          nodeVersion: 'v24.0.0',
-          challengeSha256: challenge,
-          runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
-          build: HUD_BUILD_PROVENANCE_FIXTURE,
-        },
-        export: {
-          schemaVersion: HUD_RATE_EXPORT_SCHEMA,
-          source: {
-            kind: 'hud-event-export',
-            origin: 'live-hud-events',
-            exportedAt: window.endUtc,
-          },
-          window,
-          records: [],
-        },
-        captures: [],
-      }),
-    )
-    const rateCapture = { capture } satisfies Pick<HudRateLedger, 'capture'>
-    const api = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig, rateCapture })
-
-    const denied = new MockResponse()
-    await api.handler(
-      request('/luban-hud/rate-capture?startUtc=a&endUtc=b&challenge=c'),
-      denied as unknown as ServerResponse,
-    )
-    expect(denied.statusCode).toBe(401)
-    expect(capture).not.toHaveBeenCalled()
-
-    const incomplete = new MockResponse()
-    await api.handler(
-      request('/luban-hud/rate-capture?startUtc=a&endUtc=b', 'luban_session=ok'),
-      incomplete as unknown as ServerResponse,
-    )
-    expect(incomplete.statusCode).toBe(400)
-    expect(capture).not.toHaveBeenCalled()
-
-    const allowed = new MockResponse()
-    await api.handler(
-      request(
-        '/luban-hud/rate-capture?startUtc=2026-08-30T12%3A00%3A00.000Z&endUtc=2026-08-30T12%3A05%3A00.000Z&challenge=capture_challenge_0123456789abcdef&accountId=bob',
-        'luban_session=ok',
-      ),
-      allowed as unknown as ServerResponse,
-    )
-    expect(allowed.statusCode).toBe(200)
-    expect(capture).toHaveBeenCalledWith(
-      {
-        startUtc: '2026-08-30T12:00:00.000Z',
-        endUtc: '2026-08-30T12:05:00.000Z',
-      },
-      'capture_challenge_0123456789abcdef',
-      OWNER_ACCOUNT,
-    )
-    expect(JSON.parse(allowed.body)).toMatchObject({
-      schemaVersion: HUD_RATE_CAPTURE_SCHEMA,
-      source: {
-        kind: 'mounted-hud-capture',
-        runtimeArtifact: HUD_RUNTIME_ARTIFACT_FIXTURE,
-        build: HUD_BUILD_PROVENANCE_FIXTURE,
-      },
-    })
-    api.dispose()
-
-    const unavailable = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig })
-    const unavailableResponse = new MockResponse()
-    await unavailable.handler(
-      request(
-        '/luban-hud/rate-capture?startUtc=a&endUtc=b&challenge=capture_challenge_0123456789abcdef',
-        'luban_session=ok',
-      ),
-      unavailableResponse as unknown as ServerResponse,
-    )
-    expect(unavailableResponse.statusCode).toBe(503)
-    unavailable.dispose()
   })
 
   it('renders the API snapshot as the CLI first line and keeps auth out of argv', async (): Promise<void> => {

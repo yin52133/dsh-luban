@@ -6,8 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "luban-img": "./dist/cli.js",
-    "luban-img-visual-acceptance": "./dist/live-visual-acceptance-cli.js"
+    "luban-img": "./dist/cli.js"
   },
   "exports": {
     ".": {

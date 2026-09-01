@@ -333,50 +333,6 @@ export interface ImageIngestService {
   cleanup(dryRun?: boolean): Promise<CleanupReport>
 }
 
-/** Exact durable DSH response identity presented to a provider-wire adapter. */
-export interface ProviderRequestIdentityQuery {
-  readonly sessionId: string
-  readonly assistantEventSeq: number
-  readonly turn: number
-  readonly step: number
-  readonly assistantMessageId: string
-  readonly provider: string
-  readonly model: string
-  readonly challenge: string
-}
-
-/**
- * Provider-wire attestation returned for one exact successful DSH response.
- *
- * The request id is intentionally opaque. Consumers must validate every echoed
- * binding field and persist only a digest unless an independent provider export
- * requires the raw id for an in-memory reconciliation.
- */
-export interface ProviderRequestIdentityAttestation {
-  readonly schemaVersion: 'dsh-luban/provider-request-identity/v1'
-  readonly adapter: {
-    readonly id: string
-    readonly version: string
-    readonly runtimeSha256: string
-  }
-  readonly binding: {
-    readonly sessionId: string
-    readonly assistantEventSeq: number
-    readonly turn: number
-    readonly step: number
-    readonly assistantMessageId: string
-    readonly provider: string
-    readonly model: string
-    readonly challengeSha256: string
-  }
-  readonly providerRequestId: string
-}
-
-/** Optional provider-specific capability; implementations observe the real wire response. */
-export interface ProviderRequestIdentityAdapter {
-  attest(query: ProviderRequestIdentityQuery, signal: AbortSignal): Promise<unknown>
-}
-
 export type TelemetryField = 'context' | 'workspace' | 'model' | 'rates'
 
 export interface TelemetryProvider {

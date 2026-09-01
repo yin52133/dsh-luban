@@ -95,24 +95,6 @@ luban-hud
 
 On POSIX shells, use `export` instead of `set`. `LUBAN_URL` defaults to the authentication sidecar at `http://127.0.0.1:42600`. Credentials are accepted only through the environment, never command-line arguments. Use `luban-hud --json` for the full envelope and source/failure diagnostics.
 
-Run a mounted rate reconciliation only after saving a real provider billing export outside the
-repository. The runner reads and validates that file first, takes its exact one- or five-minute UTC
-window, then requests the authenticated mounted ledger with a fresh challenge:
-
-```powershell
-$env:LUBAN_SESSION_COOKIE = 'luban_session=REDACTED'
-node scripts/acceptance/m07-rate-reconcile.mjs --live --confirm-real-provider-export --hud-url http://127.0.0.1:42600 --provider-export C:\evidence\provider-rate.json --output C:\evidence\m07-rate-evidence.json
-```
-
-`--hud-url` accepts only credential-free HTTP on literal `127.0.0.1` with an explicit port and resolves only
-`/luban-hud/rate-capture`; it cannot be combined with `--hud-export`. Redirects, incomplete
-coverage, challenge/schema/window drift, credential-like response fields, requests over 10 seconds,
-and responses over 10 MiB fail. The mounted comparison is accepted when HUD and
-a real provider billing export cover the same window and request/token totals
-meet the documented tolerance. This is an optional provider-adapter compatibility smoke: DSH rc2
-does not expose provider request IDs through its public success events, so the external billing
-mapping is not required for the sliding-window feature itself.
-
 ## Compatibility
 
 | Component                     | Published floor        | Tested baseline         |

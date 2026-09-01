@@ -412,18 +412,12 @@ export class DshContextEstimatorProvider implements TelemetryProvider {
   }
 }
 
-export interface HudRateEventSink {
-  observe(session: Session, event: SessionEvent): void
-  observeForAccount?(accountId: AccountId, session: Session, event: SessionEvent): void
-}
-
 /** Replays recent rc2 assistant usage once, then ingests the live session/event feed by sequence. */
 export class DshRateCollector {
   readonly #window: SlidingRateWindow
   readonly #accountWindows = new Map<AccountId, SlidingRateWindow>()
   readonly #clock: Clock
   readonly #monotonicClock: MonotonicClock
-  readonly #rateLedger: HudRateEventSink | undefined
   readonly #lastSequence = new Map<
     string,
     { readonly sequence: number; readonly touchedAt: number }
@@ -434,12 +428,10 @@ export class DshRateCollector {
     readonly window: SlidingRateWindow
     readonly clock?: Clock
     readonly monotonicClock?: MonotonicClock
-    readonly rateLedger?: HudRateEventSink
   }) {
     this.#window = options.window
     this.#clock = options.clock ?? systemClock
     this.#monotonicClock = options.monotonicClock ?? systemMonotonicClock
-    this.#rateLedger = options.rateLedger
   }
 
   public adopt(session: Session): void {
@@ -492,8 +484,6 @@ export class DshRateCollector {
     if (event.seq <= previous) return
     this.#lastSequence.set(sessionKey, { sequence: event.seq, touchedAt: now })
     if (event.type !== 'assistant/message') return
-    if (accountId === undefined) this.#rateLedger?.observe(session, event)
-    else this.#rateLedger?.observeForAccount?.(accountId, session, event)
     const wallNow = this.#clock.now()
     this.#pruneMessages(wallNow)
     const messageId = this.#messageKey(String(event.data.message.id), accountId)

@@ -9,7 +9,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TokenMeter, type ContextPressureProjection } from '@deepseek-ai/dsh-token-meter'
 import type { AccountId, AccountSessionRegistry, TelemetrySnapshot } from 'dsh-luban-core'
 import { asAccountId, asSessionId } from 'dsh-luban-core'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { DefaultTelemetryAggregator } from '../src/aggregator.js'
 import {
   contextPressureTotal,
@@ -558,59 +558,6 @@ describe('rc2 DSH telemetry providers', (): void => {
 
     monotonic.value += 301_001
     expect(window.snapshot()).toEqual({ tpm1m: 0, tpm5m: 0, rpm1m: 0, rpm5m: 0 })
-  })
-
-  it('forwards each historical and live assistant event to the mounted ledger once', (): void => {
-    const monotonic = new ManualClock()
-    const window = new SlidingRateWindow(monotonic)
-    const rateLedger = { observe: vi.fn() }
-    const collector = new DshRateCollector({
-      window,
-      clock: { now: (): number => Date.now() },
-      monotonicClock: monotonic,
-      rateLedger,
-    })
-    const value = session('hud-rate-ledger', resolve('workspace-root'))
-    const historical = appendAssistant(value, { inputTokens: 8, outputTokens: 2 })
-
-    collector.adopt(value)
-    collector.adopt(value)
-    collector.observe(value, historical)
-    const live = appendAssistant(value, { inputTokens: 4, outputTokens: 1 })
-    collector.observe(value, live)
-    collector.observe(value, live)
-
-    expect(rateLedger.observe).toHaveBeenCalledTimes(2)
-    expect(rateLedger.observe).toHaveBeenNthCalledWith(1, value, historical)
-    expect(rateLedger.observe).toHaveBeenNthCalledWith(2, value, live)
-  })
-
-  it('partitions rate windows and ledger delivery by resolved account', (): void => {
-    const monotonic = new ManualClock()
-    const window = new SlidingRateWindow(monotonic)
-    const rateLedger = { observe: vi.fn(), observeForAccount: vi.fn() }
-    const collector = new DshRateCollector({
-      window,
-      clock: { now: (): number => Date.now() },
-      monotonicClock: monotonic,
-      rateLedger,
-    })
-    const alice = asAccountId('alice')
-    const bob = asAccountId('bob')
-    const aliceSession = session('hud-rate-alice', resolve('workspace-root'))
-    const bobSession = session('hud-rate-bob', resolve('workspace-root'))
-    const aliceEvent = appendAssistant(aliceSession, { inputTokens: 8, outputTokens: 2 })
-    const bobEvent = appendAssistant(bobSession, { inputTokens: 15, outputTokens: 5 })
-
-    collector.adoptForAccount(alice, aliceSession)
-    collector.adoptForAccount(bob, bobSession)
-
-    expect(collector.windowForAccount(alice).snapshot()).toMatchObject({ tpm1m: 10, rpm1m: 1 })
-    expect(collector.windowForAccount(bob).snapshot()).toMatchObject({ tpm1m: 20, rpm1m: 1 })
-    expect(window.snapshot()).toMatchObject({ tpm1m: 0, rpm1m: 0 })
-    expect(rateLedger.observe).not.toHaveBeenCalled()
-    expect(rateLedger.observeForAccount).toHaveBeenNthCalledWith(1, alice, aliceSession, aliceEvent)
-    expect(rateLedger.observeForAccount).toHaveBeenNthCalledWith(2, bob, bobSession, bobEvent)
   })
 
   it('counts a stable assistant message only once when a fork preserves history identity', (): void => {

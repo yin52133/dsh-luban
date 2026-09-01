@@ -12,15 +12,10 @@ import * as plugin from '../src/index.js'
 import type { AccountTelemetryProvider } from '../src/aggregator.js'
 import { keepaliveIndicator } from '../src/client/index.js'
 import type { HudSnapshotResponse } from '../src/types.js'
-import {
-  HUD_BUILD_PROVENANCE_FIXTURE,
-  HUD_RUNTIME_ARTIFACT_FIXTURE,
-} from './runtime-artifact-fixture.js'
-
 const hudPlugin = {
   ...plugin,
   apply(ctx: Context): void {
-    plugin.apply(ctx, {}, HUD_RUNTIME_ARTIFACT_FIXTURE, HUD_BUILD_PROVENANCE_FIXTURE)
+    plugin.apply(ctx)
   },
 }
 
@@ -236,22 +231,6 @@ describe('HUD Cordis integration', (): void => {
           used: official.projectedTokens,
           max: official.contextWindow,
           ratio: official.projectedTokens / official.contextWindow,
-        })
-
-        const captureEndMs = Date.now()
-        const captureEnd = new Date(captureEndMs).toISOString()
-        const captureStart = new Date(captureEndMs - 60_000).toISOString()
-        const captureUrl = new URL(
-          `http://127.0.0.1:${String(context.webServer.port)}/luban-hud/rate-capture`,
-        )
-        captureUrl.searchParams.set('startUtc', captureStart)
-        captureUrl.searchParams.set('endUtc', captureEnd)
-        captureUrl.searchParams.set('challenge', 'mounted_capture_0123456789abcdef')
-        const captureResponse = await fetch(captureUrl)
-        expect(captureResponse.status).toBe(503)
-        expect(await captureResponse.json()).toMatchObject({
-          error: 'E_UNAVAILABLE',
-          message: 'Rate capture window is outside complete mounted coverage',
         })
 
         await meterFiber.dispose()
