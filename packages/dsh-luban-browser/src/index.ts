@@ -9,7 +9,7 @@ import type {
   NightScheduler,
   TaskOutput,
   TaskStore,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import { BridgeProcess } from './bridge-process.js'
 import { DshModelGateway, type DshModelSelection } from './dsh-model-gateway.js'
 import { BrowserService } from './browser-service.js'

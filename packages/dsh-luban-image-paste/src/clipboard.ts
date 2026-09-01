@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { LubanError, isLubanError } from 'dsh-luban-core'
+import { LubanError, isLubanError } from '@yin52133/dsh-luban-core'
 import { detectImage } from './image-format.js'
 import type { ClipboardAdapter, ClipboardCapture } from './types.js'
 

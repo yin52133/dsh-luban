@@ -1,7 +1,7 @@
 # Add the host plugin once. The Web approval page is discovered through dsh.client.
 - insert:
     - id: luban-plan
-      name: dsh-luban-plan
+      name: '@yin52133/dsh-luban-plan'
       config:
         plansDir: docs/plans
         stateFile: ~/.dsh/luban/plan/plans.json

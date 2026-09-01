@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AccountId, AuthService, SessionId } from 'dsh-luban-core'
+import type { AccountId, AuthService, SessionId } from '@yin52133/dsh-luban-core'
 import {
   LubanError,
   asAccountId,
@@ -14,7 +14,7 @@ import {
   sendJson,
   sendNoContent,
   setPrivateResponseHeaders as securityHeaders,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import type { SharedSessionRegistry } from './registry.js'
 import type {
   AccountRole,

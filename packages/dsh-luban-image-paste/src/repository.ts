@@ -1,8 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
-import type { AccountId, CleanupReport, Clock, JsonCodec, SessionId } from 'dsh-luban-core'
-import { AtomicJsonStore, LubanError, asAccountId, asSessionId } from 'dsh-luban-core'
+import type {
+  AccountId,
+  CleanupReport,
+  Clock,
+  JsonCodec,
+  SessionId,
+} from '@yin52133/dsh-luban-core'
+import { AtomicJsonStore, LubanError, asAccountId, asSessionId } from '@yin52133/dsh-luban-core'
 import type { CompressionReport, ImageMime, ImageSource, StoredImage } from './types.js'
 
 interface ImageLedger {

@@ -1,4 +1,4 @@
-# dsh-luban-session-share
+# @yin52133/dsh-luban-session-share
 
 Account-isolated Windows/Ubuntu views of the same user's DSH sessions, with
 confirmed exclusive control transfer and reconnectable output.
@@ -25,18 +25,18 @@ Install authentication and keepalive first, then add this plugin to the same DSH
 profile on each host:
 
 ```sh
-dsh plugin --profile web add dsh-luban-auth dsh-luban-keepalive dsh-luban-session-share
+dsh plugin --profile web add @yin52133/dsh-luban-auth @yin52133/dsh-luban-keepalive @yin52133/dsh-luban-session-share
 ```
 
 Keep the DSH WebServer on loopback and access `/luban-session-share` through the
-`dsh-luban-auth` sidecar.
+`@yin52133/dsh-luban-auth` sidecar.
 
 ## Configuration
 
 ```yaml
 - insert:
     - id: luban-session-share
-      name: dsh-luban-session-share
+      name: @yin52133/dsh-luban-session-share
       config:
         host: auto
         ownerUser: owner

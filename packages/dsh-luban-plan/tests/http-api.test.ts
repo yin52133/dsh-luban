@@ -4,8 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AccountId, AccountSessionRegistry, AuthService, Clock } from 'dsh-luban-core'
-import { LubanError, asAccountId, asPlanId, asSessionId } from 'dsh-luban-core'
+import type {
+  AccountId,
+  AccountSessionRegistry,
+  AuthService,
+  Clock,
+} from '@yin52133/dsh-luban-core'
+import { LubanError, asAccountId, asPlanId, asSessionId } from '@yin52133/dsh-luban-core'
 import { PlanEventStream, PlanHttpApi } from '../src/http-api.js'
 import { PlanRepository } from '../src/repository.js'
 import { FilePlanService } from '../src/service.js'

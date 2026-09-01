@@ -1,7 +1,7 @@
 # Third-party notices
 
-`dsh-luban-taskboard` bundles no third-party source code or UI assets. Its
-`dsh-luban-core` runtime dependency is part of this MIT-licensed repository. DSH,
+`@yin52133/dsh-luban-taskboard` bundles no third-party source code or UI assets. Its
+`@yin52133/dsh-luban-core` runtime dependency is part of this MIT-licensed repository. DSH,
 Cordis, and React are external peer dependencies supplied by the host profile.
 
 The public descriptions of the following independent projects informed the

@@ -5,8 +5,8 @@ import type {
   ImageIngestService,
   IngestedImage,
   SessionId,
-} from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import type { Config } from './config.js'
 import { assertMimeMatches, detectImage } from './image-format.js'
 import type { AttachmentRepository } from './repository.js'

@@ -1,4 +1,4 @@
-import { LubanError } from 'dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import {
   childTaskDefinition,
   hostTaskDefinition,

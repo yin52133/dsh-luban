@@ -1,4 +1,4 @@
-import type { AccountId, TelemetryProvider, TelemetrySnapshot } from 'dsh-luban-core'
+import type { AccountId, TelemetryProvider, TelemetrySnapshot } from '@yin52133/dsh-luban-core'
 
 export interface MonotonicClock {
   now(): number

@@ -1,5 +1,5 @@
-import type { Clock } from 'dsh-luban-core'
-import { AtomicJsonStore, asTaskId } from 'dsh-luban-core'
+import type { Clock } from '@yin52133/dsh-luban-core'
+import { AtomicJsonStore, asTaskId } from '@yin52133/dsh-luban-core'
 import { decodeLedger, emptyLedger, type TaskLedger } from '../../src/ledger.js'
 import { JsonTaskStore } from '../../src/task-store.js'
 

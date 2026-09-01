@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { Readable } from 'node:stream'
-import { LubanError } from 'dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 
 const TERMINATION_GRACE_MS = 1_000
 const FORCED_CLOSE_GRACE_MS = 1_000

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { asAccountId } from 'dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import type { PeerConfig } from '../src/config.js'
 import { SharedSessionRegistry } from '../src/registry.js'
 import type { PeerNetwork, PeerSessionSnapshot } from '../src/types.js'

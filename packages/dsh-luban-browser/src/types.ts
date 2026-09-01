@@ -6,7 +6,7 @@ import type {
   BrowserSession,
   BrowserTaskSpec,
   BrowserTemplate,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 
 export type BrowserJobStatus =
   'queued' | 'running' | 'succeeded' | 'failed' | 'timeout' | 'cancelled'

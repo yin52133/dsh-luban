@@ -1,8 +1,8 @@
 import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import type { SnippetFile } from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+import type { SnippetFile } from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import type { SessionInjection } from './types.js'
 
 function prompt(snippet: SnippetFile): string {

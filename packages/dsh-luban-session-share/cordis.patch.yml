@@ -1,7 +1,7 @@
 # Peer cookies are read from the named environment variables, never from this file.
 - insert:
     - id: luban-session-share
-      name: dsh-luban-session-share
+      name: '@yin52133/dsh-luban-session-share'
       config:
         host: auto
         ownerUser: owner

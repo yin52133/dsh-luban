@@ -1,5 +1,5 @@
-import type { AccountId, AccountSessionRegistry, SessionId } from 'dsh-luban-core'
-import { LubanError, asAccountId } from 'dsh-luban-core'
+import type { AccountId, AccountSessionRegistry, SessionId } from '@yin52133/dsh-luban-core'
+import { LubanError, asAccountId } from '@yin52133/dsh-luban-core'
 
 export const ALICE = asAccountId('alice')
 export const BOB = asAccountId('bob')

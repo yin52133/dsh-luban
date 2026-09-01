@@ -1,4 +1,4 @@
-import type { AccountId, BuildJob, ResourceReport, TaskStore } from 'dsh-luban-core'
+import type { AccountId, BuildJob, ResourceReport, TaskStore } from '@yin52133/dsh-luban-core'
 
 export interface BuildAlertSink {
   guardExceeded(report: ResourceReport, accountId: AccountId): Promise<void>

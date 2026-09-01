@@ -1,6 +1,6 @@
 import type { ToolDefinition, ToolRunContext, ToolRuntime } from '@deepseek-ai/dsh-tools'
-import type { AccountId, AccountSessionRegistry } from 'dsh-luban-core'
-import { asSessionId, LubanError } from 'dsh-luban-core'
+import type { AccountId, AccountSessionRegistry } from '@yin52133/dsh-luban-core'
+import { asSessionId, LubanError } from '@yin52133/dsh-luban-core'
 import type { Config } from './config.js'
 import {
   NodeStdioMcpClient,

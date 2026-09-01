@@ -1,8 +1,8 @@
 import { isAbsolute, normalize, resolve } from 'node:path'
-import { standardConfigSchema } from 'dsh-luban-core'
+import { standardConfigSchema } from '@yin52133/dsh-luban-core'
 import type { InjectStyle } from './types.js'
 
-export type { StandardConfigSchema } from 'dsh-luban-core'
+export type { StandardConfigSchema } from '@yin52133/dsh-luban-core'
 
 export interface Config {
   readonly workspaceRoot: string

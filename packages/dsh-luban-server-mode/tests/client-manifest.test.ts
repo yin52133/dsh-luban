@@ -44,7 +44,7 @@ describe('server-mode client and package contract', (): void => {
       await readFile(new URL('../package.json', import.meta.url), 'utf8'),
     ) as Readonly<Record<string, unknown>>
     expect(manifest).toMatchObject({
-      name: 'dsh-luban-server-mode',
+      name: '@yin52133/dsh-luban-server-mode',
       files: ['dist/', 'cordis.patch.yml', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
       engines: { dsh: '>=0.1.1-rc.1' },
       dsh: {

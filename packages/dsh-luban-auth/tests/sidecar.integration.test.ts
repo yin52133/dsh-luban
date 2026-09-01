@@ -8,7 +8,7 @@ import {
 import { connect, type Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
-import { asAccountId, asSessionId } from 'dsh-luban-core'
+import { asAccountId, asSessionId } from '@yin52133/dsh-luban-core'
 import { localHostnames, parseUpstream, resolveAuthConfig } from '../src/config.js'
 import { AuthSidecar } from '../src/sidecar.js'
 import type { LubanAuthConfig } from '../src/types.js'

@@ -1,4 +1,4 @@
-# dsh-luban-core
+# @yin52133/dsh-luban-core
 
 Internal shared contracts, L1 platform adapters, and testable L2 services for the
 `dsh-luban-*` plugin suite. This package is not a standalone DSH plugin.

@@ -8,7 +8,7 @@ import {
   type IssuedSession,
   type SessionId,
   type VerifyResult,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import { authStateCodec, initialAuthState } from './state.js'
 import type {
   AccountRecord,

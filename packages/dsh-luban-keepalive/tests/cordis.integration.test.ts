@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { HealthReport } from 'dsh-luban-core'
+import type { HealthReport } from '@yin52133/dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply as applyKeepalive, ManagedKeepaliveService } from '../src/index.js'
 

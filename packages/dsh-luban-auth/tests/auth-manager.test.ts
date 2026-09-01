@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { asAccountId, asSessionId } from 'dsh-luban-core'
+import { asAccountId, asSessionId } from '@yin52133/dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AuthManager } from '../src/auth-manager.js'
 import { createManagerFixture, type ManagerFixture, MemoryAudit, MutableClock } from './helpers.js'

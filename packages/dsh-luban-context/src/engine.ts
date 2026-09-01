@@ -12,8 +12,8 @@ import type {
   SessionRef,
   TelemetrySnapshot,
   Unsubscribe,
-} from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import type { ArchiveIndexEntry, ContextArchiveRepository } from './archive.js'
 import type { Config } from './config.js'
 import { VirtualFileStrategy } from './strategies.js'

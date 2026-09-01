@@ -1,4 +1,4 @@
-# dsh-luban-win-debug
+# @yin52133/dsh-luban-win-debug
 
 Windows embedded-debug control plane for DeepSeek Harness (DSH). Serial logs,
 safe flash/reset templates, GDB snapshots, adb/fastboot, desktop MCP, SSH,
@@ -33,7 +33,7 @@ Install the authentication boundary first, then add this Windows-only plugin to
 the same profile:
 
 ```powershell
-dsh plugin --profile web add dsh-luban-auth dsh-luban-win-debug
+dsh plugin --profile web add @yin52133/dsh-luban-auth @yin52133/dsh-luban-win-debug
 ```
 
 `serialport` 13 is an optional native dependency and is loaded only when COM
@@ -46,14 +46,14 @@ pnpm add serialport@^13.0.0
 
 Install each external debugger/flasher independently and set its executable in
 the local profile. Keep DSH WebServer on loopback and expose it only through the
-`dsh-luban-auth` sidecar.
+`@yin52133/dsh-luban-auth` sidecar.
 
 ## Configuration
 
 ```yaml
 - insert:
     - id: luban-win-debug
-      name: dsh-luban-win-debug
+      name: @yin52133/dsh-luban-win-debug
       config:
         serial:
           defaultBaud: 115200

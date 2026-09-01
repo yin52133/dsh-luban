@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AccountId, AuthService, BrowserTaskSpec, BrowserTemplate } from 'dsh-luban-core'
-import { asAccountId } from 'dsh-luban-core'
+import type {
+  AccountId,
+  AuthService,
+  BrowserTaskSpec,
+  BrowserTemplate,
+} from '@yin52133/dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import { BrowserError } from './errors.js'
 import { authRequest } from './security.js'
 import type {

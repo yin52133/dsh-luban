@@ -1,4 +1,4 @@
-import type { AccountId, Unsubscribe } from 'dsh-luban-core'
+import type { AccountId, Unsubscribe } from '@yin52133/dsh-luban-core'
 import type { HudKeepaliveAlert, HudKeepaliveStatus, KeepaliveHealthPayload } from './types.js'
 
 const CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu

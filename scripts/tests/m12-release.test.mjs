@@ -246,7 +246,7 @@ describe('M12 plugin scaffolder', () => {
     expect(await readFile(clientTypes, 'utf8')).toContain('export declare function apply')
     await writeFile(
       join(packageRoot, 'client-types.probe.ts'),
-      "import { apply } from 'dsh-luban-sample/client'\nvoid apply\n",
+      "import { apply } from '@yin52133/dsh-luban-sample/client'\nvoid apply\n",
       'utf8',
     )
     runNode(
@@ -277,7 +277,7 @@ describe('M12 plugin scaffolder', () => {
     expect(JSON.parse(hostProbe)).toEqual({ name: 'luban-sample', apply: 'function' })
     const bundle = await readFile(join(packageRoot, 'dist/client.js'), 'utf8')
     expect(bundle).toContain('window.__ModuleLoader__.load')
-    expect(bundle).toContain('id: "dsh-luban-sample"')
+    expect(bundle).toContain('id: "@yin52133/dsh-luban-sample"')
     runNode(join(REPOSITORY_ROOT, 'node_modules/vitest/vitest.mjs'), ['run', 'tests'], packageRoot)
 
     const hostOnly = await generatePlugin({
@@ -1146,7 +1146,7 @@ describe('M12 release policy', () => {
   it('validates a complete synthetic repository', async () => {
     const root = await temporaryRoot()
     const coreManifest = {
-      name: 'dsh-luban-core',
+      name: '@yin52133/dsh-luban-core',
       version: '1.0.0',
       description: 'Shared contracts',
       type: 'module',
@@ -1160,9 +1160,10 @@ describe('M12 release policy', () => {
         './package.json': './package.json',
       },
       files: ['dist/', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
+      publishConfig: { access: 'public', registry: 'https://npm.pkg.github.com' },
     }
     const manifest = {
-      name: 'dsh-luban-sample',
+      name: '@yin52133/dsh-luban-sample',
       version: '1.0.0',
       description: 'Sample',
       type: 'module',
@@ -1177,6 +1178,7 @@ describe('M12 release policy', () => {
         './package.json': './package.json',
       },
       files: ['dist/', 'cordis.patch.yml', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
+      publishConfig: { access: 'public', registry: 'https://npm.pkg.github.com' },
       dsh: { bundle: { patch: './cordis.patch.yml' } },
     }
     await json(join(root, 'package.json'), { name: 'fixture', version: '1.0.0', private: true })
@@ -1200,14 +1202,14 @@ describe('M12 release policy', () => {
     )
     const result = await validateRepository(root)
     expect(result.issues).toEqual([])
-    expect(result.packages).toEqual(['dsh-luban-core', 'dsh-luban-sample'])
+    expect(result.packages).toEqual(['@yin52133/dsh-luban-core', '@yin52133/dsh-luban-sample'])
 
     await json(join(root, 'packages/core/package.json'), {
       ...coreManifest,
       name: ['@luban', 'core'].join('/'),
     })
     expect((await validateRepository(root)).issues).toContain(
-      'core: package name must be dsh-luban-core',
+      'core: package name must be @yin52133/dsh-luban-core',
     )
   })
 
@@ -1216,8 +1218,13 @@ describe('M12 release policy', () => {
     const artifacts = join(root, '.release-artifacts')
     await mkdir(artifacts)
     await json(join(root, 'package.json'), { name: 'fixture', version: '1.0.0', private: true })
-    const samplePayload = packedManifestTarball({ name: 'sample', version: '1.0.0' })
-    const corePayload = packedManifestTarball({ name: 'dsh-luban-core', version: '1.0.0' })
+    const publishConfig = { access: 'public', registry: 'https://npm.pkg.github.com' }
+    const samplePayload = packedManifestTarball({ name: 'sample', version: '1.0.0', publishConfig })
+    const corePayload = packedManifestTarball({
+      name: '@yin52133/dsh-luban-core',
+      version: '1.0.0',
+      publishConfig,
+    })
     await writeFile(join(artifacts, 'sample.tgz'), samplePayload)
     await writeFile(join(artifacts, 'core.tgz'), corePayload)
     await json(join(artifacts, 'release-manifest.json'), {
@@ -1232,7 +1239,7 @@ describe('M12 release policy', () => {
           sha256: sha256(samplePayload),
         },
         {
-          name: 'dsh-luban-core',
+          name: '@yin52133/dsh-luban-core',
           version: '1.0.0',
           file: 'core.tgz',
           sha256: sha256(corePayload),
@@ -1240,10 +1247,10 @@ describe('M12 release policy', () => {
       ],
     })
     await expect(
-      verifyArtifactManifest(root, artifacts, ['dsh-luban-core', 'sample']),
+      verifyArtifactManifest(root, artifacts, ['@yin52133/dsh-luban-core', 'sample']),
     ).resolves.toMatchObject({
       tag: 'v1.0.0',
-      packages: [{ name: 'dsh-luban-core' }, { name: 'sample' }],
+      packages: [{ name: '@yin52133/dsh-luban-core' }, { name: 'sample' }],
     })
     await expect(verifyArtifactManifest(root, artifacts, ['unexpected'])).rejects.toThrow(
       /do not match/,
@@ -1256,17 +1263,17 @@ describe('M12 release policy', () => {
     const payload = packedManifestTarball({
       name: 'sample',
       version: '1.0.0',
-      dependencies: { 'dsh-luban-core': 'workspace:^' },
+      dependencies: { '@yin52133/dsh-luban-core': 'workspace:^' },
     })
     const manifest = readPackedManifest(payload)
     expect(manifest.name).toBe('sample')
     expect(packedManifestIssues({ name: 'sample', version: '1.0.0' }, manifest)).toContain(
-      'sample: packed dependencies.dsh-luban-core retains workspace:^',
+      'sample: packed dependencies.@yin52133/dsh-luban-core retains workspace:^',
     )
     expect(
       packedManifestIssues(
         { name: 'sample', version: '1.0.0' },
-        { ...manifest, dependencies: { 'dsh-luban-core': '^1.0.0' } },
+        { ...manifest, dependencies: { '@yin52133/dsh-luban-core': '^1.0.0' } },
       ),
     ).toEqual([])
     expect(() => readPackedManifest(Buffer.from('not a tarball'))).toThrow(/gzip tarball/)

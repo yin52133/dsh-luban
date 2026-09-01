@@ -8,8 +8,8 @@ import type {
   ArtifactRef,
   BuildJob,
   ResourceReport,
-} from 'dsh-luban-core'
-import { asAccountId } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BuildAlertSink } from '../src/alerts.js'
 import { ArtifactManager } from '../src/artifacts.js'

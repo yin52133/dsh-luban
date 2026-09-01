@@ -1,5 +1,11 @@
-import type { Actor, Clock, Task, TaskId, TaskOutput, TaskStatus } from 'dsh-luban-core'
-import { AtomicJsonStore, LubanError, asAccountId, asSessionId, asTaskId } from 'dsh-luban-core'
+import type { Actor, Clock, Task, TaskId, TaskOutput, TaskStatus } from '@yin52133/dsh-luban-core'
+import {
+  AtomicJsonStore,
+  LubanError,
+  asAccountId,
+  asSessionId,
+  asTaskId,
+} from '@yin52133/dsh-luban-core'
 
 export interface SchedulerLedger {
   readonly dateKey: string

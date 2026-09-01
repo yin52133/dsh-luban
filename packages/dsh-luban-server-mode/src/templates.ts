@@ -1,5 +1,5 @@
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
-import { LubanError } from 'dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import type { BuildTemplateConfig } from './config.js'
 import { resolveUserPath } from './config.js'
 import { canonicalExistingDirectoryWithinSync, canonicalWithinSync } from './path-boundary.js'

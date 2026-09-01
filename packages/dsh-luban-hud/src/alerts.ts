@@ -1,4 +1,4 @@
-import type { AccountId, TaskStore, TelemetrySnapshot } from 'dsh-luban-core'
+import type { AccountId, TaskStore, TelemetrySnapshot } from '@yin52133/dsh-luban-core'
 import type { TelemetryAdvisory } from './types.js'
 
 const ACTIVE_STATUSES = ['backlog', 'todo', 'doing', 'review'] as const

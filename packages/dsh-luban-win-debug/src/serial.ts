@@ -4,8 +4,8 @@ import type {
   ChannelEndpoint,
   ChannelHandle,
   OpenOptions,
-} from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import { BoundedAsyncQueue } from './queue.js'
 import type { SerialConnection, SerialPortDescriptor, SerialProvider } from './types.js'
 

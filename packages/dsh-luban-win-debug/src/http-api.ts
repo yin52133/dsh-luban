@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AccountId, AuthService, ChannelKind, SessionId } from 'dsh-luban-core'
+import type { AccountId, AuthService, ChannelKind, SessionId } from '@yin52133/dsh-luban-core'
 import {
   LubanError,
   asSessionId,
@@ -9,7 +9,7 @@ import {
   readJsonBody,
   sendJson,
   setPrivateResponseHeaders as securityHeaders,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import type { DefaultWinDebugService } from './service.js'
 import type { WinDebugEvent } from './types.js'
 

@@ -1,5 +1,5 @@
 {
-  "name": "dsh-luban-win-debug",
+  "name": "@yin52133/dsh-luban-win-debug",
   "version": "0.1.0",
   "description": "Safe Windows embedded-debug channels and DSH session injection",
   "type": "module",
@@ -35,7 +35,8 @@
     "dsh": ">=0.1.1-rc.2"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
   },
   "repository": {
     "type": "git",
@@ -44,7 +45,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "dsh-luban-core": "workspace:^"
+    "@yin52133/dsh-luban-core": "workspace:^"
   },
   "optionalDependencies": {
     "serialport": "^13.0.0"

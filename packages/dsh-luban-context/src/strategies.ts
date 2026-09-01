@@ -4,8 +4,8 @@ import type {
   CompactionResult,
   CompactionStrategy,
   ContextSegment,
-} from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 
 export interface ReadableCompactionContext extends CompactionContext {
   read(segment: ContextSegment): Promise<string>

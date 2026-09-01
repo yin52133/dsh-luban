@@ -1,5 +1,5 @@
-import type { Checkpoint, KeepaliveService, TaskId } from 'dsh-luban-core'
-import { asTaskId } from 'dsh-luban-core'
+import type { Checkpoint, KeepaliveService, TaskId } from '@yin52133/dsh-luban-core'
+import { asTaskId } from '@yin52133/dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import type { CheckpointStep } from '../src/checkpoint-runner.js'
 import { runCheckpointedTask } from '../src/checkpoint-runner.js'

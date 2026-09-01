@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http'
 import { Context } from '@deepseek-ai/cordis'
-import { asAccountId, asSessionId } from 'dsh-luban-core'
+import { asAccountId, asSessionId } from '@yin52133/dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { LubanAuthService } from '../src/service.js'
 import { createManagerFixture, type ManagerFixture } from './helpers.js'

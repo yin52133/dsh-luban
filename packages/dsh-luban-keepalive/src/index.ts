@@ -1,6 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { AccountId, KeepaliveEvent, KeepaliveService, TaskStore } from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+import type {
+  AccountId,
+  KeepaliveEvent,
+  KeepaliveService,
+  TaskStore,
+} from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import { TaskboardKeepaliveAlertSink } from './alerts.js'
 import { NodeCommandRunner, type CommandRunner } from './command-runner.js'
 import {

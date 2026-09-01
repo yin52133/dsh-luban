@@ -3,7 +3,7 @@ import { access, link, lstat, mkdir, open, realpath, rm, unlink } from 'node:fs/
 import { homedir, userInfo } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { LubanError } from 'dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import type { ProcessResult, ProcessRunner } from './process-runner.js'
 import { assertProcessSuccess } from './process-runner.js'
 

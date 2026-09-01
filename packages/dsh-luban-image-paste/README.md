@@ -1,4 +1,4 @@
-# dsh-luban-image-paste
+# @yin52133/dsh-luban-image-paste
 
 Authenticated image paste, drop, clipboard capture, workspace storage, and DSH
 session injection for Windows and Ubuntu.
@@ -26,7 +26,7 @@ session injection for Windows and Ubuntu.
 Install the authentication boundary and this plugin in the same DSH profile:
 
 ```sh
-dsh plugin --profile web add dsh-luban-auth dsh-luban-image-paste
+dsh plugin --profile web add @yin52133/dsh-luban-auth @yin52133/dsh-luban-image-paste
 ```
 
 Install the optional resize capability when `compression` is enabled:
@@ -36,14 +36,14 @@ pnpm add sharp
 ```
 
 Keep the internal DSH WebServer on loopback and access the profile through the
-`dsh-luban-auth` sidecar. The authenticated route is `/luban-image-paste`.
+`@yin52133/dsh-luban-auth` sidecar. The authenticated route is `/luban-image-paste`.
 
 ## Configuration
 
 ```yaml
 - insert:
     - id: luban-image-paste
-      name: dsh-luban-image-paste
+      name: @yin52133/dsh-luban-image-paste
       config:
         workspaceRoot: .
         attachDir: .luban/attachments

@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   npmInvocation,
+  PACKAGE_REGISTRY,
   packedManifestIssues,
   pathIsWithin,
   readJson,
@@ -16,8 +17,6 @@ import {
 } from './lib.mjs'
 import { auditPackages } from './audit-packages.mjs'
 import { validateRepository } from './validate-release.mjs'
-
-const NPM_REGISTRY = 'https://registry.npmjs.org/'
 
 function parseArgs(argv) {
   const options = { publish: false }
@@ -86,15 +85,16 @@ export async function verifyArtifactManifest(root, artifacts, expectedPackages) 
     }
     const packedManifest = readPackedManifest(content)
     const issues = packedManifestIssues(record, packedManifest)
-    if (packedManifest.publishConfig !== undefined) {
-      if (
-        packedManifest.publishConfig === null ||
-        typeof packedManifest.publishConfig !== 'object' ||
-        Array.isArray(packedManifest.publishConfig) ||
-        packedManifest.publishConfig.access !== 'public'
-      ) {
-        issues.push(`${record.name}: packed publishConfig.access must be public`)
-      }
+    if (
+      packedManifest.publishConfig === null ||
+      typeof packedManifest.publishConfig !== 'object' ||
+      Array.isArray(packedManifest.publishConfig) ||
+      packedManifest.publishConfig.access !== 'public'
+    ) {
+      issues.push(`${record.name}: packed publishConfig.access must be public`)
+    }
+    if (packedManifest.publishConfig?.registry !== PACKAGE_REGISTRY) {
+      issues.push(`${record.name}: packed publishConfig.registry must be ${PACKAGE_REGISTRY}`)
     }
     if (issues.length > 0) throw new Error(issues.join('\n'))
     files.add(record.file)
@@ -115,7 +115,7 @@ export async function verifyArtifactManifest(root, artifacts, expectedPackages) 
 }
 
 function runNpm(args, options = {}) {
-  const invocation = npmInvocation([...args, '--registry', NPM_REGISTRY])
+  const invocation = npmInvocation([...args, '--registry', PACKAGE_REGISTRY])
   return spawnSync(invocation.command, invocation.args, {
     cwd: options.cwd,
     encoding: 'utf8',

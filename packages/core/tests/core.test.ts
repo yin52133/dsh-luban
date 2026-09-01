@@ -19,7 +19,7 @@ import {
 const temporaryDirectories = new Set<string>()
 
 async function temporaryDirectory(): Promise<string> {
-  const directory = join(tmpdir(), `dsh-luban-core-${randomUUID()}`)
+  const directory = join(tmpdir(), `@yin52133/dsh-luban-core-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   temporaryDirectories.add(directory)
   return directory

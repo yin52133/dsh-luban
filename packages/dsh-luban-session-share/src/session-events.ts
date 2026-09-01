@@ -1,4 +1,4 @@
-import type { SessionEvent, SessionId } from 'dsh-luban-core'
+import type { SessionEvent, SessionId } from '@yin52133/dsh-luban-core'
 import type { SessionStreamEnvelope, SessionView } from './types.js'
 
 type SessionEventInput =

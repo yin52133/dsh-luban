@@ -1,6 +1,12 @@
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { asAccountId, asActorId, asTaskId, type AccountId, type Task } from 'dsh-luban-core'
+import {
+  asAccountId,
+  asActorId,
+  asTaskId,
+  type AccountId,
+  type Task,
+} from '@yin52133/dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { DshSessionBridge, DshSessionInputSink } from '../src/dsh-bridge.js'
 import { SharedSessionRegistry } from '../src/registry.js'

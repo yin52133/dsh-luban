@@ -1,4 +1,4 @@
-# dsh-luban-server-mode
+# @yin52133/dsh-luban-server-mode
 
 Ubuntu-only operations for a persistent DSH build server: a user-level systemd launcher, a
 durable bounded build queue, disk/load/timeout guards, error-log injection, and authenticated
@@ -57,7 +57,7 @@ On Windows and macOS the plugin logs that it is disabled and registers no servic
 Install M01 and M03 first, then add server mode to the Ubuntu profile:
 
 ```sh
-dsh plugin --profile ubuntu-server add dsh-luban-auth dsh-luban-keepalive dsh-luban-server-mode
+dsh plugin --profile ubuntu-server add @yin52133/dsh-luban-auth @yin52133/dsh-luban-keepalive @yin52133/dsh-luban-server-mode
 ```
 
 The host must provide systemd, `loginctl`, tmux, and each compiler referenced by configured build
@@ -176,11 +176,11 @@ downloads are intended to be scoped to the originating M01 `accountId`.
 From the repository root:
 
 ```sh
-pnpm --filter dsh-luban-server-mode typecheck
-pnpm exec eslint packages/dsh-luban-server-mode --max-warnings=0
-pnpm --filter dsh-luban-server-mode test
-pnpm --filter dsh-luban-server-mode build
-pnpm --filter dsh-luban-server-mode pack --dry-run
+pnpm --filter @yin52133/dsh-luban-server-mode typecheck
+pnpm exec eslint packages/@yin52133/dsh-luban-server-mode --max-warnings=0
+pnpm --filter @yin52133/dsh-luban-server-mode test
+pnpm --filter @yin52133/dsh-luban-server-mode build
+pnpm --filter @yin52133/dsh-luban-server-mode pack --dry-run
 ```
 
 Inspect the dry-run file list and built lazy-CJS loader wrapper before publishing.

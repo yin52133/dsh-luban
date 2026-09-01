@@ -7,8 +7,8 @@ import type {
   ChannelKind,
   ExecResult,
   OpenOptions,
-} from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import type { Config, RemoteEndpointConfig } from './config.js'
 import { parseCommandWords } from './command-runner.js'
 import { BoundedAsyncQueue } from './queue.js'

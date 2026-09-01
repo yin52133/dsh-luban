@@ -1,4 +1,4 @@
-import type { ChannelAdapter, ChannelEndpoint, ChannelKind } from 'dsh-luban-core'
+import type { ChannelAdapter, ChannelEndpoint, ChannelKind } from '@yin52133/dsh-luban-core'
 
 export interface EndpointChange {
   readonly kind: ChannelKind

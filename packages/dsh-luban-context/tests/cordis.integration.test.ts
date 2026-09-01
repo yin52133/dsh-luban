@@ -5,8 +5,12 @@ import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type { AccountSessionRegistry, AuthService, TelemetryAggregator } from 'dsh-luban-core'
-import { asSessionId } from 'dsh-luban-core'
+import type {
+  AccountSessionRegistry,
+  AuthService,
+  TelemetryAggregator,
+} from '@yin52133/dsh-luban-core'
+import { asSessionId } from '@yin52133/dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import plugin from '../src/index.js'
 import { ALICE, BOB, memoryAccountSessions } from './account-sessions.js'

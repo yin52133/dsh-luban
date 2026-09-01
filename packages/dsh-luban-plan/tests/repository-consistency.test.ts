@@ -2,8 +2,8 @@ import type * as FsPromises from 'node:fs/promises'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AccountId, Clock } from 'dsh-luban-core'
-import { LubanError, asAccountId } from 'dsh-luban-core'
+import type { AccountId, Clock } from '@yin52133/dsh-luban-core'
+import { LubanError, asAccountId } from '@yin52133/dsh-luban-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const failures = vi.hoisted(() => ({

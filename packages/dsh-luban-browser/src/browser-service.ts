@@ -10,8 +10,8 @@ import type {
   BrowserSession,
   BrowserTaskSpec,
   BrowserTemplate,
-} from 'dsh-luban-core'
-import { asAccountId } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import { AsyncQueue } from './async-queue.js'
 import type { ResolvedConfig } from './config.js'
 import { isUnrestrictedDomainPattern } from './domain-policy.js'

@@ -7,8 +7,8 @@ import type {
   BrowserResult,
   BrowserSession,
   BrowserTaskSpec,
-} from 'dsh-luban-core'
-import { asAccountId } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BrowserService } from '../src/browser-service.js'
 import { resolveConfig } from '../src/config.js'

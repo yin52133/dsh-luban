@@ -1,7 +1,7 @@
 # Windows-only host plugin. The web client is discovered through dsh.client.
 - insert:
     - id: luban-win-debug
-      name: dsh-luban-win-debug
+      name: '@yin52133/dsh-luban-win-debug'
       config:
         serial:
           defaultBaud: 115200

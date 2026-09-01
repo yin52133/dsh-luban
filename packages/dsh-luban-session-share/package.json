@@ -1,5 +1,5 @@
 {
-  "name": "dsh-luban-session-share",
+  "name": "@yin52133/dsh-luban-session-share",
   "version": "0.1.0",
   "description": "Authenticated cross-host DSH session views and exclusive takeover",
   "type": "module",
@@ -35,7 +35,8 @@
     "dsh": ">=0.1.1-rc.1"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
   },
   "repository": {
     "type": "git",
@@ -44,7 +45,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "dsh-luban-core": "workspace:^"
+    "@yin52133/dsh-luban-core": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

@@ -11,8 +11,8 @@ import type {
   IssuedSession,
   SessionId,
   VerifyResult,
-} from 'dsh-luban-core'
-import { asAccountId, asActorId } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { asAccountId, asActorId } from '@yin52133/dsh-luban-core'
 import type { AuthManager } from './auth-manager.js'
 import {
   AUTH_COOKIE_NAME,

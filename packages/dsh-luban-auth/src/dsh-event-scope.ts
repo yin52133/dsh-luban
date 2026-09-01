@@ -1,4 +1,4 @@
-import { LubanError, asSessionId, type AccountId, type SessionId } from 'dsh-luban-core'
+import { LubanError, asSessionId, type AccountId, type SessionId } from '@yin52133/dsh-luban-core'
 
 export type DshEventChannel = 'mux' | 'host'
 

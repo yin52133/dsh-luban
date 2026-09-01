@@ -9,8 +9,8 @@ import type {
   SessionId,
   SessionRegistry,
   TaskStore,
-} from 'dsh-luban-core'
-import { LubanError, asAccountId, asActorId, modulePrefix } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError, asAccountId, asActorId, modulePrefix } from '@yin52133/dsh-luban-core'
 import {
   Config as ConfigSchema,
   type Config as SessionShareConfig,

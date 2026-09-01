@@ -1,9 +1,9 @@
 import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
-import { standardConfigSchema } from 'dsh-luban-core'
+import { standardConfigSchema } from '@yin52133/dsh-luban-core'
 import type { ToolId } from './types.js'
 
-export type { StandardConfigSchema } from 'dsh-luban-core'
+export type { StandardConfigSchema } from '@yin52133/dsh-luban-core'
 
 export interface RemoteEndpointConfig {
   readonly id: string

@@ -3,8 +3,13 @@ import type { AddressInfo } from 'node:net'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AccountId, AuthMiddlewareRequest, AuthService, SessionId } from 'dsh-luban-core'
-import { asAccountId } from 'dsh-luban-core'
+import type {
+  AccountId,
+  AuthMiddlewareRequest,
+  AuthService,
+  SessionId,
+} from '@yin52133/dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ImagePasteHttpApi } from '../src/http-api.js'
 import { AttachmentRepository } from '../src/repository.js'

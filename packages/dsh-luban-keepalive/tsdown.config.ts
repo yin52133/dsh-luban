@@ -14,5 +14,5 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  deps: { neverBundle: [/^@deepseek-ai\//u, /^dsh-luban-core$/u] },
+  deps: { neverBundle: [/^@deepseek-ai\//u, /^@yin52133\/dsh-luban-core$/u] },
 })

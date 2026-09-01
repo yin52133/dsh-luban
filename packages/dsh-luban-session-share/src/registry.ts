@@ -14,8 +14,8 @@ import type {
   TakeoverResult,
   TaskId,
   Unsubscribe,
-} from 'dsh-luban-core'
-import { LubanError, systemClock } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError, systemClock } from '@yin52133/dsh-luban-core'
 import type { PeerConfig } from './config.js'
 import { SessionEventLog } from './session-events.js'
 import type {

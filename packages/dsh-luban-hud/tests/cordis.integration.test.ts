@@ -5,8 +5,14 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
-import type { AccountId, AuthService, Task, TaskCreateInput, TaskStore } from 'dsh-luban-core'
-import { asAccountId, asSessionId, asTaskId } from 'dsh-luban-core'
+import type {
+  AccountId,
+  AuthService,
+  Task,
+  TaskCreateInput,
+  TaskStore,
+} from '@yin52133/dsh-luban-core'
+import { asAccountId, asSessionId, asTaskId } from '@yin52133/dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import * as plugin from '../src/index.js'
 import type { AccountTelemetryProvider } from '../src/aggregator.js'

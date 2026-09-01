@@ -1,6 +1,6 @@
 - insert:
     - id: luban-auth
-      name: dsh-luban-auth
+      name: '@yin52133/dsh-luban-auth'
       config:
         host: 0.0.0.0
         port: 42600

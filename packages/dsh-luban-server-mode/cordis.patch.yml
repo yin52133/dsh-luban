@@ -1,7 +1,7 @@
 # Ubuntu-only server operations. The plugin logs a disabled notice elsewhere.
 - insert:
     - id: luban-server-mode
-      name: dsh-luban-server-mode
+      name: '@yin52133/dsh-luban-server-mode'
       config:
         service:
           name: dsh-luban

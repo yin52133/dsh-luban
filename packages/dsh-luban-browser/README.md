@@ -1,4 +1,4 @@
-# dsh-luban-browser
+# @yin52133/dsh-luban-browser
 
 Authenticated browser automation for DeepSeek Harness, backed by the unmodified
 `browser-use==0.13.8` Python package. The plugin owns only a thin JSONL adapter,
@@ -21,7 +21,7 @@ its own `pyproject.toml` and `uv.lock`; the plugin creates its environment on th
 first run and does not install into global Python.
 
 ```powershell
-pnpm add dsh-luban-browser
+pnpm add @yin52133/dsh-luban-browser
 ```
 
 The integration is tested against DSH `0.1.1-rc.2`, Node.js 22.19+, Python 3.12,
@@ -46,7 +46,7 @@ The integration is tested against DSH `0.1.1-rc.2`, Node.js 22.19+, Python 3.12,
 ```yaml
 - insert:
     - id: luban-browser
-      name: dsh-luban-browser
+      name: @yin52133/dsh-luban-browser
       config:
         kernel: auto # auto | chrome | edge | chromium-headless
         templatesDir: ~/.dsh/luban/browser/templates
@@ -121,7 +121,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:18080/luban-browser/jobs `
 
 M11 never imports the M02 implementation. When `taskboard.autoRun` is enabled,
 it waits for the `lubanTaskStore` and `lubanAgentClaim` Cordis services defined
-by the `dsh-luban-core` contracts. A claimed task is eligible only when all of the
+by the `@yin52133/dsh-luban-core` contracts. A claimed task is eligible only when all of the
 following hold:
 
 - tags include `browser` and `auto-ok`;

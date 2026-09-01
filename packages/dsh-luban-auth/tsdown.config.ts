@@ -11,6 +11,10 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   deps: {
-    neverBundle: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-host-webserver', 'dsh-luban-core'],
+    neverBundle: [
+      '@deepseek-ai/cordis',
+      '@deepseek-ai/dsh-host-webserver',
+      '@yin52133/dsh-luban-core',
+    ],
   },
 })

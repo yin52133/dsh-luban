@@ -14,8 +14,8 @@ import type {
   SessionId,
   Task,
   TaskId,
-} from 'dsh-luban-core'
-import { LubanError, asActorId, asSessionId } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError, asActorId, asSessionId } from '@yin52133/dsh-luban-core'
 import type { SharedSessionRegistry } from './registry.js'
 import type { SessionInputSink } from './types.js'
 

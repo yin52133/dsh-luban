@@ -1,7 +1,7 @@
 # Add the Taskboard host once. The browser face is discovered from dsh.client.
 - insert:
     - id: luban-taskboard
-      name: dsh-luban-taskboard
+      name: '@yin52133/dsh-luban-taskboard'
       config:
         store:
           dir: ~/.dsh/luban/taskboard

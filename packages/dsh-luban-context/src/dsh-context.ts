@@ -10,8 +10,8 @@ import type {
   ContextSegment,
   SessionRef,
   TelemetryAggregator,
-} from 'dsh-luban-core'
-import { LubanError, asSessionId } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError, asSessionId } from '@yin52133/dsh-luban-core'
 import { ContextArchiveRepository } from './archive.js'
 import type { Config } from './config.js'
 import type {

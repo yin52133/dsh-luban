@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http'
-import type { AuthMiddlewareRequest } from 'dsh-luban-core'
+import type { AuthMiddlewareRequest } from '@yin52133/dsh-luban-core'
 import { BrowserError } from './errors.js'
 
 const SECRET_PATTERNS: readonly RegExp[] = [

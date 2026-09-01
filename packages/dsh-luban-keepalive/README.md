@@ -1,4 +1,4 @@
-# dsh-luban-keepalive
+# @yin52133/dsh-luban-keepalive
 
 Cross-platform DSH session persistence with tmux on Ubuntu and Scheduled Tasks
 on Windows.
@@ -16,7 +16,7 @@ on Windows.
 Install authentication first, then add keepalive to the same profile:
 
 ```sh
-dsh plugin --profile web add dsh-luban-auth dsh-luban-keepalive
+dsh plugin --profile web add @yin52133/dsh-luban-auth @yin52133/dsh-luban-keepalive
 ```
 
 Ubuntu requires `tmux`. Windows task registration uses the current user's Task
@@ -27,7 +27,7 @@ Scheduler and does not require a separate service executable.
 ```yaml
 - insert:
     - id: luban-keepalive
-      name: dsh-luban-keepalive
+      name: @yin52133/dsh-luban-keepalive
       config:
         ledgerDir: ~/.dsh/luban/keepalive
         patrolIntervalSec: 60
@@ -43,7 +43,7 @@ unrelated tmux sessions or Scheduled Tasks.
 ## Service API
 
 The Cordis service key is `lubanKeepalive` and implements `KeepaliveService`
-from `dsh-luban-core`.
+from `@yin52133/dsh-luban-core`.
 
 - `ensureAlive(spec)` starts or reconnects a managed session.
 - `saveCheckpoint(checkpoint)` records the next resumable step.
@@ -76,9 +76,9 @@ Task Scheduler.
 ## Development
 
 ```sh
-pnpm --filter dsh-luban-keepalive typecheck
-pnpm --filter dsh-luban-keepalive test
-pnpm --filter dsh-luban-keepalive build
+pnpm --filter @yin52133/dsh-luban-keepalive typecheck
+pnpm --filter @yin52133/dsh-luban-keepalive test
+pnpm --filter @yin52133/dsh-luban-keepalive build
 ```
 
 ## License

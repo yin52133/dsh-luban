@@ -1,4 +1,4 @@
-import { asAccountId } from 'dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import { describe, expect, it } from 'vitest'
 import { DshSessionOperationBarrier } from '../src/dsh-session-operation-barrier.js'
 

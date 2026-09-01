@@ -6,7 +6,7 @@ import type {
   ManagedSession,
   SessionSpec,
   TaskId,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import {
   asAccountId,
   asHostId,
@@ -14,7 +14,7 @@ import {
   AtomicJsonStore,
   LubanError,
   systemClock,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import { managedSessionId } from './session-id.js'
 
 export interface KeepaliveRecord {

@@ -1,4 +1,4 @@
-import type { AccountId, TelemetrySnapshot } from 'dsh-luban-core'
+import type { AccountId, TelemetrySnapshot } from '@yin52133/dsh-luban-core'
 import type { HudDisplayField, HudThresholds } from './config.js'
 
 export const HUD_TELEMETRY_EVENT = 'luban.telemetry.snapshot' as const

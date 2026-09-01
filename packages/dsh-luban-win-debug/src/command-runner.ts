@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { LubanError } from 'dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import { BoundedAsyncQueue } from './queue.js'
 import type {
   CommandOptions,

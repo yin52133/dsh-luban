@@ -11,9 +11,9 @@ import type {
   TaskOutput,
   TaskProgress,
   TaskStore,
-} from 'dsh-luban-core'
-import { asAccountId, asActorId, asSessionId, asTaskId } from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { asAccountId, asActorId, asSessionId, asTaskId } from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { BrowserTaskboardAutomation } from '../src/taskboard-automation.js'
 import type { BrowserJobRequest, BrowserJobSnapshot, BrowserQueue } from '../src/types.js'

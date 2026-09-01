@@ -1,5 +1,5 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { IngestedImage, SessionId } from 'dsh-luban-core'
+import type { IngestedImage, SessionId } from '@yin52133/dsh-luban-core'
 
 export type ImageSource = IngestedImage['source']
 export type ImageMime = 'image/png' | 'image/jpeg' | 'image/webp'

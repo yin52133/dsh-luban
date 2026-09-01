@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
-import { LubanError, redactSecrets } from 'dsh-luban-core'
+import { LubanError, redactSecrets } from '@yin52133/dsh-luban-core'
 import type { ManagedProcessEvent } from './types.js'
 
 const MCP_PROTOCOL_VERSION = '2024-11-05'

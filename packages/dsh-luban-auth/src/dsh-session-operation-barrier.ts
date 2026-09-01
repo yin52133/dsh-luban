@@ -1,4 +1,4 @@
-import type { AccountId } from 'dsh-luban-core'
+import type { AccountId } from '@yin52133/dsh-luban-core'
 
 interface AccountBarrierState {
   readonly active: Set<symbol>

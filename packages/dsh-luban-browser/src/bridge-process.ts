@@ -2,7 +2,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
-import type { BrowserEvent, BrowserProfile, BrowserResult, BrowserSession } from 'dsh-luban-core'
+import type {
+  BrowserEvent,
+  BrowserProfile,
+  BrowserResult,
+  BrowserSession,
+} from '@yin52133/dsh-luban-core'
 import { AsyncQueue } from './async-queue.js'
 import type { ResolvedConfig } from './config.js'
 import { BrowserError, type BrowserErrorCode } from './errors.js'

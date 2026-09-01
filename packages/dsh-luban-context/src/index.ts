@@ -1,8 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { AuthService, TelemetryAggregator } from 'dsh-luban-core'
-import { LubanError, modulePrefix, systemClock } from 'dsh-luban-core'
+import type { AuthService, TelemetryAggregator } from '@yin52133/dsh-luban-core'
+import { LubanError, modulePrefix, systemClock } from '@yin52133/dsh-luban-core'
 import { Config as ConfigSchema, type Config as ContextConfig, parseConfig } from './config.js'
 import {
   DshCompactionContextFactory,

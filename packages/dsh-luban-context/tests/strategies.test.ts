@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ContextSegment } from 'dsh-luban-core'
+import type { ContextSegment } from '@yin52133/dsh-luban-core'
 import {
   partitionRecent,
   SummarizeStrategy,

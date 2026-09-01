@@ -1,6 +1,6 @@
-# dsh-luban-auth
+# @yin52133/dsh-luban-auth
 
-`dsh-luban-auth` provides simple local-account login for a DSH Web deployment.
+`@yin52133/dsh-luban-auth` provides simple local-account login for a DSH Web deployment.
 It authenticates HTTP, SSE, and WebSocket traffic and supplies the account
 identity used to isolate Luban data and DSH session context.
 
@@ -21,7 +21,7 @@ protect the service from hostile clients on the same network.
 Add the package to the Web profile before every business plugin:
 
 ```sh
-dsh plugin --profile web add dsh-luban-auth
+dsh plugin --profile web add @yin52133/dsh-luban-auth
 ```
 
 Bind the built-in DSH WebServer to loopback (the default example upstream is
@@ -34,7 +34,7 @@ listening port matches the configured upstream port.
 ```yaml
 - insert:
     - id: luban-auth
-      name: dsh-luban-auth
+      name: @yin52133/dsh-luban-auth
       config:
         host: 0.0.0.0
         port: 42600

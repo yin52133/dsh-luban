@@ -30,12 +30,13 @@
     "dsh": __DSH_ENGINE_JSON__
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yin52133/dsh-luban.git",
-    "directory": "packages/__PACKAGE_NAME__"
+    "directory": "packages/__PACKAGE_DIRECTORY_NAME__"
   },
   "license": "MIT",
   "dsh": {

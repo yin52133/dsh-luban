@@ -1,7 +1,7 @@
 import { hostname } from 'node:os'
-import { asHostId, standardConfigSchema, type HostId } from 'dsh-luban-core'
+import { asHostId, standardConfigSchema, type HostId } from '@yin52133/dsh-luban-core'
 
-export type { StandardConfigSchema } from 'dsh-luban-core'
+export type { StandardConfigSchema } from '@yin52133/dsh-luban-core'
 
 export interface PeerConfig {
   readonly name: string

@@ -6,8 +6,8 @@ import type {
   BuildJobInput,
   ResourceReport,
   Unsubscribe,
-} from 'dsh-luban-core'
-import { LubanError, asSessionId } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError, asSessionId } from '@yin52133/dsh-luban-core'
 import type { BuildAlertSink } from './alerts.js'
 import type { ArtifactManager } from './artifacts.js'
 import type { BuildTemplateConfig } from './config.js'

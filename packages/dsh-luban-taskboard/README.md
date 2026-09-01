@@ -1,4 +1,4 @@
-# dsh-luban-taskboard
+# @yin52133/dsh-luban-taskboard
 
 Durable six-column work queue for people and DSH agents. The Web board, `taskctl`,
 the importer, and autonomous scheduler all use one authenticated API and one
@@ -14,7 +14,7 @@ atomically written JSON ledger.
   stale/forged drag data, and use a synchronous board-wide lock to prevent rapid
   duplicate submissions before the disabled state renders.
 - Direct links from each task card to authenticated Plan documents associated by
-  the shared `taskId` contract when `dsh-luban-plan` is installed.
+  the shared `taskId` contract when `@yin52133/dsh-luban-plan` is installed.
 - Atomic agent claiming, acceptance criteria, session binding, progress and
   output records, and human review of `autoDone` work.
 - Bounded SSE replay with a full baseline after an event gap.
@@ -34,11 +34,11 @@ Install the authentication boundary first, then add this plugin to the same DSH
 profile:
 
 ```sh
-dsh plugin --profile web add dsh-luban-auth dsh-luban-taskboard
+dsh plugin --profile web add @yin52133/dsh-luban-auth @yin52133/dsh-luban-taskboard
 ```
 
 Keep the DSH WebServer on loopback and access the profile through the
-`dsh-luban-auth` sidecar. The taskboard route is `/luban-taskboard`; the browser
+`@yin52133/dsh-luban-auth` sidecar. The taskboard route is `/luban-taskboard`; the browser
 section appears under Settings as **Taskboard**.
 
 ## Configuration
@@ -46,7 +46,7 @@ section appears under Settings as **Taskboard**.
 ```yaml
 - insert:
     - id: luban-taskboard
-      name: dsh-luban-taskboard
+      name: @yin52133/dsh-luban-taskboard
       config:
         store: { dir: ~/.dsh/luban/taskboard }
         hostScope: auto

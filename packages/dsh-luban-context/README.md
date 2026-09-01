@@ -1,4 +1,4 @@
-# dsh-luban-context
+# @yin52133/dsh-luban-context
 
 Auditable context compaction for DSH. The plugin compacts only at an idle turn boundary, keeps recent messages verbatim, preserves decisions and constraints in a summary, and writes exact older source into searchable workspace-local virtual files.
 
@@ -20,7 +20,7 @@ Auditable context compaction for DSH. The plugin compacts only at an idle turn b
 | DSH       | `0.1.1-rc.2` validation baseline (`engines.dsh` accepts compatible `>=0.1.1-rc.1`) |
 | Platforms | Windows and Linux                                                                  |
 
-No production package is added beyond `dsh-luban-core`. The plugin consumes `lubanTelemetry` and `lubanAuth` only through their core contracts and provides `lubanCompaction`.
+No production package is added beyond `@yin52133/dsh-luban-core`. The plugin consumes `lubanTelemetry` and `lubanAuth` only through their core contracts and provides `lubanCompaction`.
 
 ## Platform Support
 
@@ -30,7 +30,7 @@ No production package is added beyond `dsh-luban-core`. The plugin consumes `lub
 
 ## Installation
 
-Add `dsh-luban-context` to a profile after the agent runtime, `dsh-luban-auth`, and the M07 telemetry provider, then merge `cordis.patch.yml`.
+Add `@yin52133/dsh-luban-context` to a profile after the agent runtime, `@yin52133/dsh-luban-auth`, and the M07 telemetry provider, then merge `cordis.patch.yml`.
 
 ## Demo
 
@@ -51,7 +51,7 @@ The first two responses expose the chosen strategy, token estimates, compaction 
 ```yaml
 - insert:
     - id: luban-context
-      name: dsh-luban-context
+      name: @yin52133/dsh-luban-context
       config:
         trigger: { ratio: 0.80, minGapRounds: 4 }
         strategy: summarize+virtualfile
@@ -108,10 +108,10 @@ idempotent while preserving older generations that reused the same temporary sur
 From the repository root:
 
 ```sh
-pnpm --filter dsh-luban-context typecheck
-pnpm exec eslint packages/dsh-luban-context --max-warnings=0
-pnpm --filter dsh-luban-context test
-pnpm --filter dsh-luban-context build
+pnpm --filter @yin52133/dsh-luban-context typecheck
+pnpm exec eslint packages/@yin52133/dsh-luban-context --max-warnings=0
+pnpm --filter @yin52133/dsh-luban-context test
+pnpm --filter @yin52133/dsh-luban-context build
 ```
 
 ## Version history

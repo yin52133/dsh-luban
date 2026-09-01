@@ -8,7 +8,7 @@ import type {
   TaskId,
   TaskPatch,
   TaskStatus,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import {
   LubanError,
   asAccountId,
@@ -23,7 +23,7 @@ import {
   sendJson,
   sendNoContent,
   setPrivateResponseHeaders as securityHeaders,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import type { DefaultAgentClaimService } from './claim-service.js'
 import type { DefaultNightScheduler } from './night-scheduler.js'
 import type { ImportTask, JsonTaskStore } from './task-store.js'

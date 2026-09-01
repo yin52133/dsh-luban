@@ -2,8 +2,21 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AccountId, AccountSessionRegistry, Clock, Task, TaskStore } from 'dsh-luban-core'
-import { LubanError, asAccountId, asActorId, asPlanId, asSessionId, asTaskId } from 'dsh-luban-core'
+import type {
+  AccountId,
+  AccountSessionRegistry,
+  Clock,
+  Task,
+  TaskStore,
+} from '@yin52133/dsh-luban-core'
+import {
+  LubanError,
+  asAccountId,
+  asActorId,
+  asPlanId,
+  asSessionId,
+  asTaskId,
+} from '@yin52133/dsh-luban-core'
 import { PlanRepository } from '../src/repository.js'
 import type { AccountActor, PlanFeedbackEvent } from '../src/service.js'
 import { FilePlanService } from '../src/service.js'

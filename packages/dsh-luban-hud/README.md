@@ -1,4 +1,4 @@
-# dsh-luban-hud
+# @yin52133/dsh-luban-hud
 
 An authenticated, always-visible DSH telemetry HUD backed by concurrent, pluggable providers. It shows context capacity, workspace, model/reasoning effort, and token/request rates designed for later billing reconciliation in the Web shell and CLI.
 
@@ -22,22 +22,22 @@ select or override an account.
 
 ## Installation
 
-Install after the rc2 agent/Web runtime and `dsh-luban-auth`, then apply the bundled patch:
+Install after the rc2 agent/Web runtime and `@yin52133/dsh-luban-auth`, then apply the bundled patch:
 
 ```sh
-dsh plugin --profile default add dsh-luban-hud
+dsh plugin --profile default add @yin52133/dsh-luban-hud
 ```
 
-The host provides `lubanTelemetry`; M08 can inject that Core contract and request one exact live session without replacing or publishing the cached HUD snapshot. If `lubanTaskStore` appears before or after HUD startup, Cordis dynamically connects the critical-alert sink; the dependency remains optional. No production dependency is added beyond `dsh-luban-core`.
+The host provides `lubanTelemetry`; M08 can inject that Core contract and request one exact live session without replacing or publishing the cached HUD snapshot. If `lubanTaskStore` appears before or after HUD startup, Cordis dynamically connects the critical-alert sink; the dependency remains optional. No production dependency is added beyond `@yin52133/dsh-luban-core`.
 
 For development, run package-scoped gates from the repository root:
 
 ```sh
-pnpm --filter dsh-luban-hud typecheck
-pnpm exec eslint packages/dsh-luban-hud --max-warnings=0
-pnpm --filter dsh-luban-hud test
-pnpm --filter dsh-luban-hud build
-pnpm --filter dsh-luban-hud pack --dry-run
+pnpm --filter @yin52133/dsh-luban-hud typecheck
+pnpm exec eslint packages/@yin52133/dsh-luban-hud --max-warnings=0
+pnpm --filter @yin52133/dsh-luban-hud test
+pnpm --filter @yin52133/dsh-luban-hud build
+pnpm --filter @yin52133/dsh-luban-hud pack --dry-run
 ```
 
 ## Configuration
@@ -47,7 +47,7 @@ All options and defaults are shown below:
 ```yaml
 - insert:
     - id: luban-hud
-      name: dsh-luban-hud
+      name: @yin52133/dsh-luban-hud
       config:
         refreshSec: 1
         thresholds: { warn: 0.70, danger: 0.85, critical: 0.95 }

@@ -1,6 +1,6 @@
-import { standardConfigSchema } from 'dsh-luban-core'
+import { standardConfigSchema } from '@yin52133/dsh-luban-core'
 
-export type { StandardConfigSchema } from 'dsh-luban-core'
+export type { StandardConfigSchema } from '@yin52133/dsh-luban-core'
 
 export const HUD_FIELDS = ['context', 'workspace', 'model', 'thinking', 'tpm', 'rpm'] as const
 

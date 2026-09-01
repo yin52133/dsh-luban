@@ -1,4 +1,4 @@
-import { LubanError, asAccountId, type AccountId } from 'dsh-luban-core'
+import { LubanError, asAccountId, type AccountId } from '@yin52133/dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { DshEventScope, type DshEventChannel } from '../src/dsh-event-scope.js'
 

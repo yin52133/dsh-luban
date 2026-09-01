@@ -1,5 +1,5 @@
-import type { Plan, PlanSections } from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+import type { Plan, PlanSections } from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 
 export const PLAN_SECTION_LABELS = Object.freeze({
   background: '1. Background / Requirement',

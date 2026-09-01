@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AccountContext, AccountId, AuthService, SessionId } from 'dsh-luban-core'
-import { LubanError, asSessionId, isLubanError, modulePrefix } from 'dsh-luban-core'
+import type { AccountContext, AccountId, AuthService, SessionId } from '@yin52133/dsh-luban-core'
+import { LubanError, asSessionId, isLubanError, modulePrefix } from '@yin52133/dsh-luban-core'
 import { normalizeDeclaredMime } from './image-format.js'
 import type { FileImageIngestService } from './service.js'
 import type { ImageSource, InjectStyle, StoredImage } from './types.js'

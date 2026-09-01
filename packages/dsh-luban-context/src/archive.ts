@@ -23,8 +23,8 @@ import type {
   ContextSegment,
   JsonCodec,
   SessionId,
-} from 'dsh-luban-core'
-import { AtomicJsonStore, LubanError, asAccountId, asSessionId } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { AtomicJsonStore, LubanError, asAccountId, asSessionId } from '@yin52133/dsh-luban-core'
 
 export interface ArchiveIndexEntry {
   readonly accountId: AccountId

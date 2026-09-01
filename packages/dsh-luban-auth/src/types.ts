@@ -1,4 +1,4 @@
-import type { AccountId, ActorId, Clock } from 'dsh-luban-core'
+import type { AccountId, ActorId, Clock } from '@yin52133/dsh-luban-core'
 
 export const AUTH_COOKIE_NAME = 'luban_session'
 export const CSRF_COOKIE_NAME = 'luban_csrf'

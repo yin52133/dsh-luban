@@ -1,5 +1,5 @@
-import type { Task, TaskCreateInput, TaskStore, TelemetrySnapshot } from 'dsh-luban-core'
-import { asAccountId, asTaskId } from 'dsh-luban-core'
+import type { Task, TaskCreateInput, TaskStore, TelemetrySnapshot } from '@yin52133/dsh-luban-core'
+import { asAccountId, asTaskId } from '@yin52133/dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { TaskboardHudAlertSink } from '../src/alerts.js'
 import { HudKeepaliveHealthStore } from '../src/keepalive-health.js'

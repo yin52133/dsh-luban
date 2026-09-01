@@ -1,4 +1,4 @@
 - insert:
     - id: luban-browser
-      name: dsh-luban-browser
+      name: '@yin52133/dsh-luban-browser'
       config: {}

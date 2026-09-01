@@ -7,7 +7,7 @@ describe('HUD package contract', (): void => {
       await readFile(new URL('../package.json', import.meta.url), 'utf8'),
     ) as Readonly<Record<string, unknown>>
     expect(manifest).toMatchObject({
-      name: 'dsh-luban-hud',
+      name: '@yin52133/dsh-luban-hud',
       files: ['dist/', 'cordis.patch.yml', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
       engines: { node: '^22.19.0 || >=24.0.0', dsh: '>=0.1.1-rc.1' },
       exports: {
@@ -24,7 +24,7 @@ describe('HUD package contract', (): void => {
     expect(JSON.stringify(manifest)).not.toContain('dsh-luban-context')
     const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
     expect(patch).toContain('id: luban-hud')
-    expect(patch).toContain('name: dsh-luban-hud')
+    expect(patch).toContain("name: '@yin52133/dsh-luban-hud'")
     const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
     for (const heading of [
       'Features',

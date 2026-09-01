@@ -1,5 +1,10 @@
-import type { AccountId, AccountSessionRegistry, ExecResult, SessionId } from 'dsh-luban-core'
-import { asAccountId } from 'dsh-luban-core'
+import type {
+  AccountId,
+  AccountSessionRegistry,
+  ExecResult,
+  SessionId,
+} from '@yin52133/dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import { vi } from 'vitest'
 import { parseConfig, type Config } from '../src/config.js'
 import { BoundedAsyncQueue } from '../src/queue.js'

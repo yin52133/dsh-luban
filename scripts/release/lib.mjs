@@ -8,7 +8,9 @@ import { gunzipSync } from 'node:zlib'
 export const RELEASE_DIR = dirname(fileURLToPath(import.meta.url))
 export const REPOSITORY_ROOT = resolve(RELEASE_DIR, '..', '..')
 export const POLICY_PATH = join(RELEASE_DIR, 'policy.json')
-export const CORE_PACKAGE_NAME = 'dsh-luban-core'
+export const PACKAGE_SCOPE = '@yin52133/'
+export const PACKAGE_REGISTRY = 'https://npm.pkg.github.com'
+export const CORE_PACKAGE_NAME = `${PACKAGE_SCOPE}dsh-luban-core`
 
 export async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf8'))

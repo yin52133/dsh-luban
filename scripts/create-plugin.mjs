@@ -10,6 +10,7 @@ const REPOSITORY_ROOT = resolve(SCRIPT_DIR, '..')
 const DEFAULT_TEMPLATE_ROOT = resolve(REPOSITORY_ROOT, 'templates', 'plugin')
 const MODULE_NAME = /^[a-z0-9][a-z0-9-]*$/
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+const PACKAGE_SCOPE = '@yin52133/'
 
 const HOST_FILES = new Map([
   ['package.host.json.tpl', 'package.json'],
@@ -162,10 +163,12 @@ export async function generatePlugin(input) {
   const safeTarget = await safeChildPath(workspaceRoot, target, 'Plugin output')
   await assertAvailableTarget(safeTarget.target)
 
-  const packageName = `dsh-luban-${name}`
+  const packageDirectoryName = `dsh-luban-${name}`
+  const packageName = `${PACKAGE_SCOPE}${packageDirectoryName}`
   const pluginId = `luban-${name}`
   const values = {
     MODULE_NAME: name,
+    PACKAGE_DIRECTORY_NAME: packageDirectoryName,
     PACKAGE_NAME: packageName,
     PACKAGE_NAME_JSON: JSON.stringify(packageName),
     PLUGIN_ID: pluginId,

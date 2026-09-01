@@ -1,7 +1,7 @@
 # Add the authenticated telemetry host. The Web status bar is discovered from dsh.client.
 - insert:
     - id: luban-hud
-      name: dsh-luban-hud
+      name: '@yin52133/dsh-luban-hud'
       config:
         refreshSec: 1
         thresholds: { warn: 0.70, danger: 0.85, critical: 0.95 }

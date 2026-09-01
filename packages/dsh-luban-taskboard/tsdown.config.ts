@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsdown'
 
-const sharedExternals = [/^@deepseek-ai\//u, /^dsh-luban-core$/u, /^react(?:\/|$)/u]
+const sharedExternals = [/^@deepseek-ai\//u, /^@yin52133\/dsh-luban-core$/u, /^react(?:\/|$)/u]
 
 export default defineConfig([
   {
@@ -34,7 +34,8 @@ export default defineConfig([
         !sharedExternals.some((pattern): boolean => pattern.test(specifier)),
     },
     outputOptions: {
-      banner: "window.__ModuleLoader__.load({ id: 'dsh-luban-taskboard', factory: (require) => {",
+      banner:
+        "window.__ModuleLoader__.load({ id: '@yin52133/dsh-luban-taskboard', factory: (require) => {",
       footer: 'return module.exports; } });',
       intro: 'var module = { exports: {} }; var exports = module.exports;',
       sourcemapExcludeSources: false,

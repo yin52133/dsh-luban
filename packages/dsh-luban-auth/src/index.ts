@@ -1,6 +1,6 @@
 import { type Context } from '@deepseek-ai/cordis'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
-import { systemClock } from 'dsh-luban-core'
+import { systemClock } from '@yin52133/dsh-luban-core'
 import { JsonlAuditLogger } from './audit.js'
 import { AuthManager } from './auth-manager.js'
 import { Config, expandHomePath, localHostnames, parseUpstream } from './config.js'

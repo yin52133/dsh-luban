@@ -6,7 +6,7 @@ import type {
   ChannelKind,
   ExecResult,
   SnippetFile,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 
 export type ToolId =
   'openocd' | 'jlink' | 'esptool' | 'stm32cubeprogrammer' | 'gdb' | 'adb' | 'fastboot' | 'ssh'

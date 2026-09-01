@@ -8,8 +8,8 @@ import type {
   TaskStore,
   TelemetryAggregator,
   TelemetrySnapshot,
-} from 'dsh-luban-core'
-import { asSessionId, LubanError, modulePrefix, systemClock } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { asSessionId, LubanError, modulePrefix, systemClock } from '@yin52133/dsh-luban-core'
 import { DefaultTelemetryAggregator } from './aggregator.js'
 import { TaskboardHudAlertSink } from './alerts.js'
 import { Config as ConfigSchema, type Config as HudConfig, parseConfig } from './config.js'

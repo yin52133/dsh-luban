@@ -14,8 +14,8 @@ import type {
   SessionId,
   TaskStore,
   Unsubscribe,
-} from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import { ApprovalPlanGuard } from './guard.js'
 import type { StoredPlan } from './repository.js'
 import type { PlanRepository } from './repository.js'
@@ -55,7 +55,7 @@ interface PlanFeedbackDetail {
 
 type PlanFeedbackListener = (event: PlanFeedbackEvent) => void | Promise<void>
 
-export type { AccountActor, AccountPlanInput } from 'dsh-luban-core'
+export type { AccountActor, AccountPlanInput } from '@yin52133/dsh-luban-core'
 
 export interface PlanServiceWithFeedback extends PlanService {
   initialize(): Promise<void>

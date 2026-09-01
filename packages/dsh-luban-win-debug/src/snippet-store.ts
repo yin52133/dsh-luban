@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import type { AccountId, ChannelEndpoint } from 'dsh-luban-core'
-import { LubanError, redactSecrets } from 'dsh-luban-core'
+import type { AccountId, ChannelEndpoint } from '@yin52133/dsh-luban-core'
+import { LubanError, redactSecrets } from '@yin52133/dsh-luban-core'
 import type { Config } from './config.js'
 import type { AccountSnippetFile } from './types.js'
 

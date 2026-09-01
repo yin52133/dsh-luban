@@ -8,8 +8,8 @@ import type {
   ManagedSession,
   SessionSpec,
   Unsubscribe,
-} from 'dsh-luban-core'
-import { LubanError, systemClock } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError, systemClock } from '@yin52133/dsh-luban-core'
 import type { KeepaliveAlertSink } from './alerts.js'
 import type { KeepaliveLedgerStore } from './ledger.js'
 import { managedSessionId } from './session-id.js'

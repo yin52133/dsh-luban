@@ -21,7 +21,7 @@ dsh plugin --profile <profile> add __PACKAGE_NAME__
 ```yaml
 - insert:
     - id: __PLUGIN_ID__
-      name: __PACKAGE_NAME__
+      name: '__PACKAGE_NAME__'
 ```
 
 ## 截图 / 演示

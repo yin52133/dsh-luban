@@ -14,9 +14,9 @@ import type {
   SessionId,
   TaskStatus,
   Unsubscribe,
-} from 'dsh-luban-core'
-import { LubanError, asTaskId, systemClock } from 'dsh-luban-core'
-import type { AtomicJsonStore } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError, asTaskId, systemClock } from '@yin52133/dsh-luban-core'
+import type { AtomicJsonStore } from '@yin52133/dsh-luban-core'
 import type { SchedulerLedger, TaskAuditEntry, TaskLedger } from './ledger.js'
 
 const TRANSITIONS: Readonly<Record<TaskStatus, ReadonlySet<TaskStatus>>> = Object.freeze({

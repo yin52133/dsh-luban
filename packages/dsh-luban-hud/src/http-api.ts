@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AccountContext, AccountId, AuthService } from 'dsh-luban-core'
-import { LubanError, isLubanError, modulePrefix } from 'dsh-luban-core'
+import type { AccountContext, AccountId, AuthService } from '@yin52133/dsh-luban-core'
+import { LubanError, isLubanError, modulePrefix } from '@yin52133/dsh-luban-core'
 import type { DefaultTelemetryAggregator } from './aggregator.js'
 import { HudKeepaliveHealthStore } from './keepalive-health.js'
 import { HUD_TELEMETRY_EVENT } from './types.js'

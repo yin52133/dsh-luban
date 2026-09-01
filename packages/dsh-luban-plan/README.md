@@ -1,4 +1,4 @@
-# dsh-luban-plan
+# @yin52133/dsh-luban-plan
 
 Approval-gated plans for DSH. The plugin persists a strict plan state machine, writes a reviewable Markdown plan into the target workspace, blocks configured execution tools until approval, and sends structured decisions back to the owning agent session.
 
@@ -29,7 +29,7 @@ The host uses the public `ctx.tools.guard()` and `ctx.agents` boundaries. The br
 
 ## Installation
 
-Add `dsh-luban-plan` to the DSH profile, then merge the exported `cordis.patch.yml`. Mount `dsh-luban-auth` in front of the profile; all `/luban-plan/...` routes require `lubanAuth`.
+Add `@yin52133/dsh-luban-plan` to the DSH profile, then merge the exported `cordis.patch.yml`. Mount `@yin52133/dsh-luban-auth` in front of the profile; all `/luban-plan/...` routes require `lubanAuth`.
 
 The plugin provides the cross-module service key `lubanPlan`. If `lubanTaskStore` is present, approving a plan linked to a `todo` task moves that task to `doing`; the packages do not import one another.
 
@@ -63,7 +63,7 @@ The Settings **Plans** page provides the same submit/review flow, lets a reviewe
 ```yaml
 - insert:
     - id: luban-plan
-      name: dsh-luban-plan
+      name: @yin52133/dsh-luban-plan
       config:
         plansDir: docs/plans
         stateFile: ~/.dsh/luban/plan/plans.json
@@ -95,7 +95,7 @@ The DSH Settings page exposes plan submission, plan-document links, approve/reje
 
 ## Persistence and stability
 
-- The local JSON index is atomically replaced with a cross-process lock and rolling backups through `dsh-luban-core`.
+- The local JSON index is atomically replaced with a cross-process lock and rolling backups through `@yin52133/dsh-luban-core`.
 - Plan Markdown is written with private file modes and cannot escape the selected workspace.
 - Existing same-day slug documents are never overwritten.
 - Review routes are authenticated and return no-store/nosniff headers.
@@ -106,10 +106,10 @@ The DSH Settings page exposes plan submission, plan-document links, approve/reje
 From the repository root:
 
 ```sh
-pnpm --filter dsh-luban-plan typecheck
-pnpm exec eslint packages/dsh-luban-plan --max-warnings=0
-pnpm --filter dsh-luban-plan test
-pnpm --filter dsh-luban-plan build
+pnpm --filter @yin52133/dsh-luban-plan typecheck
+pnpm exec eslint packages/@yin52133/dsh-luban-plan --max-warnings=0
+pnpm --filter @yin52133/dsh-luban-plan test
+pnpm --filter @yin52133/dsh-luban-plan build
 ```
 
 ## Version history

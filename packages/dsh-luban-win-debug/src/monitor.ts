@@ -9,8 +9,8 @@ import type {
   OpenOptions,
   SnippetFile,
   SnippetRange,
-} from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import type { SnippetStore } from './snippet-store.js'
 import type { ChannelLine, FilterOptions, ManagedChannel, WinDebugEvent } from './types.js'
 

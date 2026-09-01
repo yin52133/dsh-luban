@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Plan } from 'dsh-luban-core'
-import { asPlanId } from 'dsh-luban-core'
+import type { Plan } from '@yin52133/dsh-luban-core'
+import { asPlanId } from '@yin52133/dsh-luban-core'
 import { parseConfig } from '../src/config.js'
 import { ApprovalPlanGuard } from '../src/guard.js'
 import { bundledTemplate, renderPlanDocument, validateSections } from '../src/template.js'

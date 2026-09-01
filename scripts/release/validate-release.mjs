@@ -8,6 +8,8 @@ import {
   discoverPackages,
   isPublishable,
   loadPolicy,
+  PACKAGE_REGISTRY,
+  PACKAGE_SCOPE,
   parseCommonArgs,
   readJson,
   REPOSITORY_ROOT,
@@ -28,7 +30,7 @@ const SEMVER =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
 function isPluginPackage(name) {
-  return name.startsWith('dsh-luban-') && name !== CORE_PACKAGE_NAME
+  return name.startsWith(`${PACKAGE_SCOPE}dsh-luban-`) && name !== CORE_PACKAGE_NAME
 }
 
 function hasString(value) {
@@ -121,6 +123,8 @@ function validateFiles(manifest, policy, label, issues) {
 
 function validateManifest(manifest, rootVersion, policy, label, issues) {
   if (!hasString(manifest.name)) issues.push(`${label}: name is required`)
+  else if (!String(manifest.name).startsWith(`${PACKAGE_SCOPE}dsh-luban-`))
+    issues.push(`${label}: name must use the ${PACKAGE_SCOPE}dsh-luban-* scope`)
   if (manifest.version !== rootVersion)
     issues.push(`${label}: version ${String(manifest.version)} must equal root ${rootVersion}`)
   if (manifest.license !== 'MIT') issues.push(`${label}: license must be MIT`)
@@ -132,6 +136,10 @@ function validateManifest(manifest, rootVersion, policy, label, issues) {
   if (dshEngineIssue !== undefined) issues.push(`${label}: engines.dsh ${dshEngineIssue}`)
   if (!hasString(manifest.exports?.['./package.json']))
     issues.push(`${label}: exports["./package.json"] is required`)
+  if (manifest.publishConfig?.access !== 'public')
+    issues.push(`${label}: publishConfig.access must be public`)
+  if (manifest.publishConfig?.registry !== PACKAGE_REGISTRY)
+    issues.push(`${label}: publishConfig.registry must be ${PACKAGE_REGISTRY}`)
   validateFiles(manifest, policy, label, issues)
 
   if (isPluginPackage(String(manifest.name))) {

@@ -4,8 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import type { AccountId, Clock, Task, TaskClaim, TaskOutput } from 'dsh-luban-core'
-import { AtomicJsonStore, asAccountId, asActorId, asHostId, asSessionId } from 'dsh-luban-core'
+import type { AccountId, Clock, Task, TaskClaim, TaskOutput } from '@yin52133/dsh-luban-core'
+import {
+  AtomicJsonStore,
+  asAccountId,
+  asActorId,
+  asHostId,
+  asSessionId,
+} from '@yin52133/dsh-luban-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DefaultAgentClaimService } from '../src/claim-service.js'
 import type { NightConfig } from '../src/config.js'

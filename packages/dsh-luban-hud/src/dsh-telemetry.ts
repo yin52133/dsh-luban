@@ -13,8 +13,8 @@ import type {
   SessionId,
   TelemetryProvider,
   TelemetrySnapshot,
-} from 'dsh-luban-core'
-import { asSessionId, systemClock } from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
+import { asSessionId, systemClock } from '@yin52133/dsh-luban-core'
 import { SlidingRateWindow, systemMonotonicClock, type MonotonicClock } from './rate-window.js'
 
 const FIVE_MINUTES_MS = 300_000

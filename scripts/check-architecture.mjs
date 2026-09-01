@@ -6,7 +6,8 @@ import { basename, join, resolve } from 'node:path'
 const root = resolve(import.meta.dirname, '..')
 const packagesDirectory = join(root, 'packages')
 const findings = []
-const corePackageName = 'dsh-luban-core'
+const corePackageName = '@yin52133/dsh-luban-core'
+const packagePrefix = '@yin52133/dsh-luban-'
 const allowedRuntimeDependencies = new Set([
   corePackageName,
   'argon2',
@@ -39,11 +40,11 @@ for (const entry of await readdir(packagesDirectory, { withFileTypes: true })) {
     findings.push(`${corePackageName}: must use the packages/core directory`)
     continue
   }
-  if (!String(manifest.name).startsWith('dsh-luban-')) continue
+  if (!String(manifest.name).startsWith(packagePrefix)) continue
 
-  const suffix = String(manifest.name).slice('dsh-luban-'.length)
+  const suffix = String(manifest.name).slice(packagePrefix.length)
   const expectedId = `luban-${suffix}`
-  if (basename(directory) !== manifest.name) {
+  if (basename(directory) !== `dsh-luban-${suffix}`) {
     findings.push(`${manifest.name}: directory must match package name`)
   }
   if (manifest.dsh?.bundle?.patch !== './cordis.patch.yml') {
@@ -62,14 +63,16 @@ for (const entry of await readdir(packagesDirectory, { withFileTypes: true })) {
   }
 
   const patch = await readFile(join(directory, 'cordis.patch.yml'), 'utf8')
-  if (!patch.includes(`id: ${expectedId}`) || !patch.includes(`name: ${manifest.name}`)) {
+  if (!patch.includes(`id: ${expectedId}`) || !patch.includes(`name: '${manifest.name}'`)) {
     findings.push(`${manifest.name}: cordis patch must use id ${expectedId}`)
   }
   for (const file of await sourceFiles(join(directory, 'src'))) {
     const source = await readFile(file, 'utf8')
     if (/['"`]\/luban\//u.test(source))
       findings.push(`${manifest.name}: legacy /luban/ route in ${file}`)
-    const implementationImport = /from\s+['"]dsh-luban-(?!core['"])[^'"]+['"]/u.exec(source)
+    const implementationImport = /from\s+['"]@yin52133\/dsh-luban-(?!core['"])[^'"]+['"]/u.exec(
+      source,
+    )
     if (implementationImport !== null) {
       findings.push(
         `${manifest.name}: cross-plugin implementation import ${implementationImport[0]}`,

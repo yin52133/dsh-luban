@@ -1,4 +1,4 @@
-import type { Clock, SessionId } from 'dsh-luban-core'
+import type { Clock, SessionId } from '@yin52133/dsh-luban-core'
 import type { Config } from '../src/config.js'
 import { parseConfig } from '../src/config.js'
 import type {

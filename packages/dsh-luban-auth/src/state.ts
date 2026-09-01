@@ -1,4 +1,4 @@
-import type { JsonCodec } from 'dsh-luban-core'
+import type { JsonCodec } from '@yin52133/dsh-luban-core'
 import type { AccountRecord, AuthRole, AuthState, PersistentSession } from './types.js'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u

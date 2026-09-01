@@ -5,7 +5,7 @@ import type {
   AuthService,
   PlanSections,
   PlanStatus,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import {
   LubanError,
   asActorId,
@@ -18,7 +18,7 @@ import {
   readJsonBody,
   sendJson,
   setPrivateResponseHeaders as securityHeaders,
-} from 'dsh-luban-core'
+} from '@yin52133/dsh-luban-core'
 import type { AccountActor, PlanFeedbackEvent, PlanServiceWithFeedback } from './service.js'
 import { bundledTemplate } from './template.js'
 

@@ -1,5 +1,5 @@
-import type { ChannelEndpoint } from 'dsh-luban-core'
-import { LubanError } from 'dsh-luban-core'
+import type { ChannelEndpoint } from '@yin52133/dsh-luban-core'
+import { LubanError } from '@yin52133/dsh-luban-core'
 import type { SerialChannelAdapter } from './serial.js'
 import type { ResolvedInvocation } from './templates.js'
 import type { ManagedChannel } from './types.js'

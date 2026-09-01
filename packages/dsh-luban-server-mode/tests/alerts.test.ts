@@ -1,5 +1,5 @@
-import type { Task, TaskStore } from 'dsh-luban-core'
-import { asAccountId } from 'dsh-luban-core'
+import type { Task, TaskStore } from '@yin52133/dsh-luban-core'
+import { asAccountId } from '@yin52133/dsh-luban-core'
 import { describe, expect, it, vi } from 'vitest'
 import { TaskboardBuildAlertSink } from '../src/alerts.js'
 
