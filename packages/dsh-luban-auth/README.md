@@ -54,8 +54,8 @@ LAN_CIDR=<lan-client-cidr>
 sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
 ```
 
-Other LANs may use ranges such as `192.0.2.0/24` or an allocated `10.x.x.x`
-range. Use the CIDR reported by the router or network administrator. The UFW
+Use the CIDR reported by the router or network administrator, and do not commit
+the acceptance environment's real subnet. The UFW
 rule controls network reachability only; clients must still sign in at
 `/luban-auth/login`. Avoid an unrestricted `ufw allow 42600/tcp` rule unless
 the service is intentionally meant to accept every routable source.

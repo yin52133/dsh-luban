@@ -44,9 +44,8 @@ pnpm check
 当前账号读取对应的会话与上下文。各插件路由遵循 `/luban-<module>`，例如
 `/luban-taskboard/tasks` 与 `/luban-browser/jobs`。
 
-Ubuntu 服务器只需向实际局域网地址范围开放认证 sidecar 端口。`<lan-client-cidr>` 只是
-一个示例；不同网络可能使用 `192.0.2.0/24`、`10.x.x.x` 或其他 CIDR，应替换为路由器
-或网络管理员提供的客户端地址范围：
+Ubuntu 服务器只需向实际局域网地址范围开放认证 sidecar 端口。不要把验收环境的真实网段
+提交到仓库；应使用路由器或网络管理员提供的客户端 CIDR：
 
 ```sh
 # Example only: replace this value with the actual LAN client CIDR.

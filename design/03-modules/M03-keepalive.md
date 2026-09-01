@@ -168,7 +168,7 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   24.04.4 实机已完成 linger、user systemd、真实 SSH 断连、heartbeat 连续推进和 tmux attach/detach；
   跨真实 boot 完成 `verify-reboot`；直接证据为 `evidence/05-reboot-verified.json`（SHA-256
   `f75d1fda4900eeb854f26e2cc38a6ece1651e12ca5d9bfd55c19ce2cfc21a986`）。
-- Windows production run `<external-acceptance-dir>\m03-windows-20260831-e288abe` 的精确 S4U boot host
+- Windows 外部验收目录中的 production run 已验证精确 S4U boot host
   task 与 child task 均在运行，checkpoint seed、host heartbeat 和 session heartbeat 已验证。当前账户
   经真实注销/重新登录后，`verify-signout` 确认 heartbeat 继续推进；证据为
   `events\000004-verify-signout-confirmed.json`（SHA-256

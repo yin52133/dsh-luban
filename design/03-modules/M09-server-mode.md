@@ -144,7 +144,7 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
   runner 创建的 unit 已移除且不会误删其他 unit。模拟依赖只用于本地测试，不能替代真实 Ubuntu 重启。
 - runner 不执行 `loginctl enable-linger`、reboot、logout 或 disconnect。Ubuntu 24.04.4 实机现已具备
   linger、Node 24.20.0、pnpm 11.24.0、DSH 0.1.1-rc.2 与已启用/运行的 user unit；production run
-  `<external-acceptance-dir>/m09-20260831-e288abe` 已跨真实 boot 完成
+  外部验收目录中的 production run 已跨真实 boot 完成
   `verify-reboot`，证据为 `evidence/0005-reboot-verified.json`（SHA-256
   `e86cbf6306fdf9db98ead2a6de2cea091c4b09a6461e82866420abc79c31f545`）。正式 operator 随后确认
   `unit=exact`、`ready=true`，幂等执行 `install --apply` 并重启服务后，unit 保持 enabled、
