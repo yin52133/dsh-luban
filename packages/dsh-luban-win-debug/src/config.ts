@@ -1,6 +1,9 @@
 import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
+import { standardConfigSchema } from 'dsh-luban-core'
 import type { ToolId } from './types.js'
+
+export type { StandardConfigSchema } from 'dsh-luban-core'
 
 export interface RemoteEndpointConfig {
   readonly id: string
@@ -71,23 +74,6 @@ const DEFAULT_CONFIG: Config = Object.freeze({
   gdb: { target: '127.0.0.1:3333' },
   desktopMcp: { enabled: false, command: '', args: [], tools: [] },
 })
-
-type ValidationResult<Value> =
-  | { readonly value: Value }
-  | {
-      readonly issues: readonly {
-        readonly message: string
-        readonly path?: readonly PropertyKey[]
-      }[]
-    }
-
-export interface StandardConfigSchema<Value> {
-  readonly '~standard': {
-    readonly version: 1
-    readonly vendor: 'dsh-luban'
-    validate(input: unknown): ValidationResult<Value>
-  }
-}
 
 function record(input: unknown): Readonly<Record<string, unknown>> {
   return typeof input === 'object' && input !== null && !Array.isArray(input)
@@ -371,16 +357,4 @@ export function assertAllowedPath(path: string, config: Config, label: string): 
   return absolute
 }
 
-export const Config: StandardConfigSchema<Config> = Object.freeze({
-  '~standard': {
-    version: 1 as const,
-    vendor: 'dsh-luban' as const,
-    validate(input: unknown): ValidationResult<Config> {
-      try {
-        return { value: parseConfig(input) }
-      } catch (error: unknown) {
-        return { issues: [{ message: error instanceof Error ? error.message : 'invalid config' }] }
-      }
-    },
-  },
-})
+export const Config = standardConfigSchema(parseConfig)

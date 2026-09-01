@@ -1,4 +1,7 @@
 import { isAbsolute, normalize } from 'node:path'
+import { standardConfigSchema } from 'dsh-luban-core'
+
+export type { StandardConfigSchema } from 'dsh-luban-core'
 
 export interface Config {
   readonly trigger: {
@@ -21,23 +24,6 @@ const DEFAULT_CONFIG: Config = Object.freeze({
   archiveDir: '.luban/context-archive',
   nightProfile: { trigger: { ratio: 0.7 }, keepRecentTokens: 16_000 },
 })
-
-type ValidationResult<Value> =
-  | { readonly value: Value }
-  | {
-      readonly issues: readonly {
-        readonly message: string
-        readonly path?: readonly PropertyKey[]
-      }[]
-    }
-
-export interface StandardConfigSchema<Value> {
-  readonly '~standard': {
-    readonly version: 1
-    readonly vendor: 'dsh-luban'
-    validate(input: unknown): ValidationResult<Value>
-  }
-}
 
 function objectValue(input: unknown): Readonly<Record<string, unknown>> {
   return typeof input === 'object' && input !== null && !Array.isArray(input)
@@ -114,16 +100,4 @@ export function parseConfig(input: unknown): Config {
   }
 }
 
-export const Config: StandardConfigSchema<Config> = Object.freeze({
-  '~standard': {
-    version: 1 as const,
-    vendor: 'dsh-luban' as const,
-    validate(input: unknown): ValidationResult<Config> {
-      try {
-        return { value: parseConfig(input) }
-      } catch (error: unknown) {
-        return { issues: [{ message: error instanceof Error ? error.message : 'invalid config' }] }
-      }
-    },
-  },
-})
+export const Config = standardConfigSchema(parseConfig)

@@ -1,5 +1,8 @@
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
+import { standardConfigSchema } from 'dsh-luban-core'
+
+export type { StandardConfigSchema } from 'dsh-luban-core'
 
 export interface BuildTemplateConfig {
   readonly id: string
@@ -74,23 +77,6 @@ const DEFAULT_CONFIG: Config = Object.freeze({
   artifacts: { dir: '~/builds', retainRuns: 10, linkTtlSec: 300 },
   store: { file: '~/.dsh/luban/server-mode/ledger.json' },
 })
-
-type ValidationResult<Value> =
-  | { readonly value: Value }
-  | {
-      readonly issues: readonly {
-        readonly message: string
-        readonly path?: readonly PropertyKey[]
-      }[]
-    }
-
-export interface StandardConfigSchema<Value> {
-  readonly '~standard': {
-    readonly version: 1
-    readonly vendor: 'dsh-luban'
-    validate(input: unknown): ValidationResult<Value>
-  }
-}
 
 function record(value: unknown): Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -261,16 +247,4 @@ export function resolveUserPath(path: string): string {
   return resolve(path)
 }
 
-export const Config: StandardConfigSchema<Config> = Object.freeze({
-  '~standard': {
-    version: 1 as const,
-    vendor: 'dsh-luban' as const,
-    validate(input: unknown): ValidationResult<Config> {
-      try {
-        return { value: parseConfig(input) }
-      } catch (error: unknown) {
-        return { issues: [{ message: error instanceof Error ? error.message : 'invalid config' }] }
-      }
-    },
-  },
-})
+export const Config = standardConfigSchema(parseConfig)

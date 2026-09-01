@@ -1,6 +1,8 @@
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
-import type { HostScope } from 'dsh-luban-core'
+import { standardConfigSchema, type HostScope } from 'dsh-luban-core'
+
+export type { StandardConfigSchema } from 'dsh-luban-core'
 
 export interface NightConfig {
   readonly enabled: boolean
@@ -44,23 +46,6 @@ const DEFAULT_CONFIG: Config = Object.freeze({
     circuitBreaker: { maxConsecutiveFailures: 3 },
   },
 })
-
-type ValidationResult<Value> =
-  | { readonly value: Value }
-  | {
-      readonly issues: readonly {
-        readonly message: string
-        readonly path?: readonly PropertyKey[]
-      }[]
-    }
-
-export interface StandardConfigSchema<Value> {
-  readonly '~standard': {
-    readonly version: 1
-    readonly vendor: 'dsh-luban'
-    validate(input: unknown): ValidationResult<Value>
-  }
-}
 
 function objectValue(input: unknown): Readonly<Record<string, unknown>> {
   return typeof input === 'object' && input !== null && !Array.isArray(input)
@@ -149,16 +134,4 @@ export function resolveStoreDirectory(path: string): string {
   return resolve(path)
 }
 
-export const Config: StandardConfigSchema<Config> = Object.freeze({
-  '~standard': {
-    version: 1 as const,
-    vendor: 'dsh-luban' as const,
-    validate(input: unknown): ValidationResult<Config> {
-      try {
-        return { value: parseConfig(input) }
-      } catch (error: unknown) {
-        return { issues: [{ message: error instanceof Error ? error.message : 'invalid config' }] }
-      }
-    },
-  },
-})
+export const Config = standardConfigSchema(parseConfig)

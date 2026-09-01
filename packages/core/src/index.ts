@@ -1,4 +1,5 @@
 export * from './common.js'
+export * from './config.js'
 export type * from './contracts.js'
 export * from './errors.js'
 export * from './events.js'
