@@ -1,6 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AccountId, AuthService, ChannelKind, SessionId } from 'dsh-luban-core'
-import { LubanError, asSessionId, isLubanError, modulePrefix } from 'dsh-luban-core'
+import {
+  LubanError,
+  asSessionId,
+  isLubanError,
+  modulePrefix,
+  objectRecord as record,
+  readJsonBody,
+  sendJson,
+  setPrivateResponseHeaders as securityHeaders,
+} from 'dsh-luban-core'
 import type { DefaultWinDebugService } from './service.js'
 import type { WinDebugEvent } from './types.js'
 
@@ -36,13 +45,6 @@ export function eventVisibleToAccount(event: WinDebugEvent, accountId: AccountId
     case 'resync':
       return event.accountId === accountId
   }
-}
-
-function record(value: unknown, label = 'body'): Readonly<Record<string, unknown>> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new LubanError('E_INVALID_INPUT', `${label} must be an object`)
-  }
-  return value as Readonly<Record<string, unknown>>
 }
 
 function requiredString(value: unknown, label: string, maximum = 16_384): string {
@@ -99,45 +101,11 @@ function stringMap(value: unknown, label: string): Readonly<Record<string, strin
 }
 
 async function jsonBody(request: IncomingMessage): Promise<unknown> {
-  if (
-    request.headers['content-type']?.split(';', 1)[0]?.trim().toLocaleLowerCase() !==
-    'application/json'
-  ) {
-    throw new LubanError('E_INVALID_INPUT', 'Content-Type must be application/json')
-  }
-  const chunks: Buffer[] = []
-  let bytes = 0
-  for await (const raw of request as AsyncIterable<Uint8Array>) {
-    const chunk = Buffer.from(raw)
-    bytes += chunk.byteLength
-    if (bytes > MAX_BODY_BYTES) throw new LubanError('E_INVALID_INPUT', 'Request body is too large')
-    chunks.push(chunk)
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
-  } catch (error: unknown) {
-    throw new LubanError('E_INVALID_INPUT', 'Request body is not valid JSON', { cause: error })
-  }
+  return readJsonBody(request, MAX_BODY_BYTES)
 }
 
 function sourceIp(request: IncomingMessage): string {
   return request.socket.remoteAddress ?? 'unknown'
-}
-
-function securityHeaders(response: ServerResponse): void {
-  response.setHeader('cache-control', 'no-store')
-  response.setHeader('x-content-type-options', 'nosniff')
-  response.setHeader('referrer-policy', 'no-referrer')
-}
-
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
-  if (response.writableEnded) return
-  const encoded = Buffer.from(`${JSON.stringify(body)}\n`, 'utf8')
-  response.statusCode = status
-  securityHeaders(response)
-  response.setHeader('content-type', 'application/json; charset=utf-8')
-  response.setHeader('content-length', String(encoded.byteLength))
-  response.end(encoded)
 }
 
 async function authenticate(
