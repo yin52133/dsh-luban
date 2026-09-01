@@ -38,6 +38,13 @@ dsh-luban 面向个人与小团队的可信局域网开发环境，以功能闭�
 
 两个主机可以安装 plan、context、image-paste 和 session-share，共享同一账号下的任务与会话视图。
 
+## 界面展示
+
+![Luban 登录界面](docs/screenshots/login.png)
+
+所有 Web 功能从 `/luban-auth/login` 进入。登录后的看板、HUD、Plan 与图片功能复用同一账号会话，
+匿名 API 请求返回 401，不存在 `/luban/auth/login` 兼容路由。
+
 ## 插件一览
 
 | npm 包                    | 功能                                       | 平台             |

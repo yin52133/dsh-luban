@@ -35,6 +35,14 @@ working contexts; it is not an enterprise identity or network-hardening product.
 Both hosts can add plan, context, image-paste, and session-share to work with tasks and session views
 under the same account.
 
+## Interface
+
+![Luban sign-in screen](docs/screenshots/login.png)
+
+All Web features enter through `/luban-auth/login`. The taskboard, HUD, Plan, and image tools reuse
+the same account session after sign-in. Anonymous API requests return 401, and
+`/luban/auth/login` is intentionally not an alias.
+
 ## Packages
 
 | npm package               | Capability                                                              | Platform            |
