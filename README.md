@@ -12,6 +12,11 @@
 插件套件：把 Windows 调试机和 Ubuntu 编译服务器连接成一个可从浏览器操作、可持续运行、
 可按账号隔离上下文的 DSH 工作台。
 
+## 项目定位
+
+dsh-luban 面向个人与小团队的可信局域网开发环境，以功能闭环、运行稳定和账号上下文隔离为主，
+不提供企业级身份、安全加固或公网防护方案。
+
 ## 为什么使用 dsh-luban
 
 - **双机协作**：Windows 负责串口、ADB、烧录和 GDB，Ubuntu 负责后台构建与长任务。
@@ -109,6 +114,14 @@ flowchart LR
 插件之间不直接依赖：共享类型和基础工具来自 `dsh-luban-core`，运行时协作通过 DSH 服务、
 事件和 HTTP 契约完成。设计说明与当前状态分别见 [design](design/README.md) 和
 [checklist.json](checklist.json)。
+
+## 文档导航
+
+- [Windows 部署](design/05-deployment/deploy-windows.md)
+- [Ubuntu 部署](design/05-deployment/deploy-ubuntu.md)
+- [架构与模块设计](design/README.md)
+- [功能状态台账](checklist.json)
+- [English README](README.en.md)
 
 ## 当前状态
 
