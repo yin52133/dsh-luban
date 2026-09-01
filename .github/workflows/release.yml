@@ -59,6 +59,7 @@ jobs:
           name: github-packages-release-${{ github.ref_name }}
           path: .release-artifacts/
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14
 
   publish:

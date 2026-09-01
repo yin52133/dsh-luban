@@ -1079,6 +1079,7 @@ describe('M12 release policy', () => {
     expect(validateJob).toContain('fetch-depth: 0')
     expect(validateJob).toContain("version: '0.11.8'")
     expect(validateJob).toContain('cache-dependency-glob: tools/browser-bridge/uv.lock')
+    expect(validateJob).toContain('include-hidden-files: true')
     expect(workflow).not.toContain('gitleaks')
     expect(workflow).not.toContain('verify-secret-gate')
   })
