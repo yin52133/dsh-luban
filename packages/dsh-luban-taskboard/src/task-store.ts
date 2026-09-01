@@ -161,6 +161,27 @@ function nextTaskId(now: number): TaskId {
   return asTaskId(`T-${date}-${randomBytes(4).toString('hex')}`)
 }
 
+function newTask(input: TaskCreateInput, at: number): Task {
+  return {
+    id: nextTaskId(at),
+    ...(input.accountId === undefined ? {} : { accountId: input.accountId }),
+    title: input.title,
+    description: input.description ?? '',
+    status: input.status ?? 'backlog',
+    hostScope: input.hostScope,
+    ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
+    priority: input.priority,
+    ...(input.acceptance === undefined ? {} : { acceptance: input.acceptance }),
+    tags: input.tags ?? [],
+    version: 1,
+    claim: null,
+    outputs: [],
+    failureCount: 0,
+    createdAt: at,
+    updatedAt: at,
+  }
+}
+
 function withAudit(
   ledger: TaskLedger,
   taskId: TaskId,
@@ -507,24 +528,7 @@ export class JsonTaskStore {
   public async create(input: TaskCreateInput): Promise<Task> {
     const normalized = normalizeCreate(input)
     const at = this.#clock.now()
-    const task: Task = {
-      id: nextTaskId(at),
-      ...(normalized.accountId === undefined ? {} : { accountId: normalized.accountId }),
-      title: normalized.title,
-      description: normalized.description ?? '',
-      status: normalized.status ?? 'backlog',
-      hostScope: normalized.hostScope,
-      ...(normalized.workspace === undefined ? {} : { workspace: normalized.workspace }),
-      priority: normalized.priority,
-      ...(normalized.acceptance === undefined ? {} : { acceptance: normalized.acceptance }),
-      tags: normalized.tags ?? [],
-      version: 1,
-      claim: null,
-      outputs: [],
-      failureCount: 0,
-      createdAt: at,
-      updatedAt: at,
-    }
+    const task = newTask(normalized, at)
     await this.#store.update((ledger): TaskLedger =>
       withAudit(
         { ...ledger, tasks: [...ledger.tasks, task] },
@@ -894,24 +898,7 @@ export class JsonTaskStore {
             return
           }
           const at = this.#clock.now()
-          const task: Task = {
-            id: nextTaskId(at),
-            ...(normalized.accountId === undefined ? {} : { accountId: normalized.accountId }),
-            title: normalized.title,
-            description: normalized.description ?? '',
-            status: normalized.status ?? 'backlog',
-            hostScope: normalized.hostScope,
-            ...(normalized.workspace === undefined ? {} : { workspace: normalized.workspace }),
-            priority: normalized.priority,
-            ...(normalized.acceptance === undefined ? {} : { acceptance: normalized.acceptance }),
-            tags: normalized.tags ?? [],
-            version: 1,
-            claim: null,
-            outputs: [],
-            failureCount: 0,
-            createdAt: at,
-            updatedAt: at,
-          }
+          const task = newTask(normalized, at)
           next = withAudit(
             { ...next, tasks: [...next.tasks, task] },
             task.id,
