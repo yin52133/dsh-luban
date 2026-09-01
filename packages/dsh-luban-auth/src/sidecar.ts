@@ -627,75 +627,43 @@ export class AuthSidecar implements AuthGateway {
     const headers = buildProxyHeaders(request.headers, security, this.#upstream, false)
     headers['accept-encoding'] = 'identity'
     headers['content-length'] = String(body.length)
-    const transport = this.#upstream.protocol === 'https:' ? httpsRequest : httpRequest
     const rewriteResponse =
       context.method !== undefined &&
       (DSH_FILTERED_UNARY_METHODS.has(context.method) || context.method.startsWith('workspace.'))
-    await new Promise<void>((resolve, reject): void => {
-      let settled = false
-      const settle = (error?: unknown): void => {
-        if (settled) return
-        settled = true
-        this.#upstreamRequests.delete(upstreamRequest)
-        if (error === undefined) resolve()
-        else
-          reject(
-            error instanceof Error
-              ? error
-              : new Error('luban-auth: upstream proxy failed', { cause: error }),
+    await this.#proxyUpstream(
+      request,
+      target,
+      headers,
+      (upstreamRequest): void => {
+        upstreamRequest.end(body)
+      },
+      async (upstreamResponse): Promise<void> => {
+        if (!rewriteResponse) {
+          writeProxyResponseHead(response, upstreamResponse, this.#upstream, security)
+          await pipeline(upstreamResponse, response)
+          return
+        }
+        const upstreamBody = await readBoundedBody(upstreamResponse, this.#config.maxProxyBodyBytes)
+        const rewritten = await this.#rewriteDshUnaryResponse(context, upstreamBody)
+        const responseHeaders = filterResponseHeaders(upstreamResponse.headers)
+        responseHeaders['content-length'] = String(rewritten.body.length)
+        if (rewritten.changed) {
+          delete responseHeaders['content-encoding']
+          delete responseHeaders.etag
+          delete responseHeaders['content-md5']
+        }
+        if (upstreamResponse.statusMessage === undefined) {
+          response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders)
+        } else {
+          response.writeHead(
+            upstreamResponse.statusCode ?? 502,
+            upstreamResponse.statusMessage,
+            responseHeaders,
           )
-      }
-      const upstreamRequest = transport(
-        {
-          protocol: this.#upstream.protocol,
-          hostname: this.#upstream.hostname,
-          port: upstreamPort(this.#upstream),
-          method: request.method,
-          path: `${target.pathname}${target.search}`,
-          headers,
-          agent: false,
-        },
-        (upstreamResponse): void => {
-          if (!rewriteResponse) {
-            writeProxyResponseHead(response, upstreamResponse, this.#upstream, security)
-            upstreamResponse.once('error', settle)
-            upstreamResponse.once('end', (): void => settle())
-            upstreamResponse.pipe(response)
-            return
-          }
-          void (async (): Promise<void> => {
-            const upstreamBody = await readBoundedBody(
-              upstreamResponse,
-              this.#config.maxProxyBodyBytes,
-            )
-            const rewritten = await this.#rewriteDshUnaryResponse(context, upstreamBody)
-            const responseHeaders = filterResponseHeaders(upstreamResponse.headers)
-            responseHeaders['content-length'] = String(rewritten.body.length)
-            if (rewritten.changed) {
-              delete responseHeaders['content-encoding']
-              delete responseHeaders.etag
-              delete responseHeaders['content-md5']
-            }
-            if (upstreamResponse.statusMessage === undefined) {
-              response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders)
-            } else {
-              response.writeHead(
-                upstreamResponse.statusCode ?? 502,
-                upstreamResponse.statusMessage,
-                responseHeaders,
-              )
-            }
-            response.end(rewritten.body)
-          })().then(
-            (): void => settle(),
-            (error: unknown): void => settle(error),
-          )
-        },
-      )
-      this.#upstreamRequests.add(upstreamRequest)
-      upstreamRequest.once('error', settle)
-      upstreamRequest.end(body)
-    })
+        }
+        response.end(rewritten.body)
+      },
+    )
   }
 
   async #rewriteDshUnaryResponse(context: DshRequestContext, body: Buffer): Promise<BodyRewrite> {
@@ -778,28 +746,9 @@ export class AuthSidecar implements AuthGateway {
 
     if (method === 'session.list' || method === 'session.search') {
       if (!Array.isArray(value.items)) return { body, changed: false }
-      const keep = await Promise.all(
-        value.items.map(async (item): Promise<boolean> => {
-          const record = asRecord(item)
-          if (typeof record?.sessionId !== 'string') return false
-          return (
-            (await this.#manager.dshSessionOwner(asSessionId(record.sessionId))) ===
-            context.accountId
-          )
-        }),
-      )
-      const items = value.items.filter((_item, index) => keep[index] === true)
+      const items = await this.#filterOwnedSessionRows(context.accountId, value.items)
       if (items.length === value.items.length) return { body, changed: false }
-      return {
-        body: Buffer.from(
-          JSON.stringify({
-            ...message,
-            result: { ...result, value: { ...value, items } },
-          }),
-          'utf8',
-        ),
-        changed: true,
-      }
+      return rewriteDshResponseValue(message, result, { ...value, items })
     }
 
     if (method?.startsWith('workspace.') === true) {
@@ -865,46 +814,22 @@ export class AuthSidecar implements AuthGateway {
     const channel: DshEventChannel = target.pathname === DSH_MUX_ROUTE ? 'mux' : 'host'
     const headers = buildProxyHeaders(request.headers, security, this.#upstream, false)
     headers['accept-encoding'] = 'identity'
-    const transport = this.#upstream.protocol === 'https:' ? httpsRequest : httpRequest
-    await new Promise<void>((resolve, reject): void => {
-      let settled = false
-      const settle = (error?: unknown): void => {
-        if (settled) return
-        settled = true
-        this.#upstreamRequests.delete(upstreamRequest)
-        if (error === undefined) resolve()
-        else
-          reject(
-            error instanceof Error
-              ? error
-              : new Error('luban-auth: upstream event proxy failed', { cause: error }),
-          )
-      }
-      const upstreamRequest = transport(
-        {
-          protocol: this.#upstream.protocol,
-          hostname: this.#upstream.hostname,
-          port: upstreamPort(this.#upstream),
-          method: request.method,
-          path: `${target.pathname}${target.search}`,
-          headers,
-          agent: false,
-        },
-        (upstreamResponse): void => {
-          writeProxyResponseHead(response, upstreamResponse, this.#upstream, security)
-          const filter = new DshSseFilter((block): Promise<string | null> =>
-            this.#filterDshEventBlock(accountId, channel, block),
-          )
-          pipeline(upstreamResponse, filter, response).then(
-            (): void => settle(),
-            (error: unknown): void => settle(error),
-          )
-        },
-      )
-      this.#upstreamRequests.add(upstreamRequest)
-      upstreamRequest.once('error', settle)
-      upstreamRequest.end()
-    })
+    await this.#proxyUpstream(
+      request,
+      target,
+      headers,
+      (upstreamRequest): void => {
+        upstreamRequest.end()
+      },
+      async (upstreamResponse): Promise<void> => {
+        writeProxyResponseHead(response, upstreamResponse, this.#upstream, security)
+        const filter = new DshSseFilter((block): Promise<string | null> =>
+          this.#filterDshEventBlock(accountId, channel, block),
+        )
+        await pipeline(upstreamResponse, filter, response)
+      },
+      'luban-auth: upstream event proxy failed',
+    )
   }
 
   async #filterDshEventBlock(
@@ -927,6 +852,29 @@ export class AuthSidecar implements AuthGateway {
     security: RequestSecurityContext,
   ): Promise<void> {
     const headers = buildProxyHeaders(request.headers, security, this.#upstream, false)
+    const limiter = new BodyLimitTransform(this.#config.maxProxyBodyBytes)
+    await this.#proxyUpstream(
+      request,
+      target,
+      headers,
+      (upstreamRequest, fail): void => {
+        pipeline(request, limiter, upstreamRequest).catch(fail)
+      },
+      async (upstreamResponse): Promise<void> => {
+        writeProxyResponseHead(response, upstreamResponse, this.#upstream, security)
+        await pipeline(upstreamResponse, response)
+      },
+    )
+  }
+
+  async #proxyUpstream(
+    request: IncomingMessage,
+    target: URL,
+    headers: OutgoingHttpHeaders,
+    send: (request: ClientRequest, fail: (error: unknown) => void) => void,
+    receive: (response: IncomingMessage) => Promise<void>,
+    failureMessage = 'luban-auth: upstream proxy failed',
+  ): Promise<void> {
     const transport = this.#upstream.protocol === 'https:' ? httpsRequest : httpRequest
     await new Promise<void>((resolve, reject): void => {
       let settled = false
@@ -935,12 +883,7 @@ export class AuthSidecar implements AuthGateway {
         settled = true
         this.#upstreamRequests.delete(upstreamRequest)
         if (error === undefined) resolve()
-        else
-          reject(
-            error instanceof Error
-              ? error
-              : new Error('luban-auth: upstream proxy failed', { cause: error }),
-          )
+        else reject(error instanceof Error ? error : new Error(failureMessage, { cause: error }))
       }
       const upstreamRequest = transport(
         {
@@ -953,32 +896,19 @@ export class AuthSidecar implements AuthGateway {
           agent: false,
         },
         (upstreamResponse): void => {
-          const responseHeaders = filterResponseHeaders(upstreamResponse.headers)
-          const location = responseHeaders.location
-          if (typeof location === 'string') {
-            responseHeaders.location = rewriteUpstreamLocation(location, this.#upstream, security)
-          }
-          if (upstreamResponse.statusMessage === undefined) {
-            response.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders)
-          } else {
-            response.writeHead(
-              upstreamResponse.statusCode ?? 502,
-              upstreamResponse.statusMessage,
-              responseHeaders,
-            )
-          }
-          upstreamResponse.once('error', settle)
-          upstreamResponse.once('end', (): void => settle())
-          upstreamResponse.pipe(response)
+          void receive(upstreamResponse).then(
+            (): void => settle(),
+            (error: unknown): void => settle(error),
+          )
         },
       )
       this.#upstreamRequests.add(upstreamRequest)
       upstreamRequest.once('error', settle)
-      const limiter = new BodyLimitTransform(this.#config.maxProxyBodyBytes)
-      pipeline(request, limiter, upstreamRequest).catch((error: unknown): void => {
-        upstreamRequest.destroy()
+      try {
+        send(upstreamRequest, settle)
+      } catch (error: unknown) {
         settle(error)
-      })
+      }
     })
   }
 
