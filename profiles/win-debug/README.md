@@ -1,56 +1,33 @@
 # win-debug profile template
 
-Minimal DSH `0.1.1-rc.2` Web profile for the Windows debug host. The in-box
-`dsh-base` and `dsh-web-app` bundles resolve from the installed DSH runtime;
-out-of-tree Luban and A-class bundles are added with `dsh plugin`.
+Windows 调试主机的 DSH Web profile。官方 `dsh-base`、`dsh-web-app` 由已安装的 DSH 提供，Luban 与第三方插件通过 `dsh plugin` 添加。
 
-1. Preview and create the profile with the repository-owned safe wrapper. It
-   defaults to preview mode and refuses to overwrite an existing target:
+## 创建 profile
 
-   ```powershell
-   .\scripts\deploy\setup-windows.ps1
-   .\scripts\deploy\setup-windows.ps1 -Apply
-   ```
+```powershell
+.\scripts\deploy\setup-windows.ps1
+.\scripts\deploy\setup-windows.ps1 -Apply
+dsh --profile win-debug --dump-config
+```
 
-2. Preview the pinned A-class additions:
+setup 脚本默认仅预览，并拒绝覆盖已有目标。
 
-   ```powershell
-   .\scripts\install-3rd-party.ps1 -Profile win-debug -DryRun
-   ```
+## 安装固定版本第三方插件
 
-   The version lock pins `dshmarket@1.36.0`, `dsh-better-sidebar@0.17.1`, and
-   `@furongjun1999/dsh-memory@0.4.0` so repeated installations resolve the same
-   direct versions. Preview mode makes no registry request and starts no `dsh`
-   child process.
+```powershell
+.\scripts\install-3rd-party.ps1 -Profile win-debug -DryRun
+.\scripts\install-3rd-party.ps1 -Profile win-debug `
+  -DshHome C:\dsh-profile -ApprovedBy operator-name -Apply
+```
 
-3. Apply only on a Windows host after reviewing the exact package specs. Apply
-   requires an absolute, non-root DSH home and an approval actor:
+apply 仅在 Windows 目标机运行，并要求绝对、非根目录的 DSH home。安装完成后核对 `plugin list`、`--dump-config` 和 bundle 加载。
 
-   ```powershell
-   .\scripts\install-3rd-party.ps1 -Profile win-debug `
-     -DshHome C:\dsh-acceptance -ApprovedBy operator-name -Apply
-   ```
+## 验证
 
-   `-Version latest` or an explicit semantic version additionally requires
-   `-ApproveUnpinned`; the installer verifies official-registry metadata and
-   resolves exact versions before spawning `dsh`. DSH_HOME and registry values
-   are injected only into that child process.
+```powershell
+pnpm build
+pnpm test
+dsh --profile win-debug --dump-config
+```
 
-4. Run the M12 target-host acceptance runner. It defaults to a non-writing plan;
-   `--live` requires project-local DSH `0.1.1-rc.2` and uses an isolated DSH_HOME:
-
-   ```powershell
-   node scripts/acceptance/m12-profile-smoke.mjs
-   node scripts/acceptance/m12-profile-smoke.mjs --live `
-     --output "$env:TEMP\m12-win-debug.json"
-   ```
-
-   A live pass covers the temporary host/client fixture on this Windows host
-   only. Repeat the installation and startup smoke on Ubuntu; this command does
-   not install the three A-class packages.
-
-5. Validate without booting: `dsh --profile win-debug --dump-config`.
-
-Keep machine-specific paths out of this reusable template. The lock records MIT
-npm metadata, while source LICENSE files and post-install notices still require
-review during live installation.
+机器路径、账号、凭据和网络拓扑不得写入模板。

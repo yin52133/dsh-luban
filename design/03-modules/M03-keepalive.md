@@ -159,23 +159,7 @@ M03-F001 ~ M03-F005 共 5 项，与 `checklist.json` 一一对应。
   detail 采用有界摘要，避免异常风暴拖慢响应。
 - 真实 Cordis 生命周期测试以 `bootRestore: false` 挂载插件，证明精确环境值
   `LUBAN_BOOT_RESTORE=1` 仍会调用一次 `restore()`；其他类 truthy 文本不会取得强制恢复语义。
-- 本机 `schtasks.exe` 只读列表探针已通过且未创建计划任务；命令构造和写操作由测试 runner 验证。
-- Windows `prepare` 在任务不存在时注册并启动 host/child task；后续阶段核对任务状态、host/session
-  heartbeat 与系统 boot 时间。注销验证要求 heartbeat 在注销后继续推进；重启验证要求任务在新 boot
-  启动，并从已保存 checkpoint 继续未完成步骤。
-- Windows checkpoint 丢失或损坏时不从验收参数重建；恢复保持幂等，并保留孤儿任务供人工处理。
-- 本地 keepalive 包测试、Windows staged runner、Prettier、ESLint、严格类型检查与构建通过。Ubuntu
-  24.04.4 实机已完成 linger、user systemd、真实 SSH 断连、heartbeat 连续推进和 tmux attach/detach；
-  跨真实 boot 完成 `verify-reboot`；直接证据为 `evidence/05-reboot-verified.json`（SHA-256
-  `f75d1fda4900eeb854f26e2cc38a6ece1651e12ca5d9bfd55c19ce2cfc21a986`）。
-- Windows 外部验收目录中的 production run 已验证精确 S4U boot host
-  task 与 child task 均在运行，checkpoint seed、host heartbeat 和 session heartbeat 已验证。当前账户
-  经真实注销/重新登录后，`verify-signout` 确认 heartbeat 继续推进；证据为
-  `events\000004-verify-signout-confirmed.json`（SHA-256
-  `7f937dc605d2922d38bcc31e8041f9c698542f5b57108b4ef45214c6f5802194`）。实机验证同时修复
-  `schtasks.exe /XML` 所需 UTF-16LE+BOM、Task Scheduler 回读默认值规范化、验收 profile 重复加载
-  keepalive，以及用户现有 DSH 占用默认 Web 端口时的冲突。真实重启后 `verify-reboot` 确认系统 boot
-  marker 前进、host/child task 以新 startedAt 恢复、heartbeat sequence 继续到 93，并从 checkpoint
-  重建会话；证据为 `events\000008-verify-reboot-confirmed.json`（SHA-256
-  `8dd13064604e3cddeb283cc760ec63c52bb9aef25ec44b8fa94c628b6be53a7b`）。验收任务清理需要管理员
-  令牌，属于运行后清理，不影响 M03-F003 功能结论。
+- Windows 计划任务的命令构造、UTF-16 XML、状态回读、注销后心跳和恢复流程由自动化测试与实机抽查覆盖。
+- Ubuntu 已验证 linger、user systemd、SSH 断连后 heartbeat 继续推进，以及 tmux attach/detach。
+- Windows 与 Ubuntu 均已验证重启后的托管会话恢复；日常配置验收优先重启服务，不重复要求整机重启。
+- 实机账号、地址、绝对路径、启动标识和临时验收文件只保留在本地运维环境，不写入仓库。

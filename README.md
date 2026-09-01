@@ -125,8 +125,8 @@ flowchart LR
 
 ## 当前状态
 
-仓库正在准备首次公开版本。代码已完成 Windows/Ubuntu CI 与模块测试；个别需要外部模型、
-插件市场权限或真实设备的验收项，以 `checklist.json` 中的 `review` 或 `blocked` 标记，不会被描述为已发布能力。
+仓库正在准备首次公开版本。代码已完成 Windows/Ubuntu CI 与模块测试；个别需要外部模型或真实设备的
+验收项，以 `checklist.json` 中的 `review` 或 `blocked` 标记，不会被描述为已发布能力。
 
 ## 许可
 

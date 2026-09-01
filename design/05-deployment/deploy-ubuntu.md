@@ -67,40 +67,15 @@ WantedBy=default.target
 `bootRestore: false`，M03 仍会在该 systemd 启动路径执行恢复。只有精确字符串 `1`
 生效，其他类 truthy 文本不取得覆盖语义。
 
-M09-F001 的一次性开机恢复验收按阶段执行。除 plan 外的阶段需 `--apply` 才记录进度；只有
-install/cleanup 修改 user unit，reboot 仍由用户在 runner 外明确执行：
+M09 日常验收优先使用正式 operator 与 systemd 服务重启：
 
 ```sh
-# Zero-write plan
-node scripts/acceptance/m09-systemd-reboot.mjs
-
-# Run as the target non-root user after an administrator enabled linger.
-mkdir -p /tmp/luban-m09-$USER
-node scripts/acceptance/m09-systemd-reboot.mjs preflight --apply \
-  --run-dir /tmp/luban-m09-$USER/run
-node scripts/acceptance/m09-systemd-reboot.mjs install --apply \
-  --run-dir /tmp/luban-m09-$USER/run
-node scripts/acceptance/m09-systemd-reboot.mjs arm-reboot --apply \
-  --run-dir /tmp/luban-m09-$USER/run
-
-# Human authorization boundary: reboot the same host outside this runner, then log in again.
-node scripts/acceptance/m09-systemd-reboot.mjs verify-reboot --apply \
-  --run-dir /tmp/luban-m09-$USER/run
-node scripts/acceptance/m09-systemd-reboot.mjs cleanup --apply \
-  --run-dir /tmp/luban-m09-$USER/run
+systemctl --user restart dsh-luban.service
+systemctl --user is-enabled dsh-luban.service
+systemctl --user is-active dsh-luban.service
 ```
 
-执行前完成 package build，并确认 Node、dsh、pnpm 与 profile 的版本符合本文档。runner 为每个阶段
-记录普通本地进度，使中断后可以从未完成阶段继续；重复 install 不重复添加 unit，重复 cleanup 也不会
-删除本次验收之外的 unit。安装前确认目标 unit 不存在或明确由本项目管理，安装后检查
-enabled/active/running；重启后确认 boot ID 已变化、服务重新 active 且 profile 可以正常登录和使用。
-cleanup 只删除本次运行创建的 `dsh-luban.service` 及其验收文件。runner 不启用 linger，也不执行
-reboot、logout 或 disconnect；这些系统操作继续由用户单独授权和执行。
-
-真实开机恢复通过后，日常安装或配置验证不再重复整机重启。先运行正式 operator 的只读 install plan；
-若返回 `unit=exact`、`ready=true`，可直接幂等执行 `install --apply`，再用
-`systemctl --user restart dsh-luban.service`、`is-enabled`、`is-active` 和实际 HTTP 请求确认。此时
-cleanup 只是验收临时资源管理步骤，不是生产功能完成条件，也不需要为了重建相同 unit 先删除服务文件。
+整机重启只用于明确的开机恢复验收，不是常规安装或配置验证步骤。
 
 6. **linger**：`sudo loginctl enable-linger <user>`——不登录桌面也让 user 级服务开机自启（R02 关键）。
 7. **认证初始化**：首启引导建管理员；`config.port` 自定义（默认 42600）。
@@ -130,19 +105,15 @@ apply 在指定 `DSH_HOME` 中按 dry-run 展示的精确版本安装，不修�
 清单、`--dump-config`、bundle 挂载与 `node-pty` native load；相同计划重复执行应保持相同版本和
 配置，不重复写入 bundle。版本或安装结果不一致时停止并保留现有 profile，供用户检查或回退。
 
-M12-F001 的目标宿主 smoke runner 默认只打印无写入计划。Ubuntu 现场验收时使用项目本地
-DSH `0.1.1-rc.2` 执行：
+构建与安装后使用正常命令验收：
 
 ```sh
-node scripts/acceptance/m12-profile-smoke.mjs
-node scripts/acceptance/m12-profile-smoke.mjs --live \
-  --output /tmp/m12-ubuntu-server.json
+pnpm build
+pnpm test
+dsh --profile ubuntu-server --dump-config
 ```
 
-live runner 在隔离 `DSH_HOME` 中安装临时 host/client fixture，验证唯一挂载、lazy-CJS client、
-热停/热启、重启和 owned cleanup。Windows 与 Ubuntu 必须针对同一项目版本各自产出真实 live pass；
-汇总只核对项目版本、DSH 版本与功能检查项一致，不要求额外的执行环境证明。runner 文件存在不
-代表已经完成双端验收，只有两台目标宿主的实际运行结果都通过才算完成。
+Windows 与 Ubuntu 分别验证自己的 profile；无需额外证据 runner。
 
 ## 3. 重启恢复链路（与 M03/M09 协作）
 

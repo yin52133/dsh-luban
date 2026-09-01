@@ -118,8 +118,8 @@ for design notes and [checklist.json](checklist.json) for current implementation
 ## Project status
 
 The repository is preparing its first public release. The code passes Windows/Ubuntu CI and module
-tests. Items that still require an external model, marketplace permissions, or real hardware remain
-marked `review` or `blocked` in `checklist.json` and are not presented as released capabilities.
+tests. Items that still require an external model or real hardware remain marked `review` or
+`blocked` in `checklist.json` and are not presented as released capabilities.
 
 ## License
 

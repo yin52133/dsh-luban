@@ -1,104 +1,73 @@
-# 发布原则与操作流程（Release Principles & Operations）
-
-> 本章定义版本、打包、发布、对账与失败恢复流程。M12 是其流程化落地；验收关注发布结果一致、
-> 可预览、可恢复且不会误发。
+# 发布原则与操作流程
 
 ## 版本记录
 
-| 版本 | 日期       | 作者  | 变更说明                                        |
-| ---- | ---------- | ----- | ----------------------------------------------- |
-| v0.1 | 2026-08-29 | Maintainers | 初稿：README、版本、tag/npm 注册与失败处理规范 |
-| v0.2 | 2026-08-30 | Codex | 增加 tag 发布前的独立预检 |
-| v0.3 | 2026-08-30 | Codex | 明确包可按公开 API 需求提高 DSH 最低版本       |
-| v0.4 | 2026-08-30 | Codex | 增加多包发布恢复账本与三方结果核验 |
-| v0.5 | 2026-08-30 | Codex | 细化顺序事件记录、本地恢复位置与逐包状态 |
-| v0.6 | 2026-08-30 | Codex | 收敛发布门禁并保留 pack 复核、幂等发布与失败对账恢复 |
+| 版本 | 日期 | 作者 | 变更说明 |
+| --- | --- | --- | --- |
+| v1.0 | 2026-09-01 | Codex | 收敛到标准 GitHub Release 与 npm 发布流程 |
 
-## 1. README 规范
+## 1. 发布目标
 
-**仓库级 README**（根目录）必须包含：一句话定位（中英）、双模式拓扑图、文档导航表、快速开始（设计阶段=读设计；实现阶段=安装命令）、许可证与第三方许可声明。
+`mainline` 是发布分支。全仓包使用统一 SemVer；一个 `v<semver>` tag 对应一个 GitHub Release 和一组同版本 npm 包。插件市场注册不属于当前目标。
 
-**每个 npm 包 README** 模板（M12-F006 脚手架生成）：
+## 2. README 与包规范
 
-```markdown
-# dsh-luban-<module>
-<一句话：这个插件给你的 dsh 增加了什么>
+根 README 使用中英双语，展示项目定位、功能亮点、界面、快速开始、兼容性、文档导航和许可证。
 
-![badge: version] ![badge: dsh 兼容] ![badge: license]
+每个 npm 包 README 至少包含功能、安装、配置、平台支持、演示/截图和许可证。文档不得宣传 `checklist.json` 中尚未完成或已废弃的功能。
 
-## 功能亮点（3-5 条）
-## 安装
-  dsh plugin --profile <profile> add dsh-luban-<module>
-## 配置（cordis.patch.yml config: 段示例，含全部配置项与默认值）
-## 截图 / 演示
-## 兼容性（dsh 版本矩阵：engines.dsh 基线 + 实测版本表）
-## 平台支持（双端公用 / win / ubuntu）
-## License 与致谢（THIRD-PARTY-NOTICES 引用）
+包 manifest 必须声明：
+
+- `license`、`repository`、Node 与 `engines.dsh`；
+- 精确的 `exports`、`files` 与 `dsh` bundle/client 信息；
+- 宿主提供的 DSH、Cordis 和 React 依赖为 peer/external。
+
+## 3. 版本与 tag
+
+| 项目 | 规则 |
+| --- | --- |
+| 版本 | 全仓 fixed versioning，任一发布包变更统一升版 |
+| 分支 | `mainline`，发布前 CI 必须通过 |
+| tag | `v<semver>`，tag 版本必须与 package.json、CHANGELOG 一致 |
+| 制品 | 12 个 tarball 与 manifest，`dsh-luban-core` 排在最前 |
+| npm | public access；同版本存在时跳过，不覆盖 |
+| Release | 附 changelog、manifest 和全部 tarball |
+
+## 4. 标准流程
+
+1. 运行 format、lint、typecheck、build、tests 和设计校验。
+2. 运行 release metadata 校验与 12 包 audit。
+3. 生成 tarball 与 manifest，并执行 publish dry-run。
+4. 确认仓库无凭据或私人部署信息。
+5. 推送 `mainline` 与 `v<semver>` tag。
+6. GitHub Actions 按 core-first 顺序发布 npm，再创建 GitHub Release。
+7. 核对 tag、Release、npm 包名和版本。
+
+```bash
+node scripts/release/validate-release.mjs
+node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.0 --output .release-artifacts/v0.1.0
+node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.0
 ```
 
-硬性要求：配置示例必须可直接复制使用；不写未实现的功能（与 checklist.json 状态一致）。
+## 5. 发布失败
 
-## 2. 版本与 tag 规范
+npm 多包发布不是事务。任何包失败时立即停止：
 
-| 项 | 规范 |
-| --- | --- |
-| 版本号 | SemVer；**全仓库统一版本**（fixed locking），任一包变更即统一升版 |
-| 版本对齐 | 仓库 DSH 最低下限为 `>=0.1.1-rc.1`；包可按所用公开 API 提高 `engines.dsh` 下限，但不得低于仓库下限或高于当前实测版本；dsh 升级 → 兼容矩阵实测 |
-| 分支 | `mainline` 为发布分支；功能分支合并必须 CI 绿 |
-| tag | `v<semver>`（如 `v0.2.0`），一个 tag 一次发布；tag 后 CI 自动走流水线 |
-| CHANGELOG | 按里程碑/模块分组；由发布脚本从 commit（`feat/fix/docs(<模块>):`）生成草稿，人工修订 |
-| GitHub ↔ npm 同步 | 同一 tag 触发：GitHub Release（changelog+产物）与 npm publish 同内容；发布后核对三者一致（M12-F003 口径） |
+- 用 `npm view` 确认当前版本是否存在；
+- 不存在则修复后重新运行；
+- 已存在且版本正确时由脚本跳过；
+- 不执行 unpublish，不覆盖版本，不隐藏原始错误；
+- 完成后重新核对 GitHub Release 与 npm。
 
-多包 npm publish 不是事务。发布脚本按 core-first 顺序处理包，并在每个包发布前后写本地顺序账本；
-同一已确认步骤重复执行不得再次发布。命令结果不明确时先停止后续包并查询 registry：版本不存在时可
-从该包重试，版本与本地 `npm pack` 产物校验和一致时可记为已发布，版本存在但内容不一致或状态未知时
-停止并交给人工处理。不得使用 unpublish、覆盖或盲目重复发布来消除不确定状态。
+项目不维护自定义恢复账本或额外证明系统。
 
-恢复从账本中首个未确认包继续。发布完成后核对 tag、GitHub Release、pack 文件名和版本、npm 版本与
-tarball 内容一致；失败记录、当前包和已确认包列表保留到下一次恢复。该对账只确认发布结果，不绑定
-额外的执行平台标识或来源证明。
+## 6. 发布前检查清单
 
-## 3. npm 包注册规范
-
-- 包名 `dsh-luban-<module>`（无 scope）；首次 publish 前在 npmjs.com 确认名称可用并占用。
-- `package.json` 必填：`license: MIT`、`repository`、`engines`（node + dsh）、`dsh` 字段（M12 §4 基线）。
-- **pack 文件清单**：`package.json#files` 只包含 `dist/`、`README.md`、`cordis.patch.yml`、
-  `LICENSE`、`THIRD-PARTY-NOTICES.md`；本地配置、运行数据和测试夹具不进入发布包。
-- 发布前运行 `npm pack --dry-run` 和 `npm publish --dry-run`，人工复核包名、版本、目标 registry、
-  文件清单与体积后再批准真实发布。
-- npm access 为 public；是否由本地或 CI 执行不改变上述功能验收口径。
-
-## 4. GitHub 仓库规范（dsh-plugin 生态可见性）
-
-- topics：`dsh-plugin`、`dsh`、`deepseek-harness`、`workbench`、`embedded`——插件商店与社区目录按 `topic:dsh-plugin` 收录（M12-F002）。
-- 市场注册：向 awesome-dsh-plugin 提 PR（entry：npm 包名/仓库/分类/描述），随版本更新 PR。
-- Release notes 中标注「兼容 dsh 版本」与「破坏性变更」；建议附 30 秒演示 GIF。
-- Discussion/Issue 模板：bug 报告包含 dsh 版本与 profile bundles 列表。
-
-## 5. 发布内容复核
-
-- 配置示例使用占位值，确保用户复制后知道哪些字段需要填写。
-- 发布计划在真实 tag/npm/市场操作前展示包名、统一版本、目标 registry、Release 资产和市场变更，
-  由用户明确批准后执行。
-- `npm pack --dry-run` 与 `npm publish --dry-run` 的文件清单是防止误发的主要检查；发现多余文件时
-  修改 `package.json#files` 后重新运行。
-- lint、typecheck、test、build、pack 与 dry-run 是本项目的发布质量门禁；不再增加与功能结果无关的
-  证明步骤作为 feature 状态或发布 blocker。
-
-## 6. 发布失败与恢复
-
-1. 发布命令失败或超时时立即停止后续包，保存 stdout/stderr 摘要和本地发布账本。
-2. 查询 npm registry 与 GitHub Release 的实际状态，不以子进程退出码之外的猜测推进状态。
-3. registry 不存在该版本时从当前包重试；版本和 pack 内容一致时补记确认；不一致或未知时人工处理。
-4. 恢复完成后再次核对全仓统一版本、tag、GitHub Release、npm 包和市场记录。
-
-## 7. 发布前检查清单（每版本勾选）
-
-- [ ] lint、typecheck、test、build 全部通过
-- [ ] 版本号统一更新 + CHANGELOG 修订
-- [ ] `engines.dsh` 基线与兼容矩阵核对
-- [ ] 每包 README 与 checklist.json 状态一致（不宣传未实现功能）
-- [ ] `npm pack --dry-run` 与 `npm publish --dry-run` 文件清单复核通过
-- [ ] 真实发布计划已列出包名、版本、目标和外部变更，并获用户明确批准
-- [ ] tag 推送 → GitHub Release 与 npm 同步完成 → 三处版本核对
-- [ ] 市场 PR 更新（新包/版本变化时）
+- [ ] format、lint、typecheck、build、unit/integration tests 全部通过
+- [ ] uv lock、Ruff、Python tests 与 compileall 通过
+- [ ] design/checklist/architecture 校验通过
+- [ ] 版本、CHANGELOG、README 与 `engines.dsh` 一致
+- [ ] 12 包 files、pack、manifest 与 publish dry-run 通过
+- [ ] 当前树和待公开历史中无凭据、token 或私人部署信息
+- [ ] npm 发布凭据与 GitHub Actions 发布变量已配置
+- [ ] tag、GitHub Release 与 npm 发布结果一致

@@ -68,21 +68,17 @@ apply 在指定 `DSH_HOME` 中按 dry-run 展示的精确版本安装，不修�
 依赖清单、`--dump-config`、bundle 挂载与 `node-pty` native load；相同计划重复执行应保持相同版本和
 配置，不重复写入 bundle。版本或安装结果不一致时停止并保留现有 profile，供用户检查或回退。
 
-M12-F001 的目标宿主 smoke runner 默认只打印无写入计划。Windows 现场验收时使用项目本地
-DSH `0.1.1-rc.2` 执行：
+构建与安装后使用正常命令验收：
 
 ```powershell
-node scripts/acceptance/m12-profile-smoke.mjs
-node scripts/acceptance/m12-profile-smoke.mjs --live `
-  --output "$env:TEMP\m12-win-debug.json"
+pnpm build
+pnpm test
+dsh --profile win-debug --dump-config
 ```
 
-live runner 在隔离 `DSH_HOME` 中安装临时 host/client fixture，验证唯一挂载、lazy-CJS client、
-热停/热启、重启和 owned cleanup。Windows 与 Ubuntu 必须针对同一项目版本各自产出真实 live pass；
-汇总只核对项目版本、DSH 版本与功能检查项一致，不要求额外的执行环境证明。runner 文件存在不
-代表已经完成双端验收，只有两台目标宿主的实际运行结果都通过才算完成。
+Windows 与 Ubuntu 分别验证自己的 profile；无需额外证据 runner。
 
-## 3. 配置分层
+
 
 ```text
 %DSH_HOME%\

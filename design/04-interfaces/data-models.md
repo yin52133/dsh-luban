@@ -243,81 +243,24 @@ export interface BrowserResult extends AccountOwned {
 ```
 
 <a id="release"></a>
-## 12. ReleaseRecord 发布记录（M12）
+## 12. ReleaseManifest 发布清单（M12）
 
 ```typescript
-export interface ReleaseRecord {
-  tag: string;                       // v<semver>
-  npmVersions: Record<PackageName, string>;
-  dshBaseline: string;               // engines.dsh 基线
-  changelog: string; marketPrUrl?: string;
-  packageAudit: { pack: 'pass' | 'fail'; dryRun: 'pass' | 'fail' };
-  at: number;
-}
-
-export interface PublishLedger {
+export interface ReleaseManifest {
   schemaVersion: 1;
-  ledgerId: string;
-  createdAt: string;                 // ISO-8601 UTC
-  release: {
-    version: string; tag: string; manifestSha256: string;
-    packages: Array<{
-      name: PackageName;
-      version: string;
-      file: string;
-      sha256: string;                // 对账本地 pack 与 registry tarball
-      status: 'pending' | 'publishing' | 'published' | 'failed';
-    }>;
-  };
-}
-
-export interface PublishLedgerEventBase {
-  schemaVersion: 1;
-  ledgerId: string;
-  sequence: number;                  // fixed file name: 00000001.json, ...
-  at: string;                        // ISO-8601 UTC
-}
-
-export type PublishLedgerEvent = PublishLedgerEventBase & (
-  | {
-      type: 'attempt-started'; package: PackageName; attemptId: string;
-    }
-  | { type: 'publish-confirmed'; package: PackageName; attemptId: string }
-  | { type: 'publish-failed'; package: PackageName; attemptId: string; reason: string }
-  | { type: 'reconciled-absent'; package: PackageName; attemptId: string }
-  | { type: 'reconciled-matching'; package: PackageName; attemptId: string }
-  | {
-      type: 'release-verified'; repository: string; tag: string;
-      githubReleaseId: number;
-    }
-);
-
-export interface PublishLedgerCommit {
-  schemaVersion: 1;
-  ledgerId: string;
-  sequence: number;                  // publish-ledger-commit-00000000.json, ...
-  entryName: string;
-  entrySize: number;
-  recordedAt: string;
-}
-
-export interface LocalPublishLedgerHead {
-  schemaVersion: 1;
-  ledgerId: string;
-  sequence: number;
+  tag: `v${string}`;
+  version: string;
+  generatedAt: string;
+  packages: ReadonlyArray<{
+    name: PackageName;
+    version: string;
+    file: string;
+    sha256: string;
+  }>;
 }
 ```
 
-`PublishLedger` 和按序事件用于多包发布的失败恢复。每次发布包前先落盘
-`attempt-started`，成功后写 `publish-confirmed`；命令结果不明确时先查询 registry：版本不存在可重试，
-版本与本地 pack 校验和一致可记为 `reconciled-matching`，版本存在但内容不一致或状态未知则停止并交给
-人工处理。不得通过 unpublish、覆盖或盲目重复发布来伪装成功。
-
-账本事件使用连续序号并以临时文件加原子 rename 写入；`PublishLedgerCommit` 只记录同序号事件已完整
-落盘，`LocalPublishLedgerHead` 记录本地恢复位置。恢复时从首个非 `published` 包继续，重复执行同一
-已确认步骤不产生第二次发布。GitHub Release、tag、pack 文件名/版本与 npm registry 版本在最终阶段
-做普通一致性对账；真实发布失败时保留账本和错误信息供后续恢复。
-
+发布清单由 pack 阶段生成，按 core-first 顺序记录 12 个 tarball。发布脚本在 dry-run 和真实发布前校验包名、版本、文件名与 SHA-256；同版本已存在时跳过，不维护额外恢复账本。
 <a id="checklist-json-v1"></a>
 ## 13. checklist.json Schema（checklist-json-v1）
 

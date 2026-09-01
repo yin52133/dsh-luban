@@ -63,15 +63,9 @@ five-minute denominator, so a single 100-token request contributes `20 TPM` and 
 window.
 `refreshSec` is bounded to 1–60 seconds and history retention to 1–1440 minutes so configuration cannot exceed the registered one-second event cadence or create an unbounded retention window.
 
-Every HTTP endpoint is authenticated through `lubanAuth` at `/luban-hud/snapshot`, `/luban-hud/history`, `/luban-hud/rate-capture`, and `/luban-hud/events`.
+Every HTTP endpoint is authenticated through `lubanAuth` at `/luban-hud/snapshot`, `/luban-hud/history`, and `/luban-hud/events`.
 The event stream uses the registered `luban.telemetry.snapshot` name and bounded `Last-Event-ID` replay; a replay gap receives the latest immutable envelope.
-The mounted host keeps at most 10,000 durable assistant-event records from the latest five minutes.
-`GET /luban-hud/rate-capture` uses canonical `startUtc`/`endUtc` query values for an exact
-one- or five-minute `[start,end)` window. Stable message identity deduplicates forked history,
-and missing usage is reported as unknown rather than guessed. Capture is unavailable
-until a complete one-minute window has elapsed after mount, and any retention/capacity eviction,
-identity conflict, invalid route, ledger changes, or wall/monotonic clock discontinuity advances the coverage
-watermark rather than silently exporting a partial ledger.
+Stable message identity deduplicates forked history, and missing usage is reported as unknown rather than guessed.
 `HudSnapshotResponse.keepalive` is an optional compatibility extension. Health changes immediately
 publish a new envelope through the same SSE event; M03 diagnostic text is stripped of controls,
 redacted, capped, and never persisted by HUD. At most 256 current failures are retained in memory.

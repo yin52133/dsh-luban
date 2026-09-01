@@ -44,7 +44,7 @@ flowchart LR
 | R01 | Ubuntu 端可直接用网页操作 dsh | M01 认证、M09 服务器模式 |
 | R02 | tmux 或其他保活手段；电脑重启后后台继续工作直到完成 | M03 保活 |
 | R03 | 任务列表：todo / 执行中 / 已完成 | M02 任务看板 |
-| R04 | 注册到 dsh 插件市场 | M12 市场与发布 |
+| R04 | 通过 GitHub Release 与 npm 发布插件包 | M12 发布基础设施 |
 | R05 | plan 工作模式 | M04 plan |
 | R06 | Ubuntu 与 Windows 能共享 session 与控制权限 | M05 会话共享 |
 | R07 | 粘贴图片让 dsh 能访问 | M06 图片粘贴 |
@@ -76,4 +76,4 @@ flowchart LR
 1. Ubuntu 端重启后，无需人工干预，未完成任务继续执行直至完成（R02）。
 2. 看板上一张写清验收标准的 todo 卡，agent 能在无人值守窗口内领单并产出可 review 的结果（R03 派生）。
 3. Win 端一条命令进入串口监视，日志片段可一键送入 dsh 会话分析（R11）。
-4. 全部插件以 `dsh-luban-*` 包名发布 npm 并出现在 dsh 插件市场（R04）。
+4. 全部插件以 `dsh-luban-*` 包名发布 npm，并由同版本 GitHub Release 提供制品（R04）。

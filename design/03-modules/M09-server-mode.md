@@ -132,21 +132,7 @@ M09-F001 ~ M09-F004 共 4 项，与 `checklist.json` 一一对应。
   进程测试使用当前 `process.execPath` 验证超时/取消后 PID 已退出和 stdout/stderr 已排空，并以可控 child
   验证 spawn 同步失败、永不 close、TERM/KILL 最终边界、abort/timeout 首因及清理。未安装 systemd
   unit、运行外部编译器或下载真实产物。
-- 全工作区 format/lint/typecheck/build、包测试与跨模块集成检查通过；M09-F002 的显式验收已由
-  持久 FIFO、并发上限与已验证模板直接覆盖。`scripts/acceptance/m09-systemd-reboot.mjs` 依次执行
-  `preflight → install → arm-reboot → verify-reboot → cleanup`。install/cleanup 在副作用前保存 attempt，
-  完成后写 confirmed；原子状态文件使崩溃重试不会重复已确认步骤，并且只清理 runner 明确拥有的 unit
-  与临时目录。
-- 实机阶段在仓库外临时目录按 `pnpm-lock.yaml` 和固定 pnpm 版本构建 core/server 包；离线依赖缺失或
-  构建失败时在 systemd 安装前停止。该步骤只服务于可复现构建。
-- runner 核对 unit 内容、enabled/active/running、Type、MainPID 与 `LUBAN_BOOT_RESTORE=1`。重启验收以
-  boot ID 和 systemd `InvocationID` 变化、服务在登录前恢复、M03 checkpoint 继续为准；cleanup 验证
-  runner 创建的 unit 已移除且不会误删其他 unit。模拟依赖只用于本地测试，不能替代真实 Ubuntu 重启。
-- runner 不执行 `loginctl enable-linger`、reboot、logout 或 disconnect。Ubuntu 24.04.4 实机现已具备
-  linger、Node 24.20.0、pnpm 11.24.0、DSH 0.1.1-rc.2 与已启用/运行的 user unit；production run
-  外部验收目录中的 production run 已跨真实 boot 完成
-  `verify-reboot`，证据为 `evidence/0005-reboot-verified.json`（SHA-256
-  `e86cbf6306fdf9db98ead2a6de2cea091c4b09a6461e82866420abc79c31f545`）。正式 operator 随后确认
-  `unit=exact`、`ready=true`，幂等执行 `install --apply` 并重启服务后，unit 保持 enabled、
-  active/running，HTTP 入口可用。验收 unit 与生产 unit 完全一致时，无需为了功能验收先删除再重建；
-  目标 MCU 与交叉编译工具链保留为额外兼容性 smoke。
+- 全工作区 format/lint/typecheck/build、包测试与跨模块集成检查覆盖队列、资源探针、进程回收和 HTTP 生命周期。
+- Ubuntu 部署通过正式 systemd operator 管理 user unit；日常验收使用 `systemctl --user restart`、`is-enabled`、`is-active` 与 HTTP 健康检查。
+- 开机恢复已在实机验证，但不是每次配置更新的必需步骤。runner 不负责启用 linger、重启、注销或断开连接。
+- 实机部署参数、账号、地址、绝对路径和系统启动标识只保留在本地运维环境，不写入仓库。

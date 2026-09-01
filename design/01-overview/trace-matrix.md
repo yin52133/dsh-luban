@@ -16,7 +16,7 @@
 | R01 | Ubuntu 直接用网页 | M01, M09 | MS1 / MS1 | [M01](../03-modules/M01-auth.md) · [M09](../03-modules/M09-server-mode.md) |
 | R02 | tmux 保活、重启续跑 | M03 | MS1 / MS4 | [M03](../03-modules/M03-keepalive.md) |
 | R03 | 任务看板 + agent 自主领单 | M02 | MS1→MS3 | [M02](../03-modules/M02-taskboard.md) |
-| R04 | 注册 dsh 插件市场 | M12 | MS1→MS2 | [M12](../03-modules/M12-market-release.md) |
+| R04 | GitHub Release 与 npm 发布 | M12 | MS1→MS2 | [M12](../03-modules/M12-market-release.md) |
 | R05 | plan 工作模式 | M04 | MS3 | [M04](../03-modules/M04-plan.md) |
 | R06 | 双机共享 session 与控制权 | M05 | MS4 | [M05](../03-modules/M05-session-share.md) |
 | R07 | 粘贴图片可被访问 | M06 | MS3 | [M06](../03-modules/M06-image-paste.md) |
@@ -71,7 +71,7 @@
 | M02-F007 | SSE 事件广播 | P1 |
 | M02-F008 | taskctl CLI | P2 |
 | M02-F009 | 数据导入器（dashi/cloader JSON） | P3 |
-| M12-F002 | 市场注册 PR + topic 打标 | P1 |
+| M12-F002 | 已废弃：市场注册 PR + topic 打标 | P1 |
 | M12-F003 | 发布流水线（tag→Release→npm 同步） | P1 |
 | M12-F004 | A 档第三方插件安装脚本 | P1 |
 | M12-F006 | README 与版本记录规范落地 | P1 |

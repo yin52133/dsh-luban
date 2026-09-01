@@ -290,7 +290,6 @@ export interface ReleaseRecord {
   readonly npmVersions: Readonly<Record<PackageName, string>>
   readonly dshBaseline: string
   readonly changelog: string
-  readonly marketPrUrl?: string
   readonly packageAudit: {
     readonly pack: 'pass' | 'fail'
     readonly dryRun: 'pass' | 'fail'

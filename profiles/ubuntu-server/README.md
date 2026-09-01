@@ -1,63 +1,35 @@
 # ubuntu-server profile template
 
-Minimal DSH `0.1.1-rc.2` Web profile for the Ubuntu build host. The in-box
-`dsh-base` and `dsh-web-app` bundles resolve from the installed DSH runtime;
-out-of-tree Luban and A-class bundles are added with `dsh plugin`.
+Ubuntu 服务端的 DSH Web profile。官方 `dsh-base`、`dsh-web-app` 由已安装的 DSH 提供，Luban 与第三方插件通过 `dsh plugin` 添加。
 
-1. Preview and create the profile with the repository-owned safe wrapper. It
-   defaults to preview mode and refuses to overwrite an existing target:
+## 创建 profile
 
-   ```sh
-   scripts/deploy/setup-ubuntu.sh
-   scripts/deploy/setup-ubuntu.sh --apply
-   ```
+```sh
+scripts/deploy/setup-ubuntu.sh
+scripts/deploy/setup-ubuntu.sh --apply
+dsh --profile ubuntu-server --dump-config
+```
 
-2. Preview the pinned A-class additions:
+setup 脚本默认仅预览，并拒绝覆盖已有目标。
 
-   ```sh
-   bash scripts/install-3rd-party.sh --profile ubuntu-server --dry-run
-   ```
+## 安装固定版本第三方插件
 
-   The version lock pins `dshmarket@1.36.0`, `dsh-better-sidebar@0.17.1`, and
-   `@furongjun1999/dsh-memory@0.4.0` so repeated installations resolve the same
-   direct versions. Preview mode makes no registry request and starts no `dsh`
-   child process.
+```sh
+bash scripts/install-3rd-party.sh --profile ubuntu-server --dry-run
+bash scripts/install-3rd-party.sh --profile ubuntu-server \
+  --dsh-home /tmp/dsh-profile --approved-by operator-name --apply
+```
 
-3. Apply only on a Linux host after reviewing the exact package specs. Apply
-   requires an absolute, non-root DSH home and an approval actor:
+apply 仅在 Linux 目标机运行，并要求绝对、非根目录的 DSH home。安装完成后核对 `plugin list`、`--dump-config` 和 bundle 加载。
 
-   ```sh
-   bash scripts/install-3rd-party.sh --profile ubuntu-server \
-     --dsh-home /tmp/dsh-acceptance --approved-by operator-name --apply
-   ```
+## systemd
 
-   `--version latest` or an explicit semantic version additionally requires
-   `--approve-unpinned`; the installer verifies official-registry metadata and
-   resolves exact versions before spawning `dsh`. DSH_HOME and registry values
-   are injected only into that child process.
+先由管理员为运行账号启用 linger，再使用项目的 systemd operator 安装或更新 user service。日常验证优先重启服务：
 
-4. Run the M12 target-host acceptance runner. It defaults to a non-writing plan;
-   `--live` requires project-local DSH `0.1.1-rc.2` and uses an isolated DSH_HOME:
+```sh
+systemctl --user restart dsh-luban.service
+systemctl --user is-enabled dsh-luban.service
+systemctl --user is-active dsh-luban.service
+```
 
-   ```sh
-   node scripts/acceptance/m12-profile-smoke.mjs
-   node scripts/acceptance/m12-profile-smoke.mjs --live \
-     --expected-git-sha "$GITHUB_SHA" \
-     --workflow-run-id "$GITHUB_RUN_ID" \
-     --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
-     --output /tmp/m12-ubuntu-server.json
-   ```
-
-   A live pass covers the temporary host/client fixture on this Linux host only.
-   Aggregatable CI evidence must bind the expected commit, workflow run, and run
-   attempt shown above; the aggregate also requires the exact canonical checks
-   and records the raw input digest. It does not prove Windows acceptance or
-   install the three A-class packages.
-
-5. Validate without booting: `dsh --profile ubuntu-server --dump-config`.
-
-Do not commit credentials or machine-specific network topology to this
-template. Keep DSH bound to loopback when the M01 authenticated sidecar is the
-LAN entry point. The lock records MIT npm metadata, but source LICENSE files and
-post-install notices still require explicit verification during authorized live
-installation.
+仅当明确验收开机恢复时才需要重启整机。部署路径、账号、凭据、IP 和具体网段不得写入模板。
