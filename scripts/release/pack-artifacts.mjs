@@ -64,7 +64,14 @@ export function releasePlan(version, tag, packages, policy) {
 }
 
 export function releaseNotes(version, changelog) {
-  return `# dsh-luban v${version}\n\n**Version:** \`${version}\`\n\n${extractChangelogSection(changelog, version)}`
+  const notes = extractChangelogSection(changelog, version)
+  const internalId = notes.match(/\b(?:M\d{2}(?:-F\d{3})?|F\d{3})\b/u)?.[0]
+  if (internalId !== undefined) {
+    throw new Error(
+      `Release notes must describe user-visible changes without internal tracking identifiers: ${internalId}`,
+    )
+  }
+  return `# dsh-luban v${version}\n\n**Version:** \`${version}\`\n\n${notes}`
 }
 
 export async function packArtifacts(options = {}) {

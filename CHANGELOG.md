@@ -1,7 +1,7 @@
 # Changelog
 
-All notable changes are grouped by milestone and module. Versions follow
-Semantic Versioning and remain fixed across all publishable workspace packages.
+All notable changes are described by their user-visible behavior. Versions follow Semantic
+Versioning and remain fixed across all publishable workspace packages.
 
 ## [Unreleased]
 
@@ -12,11 +12,11 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 - Added `@yin52133/dsh-luban`, a complete aggregate package that installs all
   standalone Luban plugins together with pinned `dshmarket`,
   `dsh-better-sidebar`, and `@furongjun1999/dsh-memory` companions.
-- Added a fail-closed M12 target-host profile smoke runner for isolated DSH
+- Added a fail-closed target-host profile smoke runner for isolated DSH
   fixture installation, host/client lifecycle checks, restart, and cleanup.
-- Added an opt-in M11 production browser runner and Windows/Ubuntu result
+- Added an opt-in production browser runner and Windows/Ubuntu result
   aggregator with browser progress, page readback, and screenshot evidence.
-- Added a mounted M06 visual readback acceptance runner through the production
+- Added a mounted visual readback acceptance runner through the production
   attachment and DSH followup path, with exact message/turn/route evidence and
   fail-closed cleanup.
 
@@ -30,9 +30,9 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 - Standardized the canonical authentication entry at `/luban-auth/login`.
 - Corrected the Ubuntu user systemd launcher to run
   `dsh --profile ubuntu-server --no-open` and made the exact
-  `LUBAN_BOOT_RESTORE=1` sentinel force M03 recovery even when profile config
+  `LUBAN_BOOT_RESTORE=1` sentinel force keepalive recovery even when profile config
   disables boot restore.
-- Made A-class installation repeatable with fixed package versions, target-host
+- Made third-party plugin installation repeatable with fixed package versions, target-host
   checks, an isolated DSH_HOME, idempotent reruns, and post-install load checks.
 - Made night-task capacity reservation and terminal scheduler accounting a
   single crash-safe ledger transaction across concurrent schedulers and days.
@@ -55,8 +55,8 @@ Semantic Versioning and remain fixed across all publishable workspace packages.
 ### Added
 
 - Initial DSH Luban monorepo foundation and module implementations.
-- M12 plugin scaffolding with optional DSH `0.1.1-rc.2` lazy-CJS client output.
-- Cross-platform pinned A-class installer previews and dual profile templates.
+- Plugin scaffolding with optional DSH `0.1.1-rc.2` lazy-CJS client output.
+- Cross-platform pinned third-party installer previews and dual profile templates.
 - Fixed-version, README, manifest, and package payload release checks for 12
   scoped `@yin52133/dsh-luban-*` packages.
 - Protected tag workflow that publishes identical tarballs to GitHub Packages

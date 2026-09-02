@@ -93,8 +93,18 @@ username and PAT in this interactive command (never commit the PAT):
 npm login --scope=@yin52133 --auth-type=legacy --registry=https://npm.pkg.github.com
 ```
 
-The complete installation mounts every Luban plugin plus pinned versions of `dshmarket`,
-`dsh-better-sidebar`, and `@furongjun1999/dsh-memory`:
+Enter the following values at the prompts:
+
+- **Username**: your own GitHub username, not the package owner's username.
+- **Password**: a GitHub personal access token (classic) limited to `read:packages`.
+- **Email**: the email address associated with your GitHub account.
+
+`--scope=@yin52133` only maps `@yin52133/*` packages to the GitHub Packages registry. The
+complete installation mounts every Luban plugin and installs these projects at pinned versions:
+
+- [`dshmarket@1.36.0`](https://github.com/dsh-market/dsh-market)
+- [`dsh-better-sidebar@0.17.1`](https://github.com/omdsh-dev/DSH-better-sidebar)
+- [`@furongjun1999/dsh-memory@0.4.0`](https://github.com/FuRongJun-1999/dsh-memory)
 
 ```sh
 dsh plugin --profile web add @yin52133/dsh-luban@0.1.1

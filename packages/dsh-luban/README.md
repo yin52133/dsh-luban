@@ -6,8 +6,10 @@ plugin together with the pinned companion plugins used by the suite.
 ## Features
 
 - Installs all eleven standalone `@yin52133/dsh-luban-*` plugins in one step.
-- Includes `dshmarket`, `dsh-better-sidebar`, and `@furongjun1999/dsh-memory` at
-  reviewed, exact versions.
+- Installs the suite's companion projects at reviewed, exact versions:
+  [`dshmarket@1.36.0`](https://github.com/dsh-market/dsh-market),
+  [`dsh-better-sidebar@0.17.1`](https://github.com/omdsh-dev/DSH-better-sidebar), and
+  [`@furongjun1999/dsh-memory@0.4.0`](https://github.com/FuRongJun-1999/dsh-memory).
 - Keeps every standalone package available for selective installation.
 
 ## Install

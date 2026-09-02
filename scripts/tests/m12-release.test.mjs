@@ -1134,19 +1134,26 @@ describe('M12 release policy', () => {
   })
 
   it('keeps repository metadata, diagrams, and the design ledger discoverable', async () => {
-    const [chineseReadme, englishReadme, releaseWorkflow, checklist] = await Promise.all([
-      readFile(join(REPOSITORY_ROOT, 'README.md'), 'utf8'),
-      readFile(join(REPOSITORY_ROOT, 'README.en.md'), 'utf8'),
-      readFile(join(REPOSITORY_ROOT, '.github/workflows/release.yml'), 'utf8'),
-      readFile(join(REPOSITORY_ROOT, 'design/checklist.json'), 'utf8'),
-    ])
+    const [chineseReadme, englishReadme, aggregateReadme, releaseWorkflow, checklist] =
+      await Promise.all([
+        readFile(join(REPOSITORY_ROOT, 'README.md'), 'utf8'),
+        readFile(join(REPOSITORY_ROOT, 'README.en.md'), 'utf8'),
+        readFile(join(REPOSITORY_ROOT, 'packages/dsh-luban/README.md'), 'utf8'),
+        readFile(join(REPOSITORY_ROOT, '.github/workflows/release.yml'), 'utf8'),
+        readFile(join(REPOSITORY_ROOT, 'design/checklist.json'), 'utf8'),
+      ])
 
     for (const readme of [chineseReadme, englishReadme]) {
       expect(readme).toContain('img.shields.io/badge/license-MIT-2ea44f')
       expect(readme).not.toContain('img.shields.io/github/license/')
       expect(readme).toContain('Auth["@yin52133/dsh-luban-auth"]')
       expect(readme).toContain('[design/checklist.json](design/checklist.json)')
+      expect(readme).toContain('https://github.com/dsh-market/dsh-market')
+      expect(readme).toContain('https://github.com/omdsh-dev/DSH-better-sidebar')
+      expect(readme).toContain('read:packages')
     }
+    expect(aggregateReadme).toContain('https://github.com/dsh-market/dsh-market')
+    expect(aggregateReadme).toContain('https://github.com/omdsh-dev/DSH-better-sidebar')
     expect(JSON.parse(checklist).meta.version).toBe('0.1.1')
     await expect(access(join(REPOSITORY_ROOT, 'LICENSE'))).resolves.toBeUndefined()
     await expect(access(join(REPOSITORY_ROOT, 'checklist.json'))).rejects.toMatchObject({
@@ -1177,6 +1184,13 @@ describe('M12 release policy', () => {
     expect(extractChangelogSection(changelog, '1.2.3')).toContain('- Shipped.')
     expect(releaseNotes('1.2.3', changelog)).toMatch(
       /^# dsh-luban v1\.2\.3\n\n\*\*Version:\*\* `1\.2\.3`/u,
+    )
+    expect(() => releaseNotes('1.2.3', changelog.replace('- Shipped.', '- M12 shipped.'))).toThrow(
+      /without internal tracking identifiers: M12/u,
+    )
+    const repositoryChangelog = await readFile(join(REPOSITORY_ROOT, 'CHANGELOG.md'), 'utf8')
+    expect(releaseNotes('0.1.1', repositoryChangelog)).not.toMatch(
+      /\b(?:M\d{2}(?:-F\d{3})?|F\d{3})\b/u,
     )
     const policy = await loadPolicy()
     expect(

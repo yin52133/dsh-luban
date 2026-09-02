@@ -93,8 +93,18 @@ dsh-luban 面向个人与小团队的可信局域网开发环境，以功能闭�
 npm login --scope=@yin52133 --auth-type=legacy --registry=https://npm.pkg.github.com
 ```
 
-完整安装会同时挂载全部 Luban 插件，以及固定版本的 `dshmarket`、`dsh-better-sidebar` 和
-`@furongjun1999/dsh-memory`：
+按交互提示填写：
+
+- **Username**：你自己的 GitHub 用户名，不是包作者的用户名。
+- **Password**：只授予 `read:packages` 权限的 GitHub Personal Access Token（classic）。
+- **Email**：你的 GitHub 账号邮箱。
+
+`--scope=@yin52133` 只负责把 `@yin52133/*` 包映射到 GitHub Packages registry。完整安装会同时
+挂载全部 Luban 插件，并安装以下固定版本的配套项目：
+
+- [`dshmarket@1.36.0`](https://github.com/dsh-market/dsh-market)
+- [`dsh-better-sidebar@0.17.1`](https://github.com/omdsh-dev/DSH-better-sidebar)
+- [`@furongjun1999/dsh-memory@0.4.0`](https://github.com/FuRongJun-1999/dsh-memory)
 
 ```sh
 dsh plugin --profile web add @yin52133/dsh-luban@0.1.1
