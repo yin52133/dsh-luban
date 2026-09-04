@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Shared contracts, services, and platform abstraction layer for dsh-luban plugins",
   "type": "module",
   "main": "./dist/index.js",
@@ -30,7 +30,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org/"
   },
   "repository": {
     "type": "git",

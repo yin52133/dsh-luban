@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-browser",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Authenticated, isolated browser-use automation bridge for DeepSeek Harness",
   "type": "module",
   "main": "./dist/index.js",
@@ -32,7 +32,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org/"
   },
   "repository": {
     "type": "git",
@@ -43,7 +43,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.2",
-    "@yin52133/dsh-luban-core": "^0.1.1"
+    "@yin52133/dsh-luban-core": "^0.1.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",

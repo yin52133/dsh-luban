@@ -45,6 +45,91 @@ describe('AuthSidecar integration', () => {
     harness = undefined
   })
 
+  it('guides first-run setup in the browser and signs in the created administrator', async () => {
+    harness = await createHarness({}, false)
+    const { baseUrl, fixture } = harness
+
+    const setupPage = await fetch(
+      `${baseUrl}/luban-auth/login?returnTo=${encodeURIComponent('/welcome?<safe>')}`,
+    )
+    const setupHtml = await setupPage.text()
+    expect(setupPage.status).toBe(200)
+    expect(setupHtml).toContain('Set up Luban')
+    expect(setupHtml).toContain('Create administrator')
+    expect(setupHtml).toContain('value="/welcome?&lt;safe&gt;"')
+    expect(setupHtml).not.toContain('LUBAN_ADMIN_PASSWORD')
+
+    const mismatch = await fetch(`${baseUrl}/luban-auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'text/html',
+        origin: baseUrl,
+      },
+      body: new URLSearchParams({
+        user: 'admin',
+        password: 'correct horse',
+        confirmPassword: 'different password',
+        returnTo: '/',
+      }),
+    })
+    expect(mismatch.status).toBe(400)
+    expect(await mismatch.text()).toContain('passwords do not match')
+    expect(await fixture.manager.hasUsers()).toBe(false)
+
+    const invalid = await fetch(`${baseUrl}/luban-auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify({ user: 'x', password: 'short', confirmPassword: 'short' }),
+    })
+    expect(invalid.status).toBe(400)
+    expect(await invalid.json()).toMatchObject({ error: 'E_INVALID_INPUT' })
+    expect(await fixture.manager.hasUsers()).toBe(false)
+
+    const setup = await fetch(`${baseUrl}/luban-auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'text/html',
+        origin: baseUrl,
+      },
+      body: new URLSearchParams({
+        user: 'Admin',
+        password: 'correct horse',
+        confirmPassword: 'correct horse',
+        returnTo: '/welcome',
+      }),
+      redirect: 'manual',
+    })
+    expect(setup.status).toBe(303)
+    expect(setup.headers.get('location')).toBe('/welcome')
+    expect(setup.headers.get('set-cookie')).toContain('luban_session=')
+    expect(await fixture.manager.hasUsers()).toBe(true)
+
+    const loginPage = await fetch(`${baseUrl}/luban-auth/login`)
+    const loginHtml = await loginPage.text()
+    expect(loginHtml).toContain('Sign in')
+    expect(loginHtml).not.toContain('Create administrator')
+  })
+
+  it('rejects cross-origin first-run setup', async () => {
+    harness = await createHarness({}, false)
+    const setup = await fetch(`${harness.baseUrl}/luban-auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://attacker.invalid',
+      },
+      body: JSON.stringify({
+        user: 'admin',
+        password: 'correct horse',
+        confirmPassword: 'correct horse',
+      }),
+    })
+    expect(setup.status).toBe(403)
+    expect(await harness.fixture.manager.hasUsers()).toBe(false)
+  })
+
   it('guards business routes, proxies static/HTTP/SSE, and enforces request security', async () => {
     harness = await createHarness()
     const { baseUrl } = harness
@@ -790,9 +875,10 @@ describe('AuthSidecar integration', () => {
 
 async function createHarness(
   overrides: Partial<LubanAuthConfig> = {},
+  initializeAdmin = true,
 ): Promise<IntegrationHarness> {
   const fixture = await createManagerFixture()
-  await fixture.manager.createInitialAdmin('admin', 'correct horse')
+  if (initializeAdmin) await fixture.manager.createInitialAdmin('admin', 'correct horse')
   const { server: upstream, state: upstreamState } = createUpstreamServer()
   await listen(upstream)
   const address = upstream.address()

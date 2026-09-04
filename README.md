@@ -2,138 +2,131 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-[![CI](https://github.com/yin52133/dsh-luban/actions/workflows/ci.yml/badge.svg?branch=mainline)](https://github.com/yin52133/dsh-luban/actions/workflows/ci.yml)
-[![GitHub Stars](https://img.shields.io/github/stars/yin52133/dsh-luban?style=flat-square)](https://github.com/yin52133/dsh-luban/stargazers)
-[![GitHub Release](https://img.shields.io/github/v/release/yin52133/dsh-luban?display_name=tag&style=flat-square)](https://github.com/yin52133/dsh-luban/releases)
-[![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-%40yin52133-24292f?style=flat-square&logo=github)](https://github.com/yin52133/dsh-luban/pkgs/npm/dsh-luban-auth)
-[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square)](LICENSE)
-
-面向嵌入式开发的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
-插件套件：把 Windows 调试机和 Ubuntu 编译服务器连接成一个可从浏览器操作、可持续运行、
-可按账号隔离上下文的 DSH 工作台。
+[![npm package](https://img.shields.io/badge/npm%20package-0.1.2-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/@yin52133/dsh-luban)
+[![pnpm](https://img.shields.io/badge/pnpm-11.24.0-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2-536DFE)](https://github.com/deepseek-ai/deepseek-harness)
 
 ## 项目定位
 
-dsh-luban 面向个人与小团队的可信局域网开发环境，以功能闭环、运行稳定和账号上下文隔离为主，
-不提供企业级身份、安全加固或公网防护方案。
+dsh-luban 是面向嵌入式开发的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+插件套件。它把 Windows 调试机和 Ubuntu 编译服务器连接到同一个浏览器工作台，让设备调试、后台构建、
+任务跟踪和会话恢复可以在一处完成。
 
-## 为什么使用 dsh-luban
+项目适合个人或小团队在可信局域网中使用。内置账号用于隔离不同用户的任务、会话和附件，不替代企业级
+身份认证或公网安全防护。
 
-- **双机协作**：Windows 负责串口、ADB、烧录和 GDB，Ubuntu 负责后台构建与长任务。
-- **一个入口**：通过 `/luban-auth/login` 登录，任务、会话、附件和上下文按账号隔离。
-- **任务闭环**：六列任务看板支持人工操作、Agent 领单、进度回写和人工复核。
-- **不中断工作**：tmux、Windows 计划任务与 systemd 负责会话保活和重启恢复。
-- **上下文可见**：HUD 展示上下文占用、模型、推理档位、RPM/TPM，并支持可回放压缩。
+## 主要功能
+
+- **跨主机协作**：Windows 处理串口、Android Debug Bridge（ADB）、烧录和 GNU Debugger（GDB）；Ubuntu 处理构建和长时间任务。
+- **任务管理**：通过看板创建、领取、执行、复核任务，并关联执行计划。
+- **持续运行**：使用 tmux、Windows 计划任务和 systemd 保持会话与任务运行，并在重启后恢复。
+- **上下文管理**：查看模型、推理档位、上下文占用和速率，支持压缩记录的检索与回放。
+- **图片与会话共享**：上传或粘贴图片到当前会话，并在不同主机之间查看会话和交接控制权。
 - **嵌入式工具链**：统一接入串口、ADB/Fastboot、OpenOCD、GDB、SSH、Telnet 和网络串口。
-- **整包或按需安装**：使用 `@yin52133/dsh-luban` 一次安装完整套件，或只安装当前主机需要的独立插件。
+- **按需安装**：可以安装完整套件，也可以只安装当前主机需要的插件。
 
-本项目面向可信局域网，账号系统用于隔离少量用户的工作上下文，不定位为企业级身份与安全防护系统。
+## 界面预览
 
-## 部署形态
+![Luban 任务看板、执行计划与状态面板](docs/screenshots/taskboard.png)
 
-| 主机              | 主要职责                                             | 推荐插件                                              |
-| ----------------- | ---------------------------------------------------- | ----------------------------------------------------- |
-| Windows 调试机    | 串口、ADB/Fastboot、烧录、GDB、桌面与浏览器自动化    | auth、taskboard、keepalive、HUD、win-debug、browser   |
-| Ubuntu 编译服务器 | Web 入口、后台会话、构建队列、产物管理、浏览器自动化 | auth、taskboard、keepalive、HUD、server-mode、browser |
+登录后可以在同一界面查看任务状态、筛选主机和工作区、填写验收条件、复核 Agent 结果，并查看关联计划、
+上下文占用与调用速率。
 
-两个主机可以安装 plan、context、image-paste 和 session-share，共享同一账号下的任务与会话视图。
+所有 Web 功能统一通过 Luban 的 `42600` 端口进入：
 
-## 界面展示
+```text
+本机：http://127.0.0.1:42600/luban-auth/login
+局域网：http://<机器IP>:42600/luban-auth/login
+```
 
-![登录后的 Luban Taskboard、Plan 关联与 HUD 状态](docs/screenshots/taskboard.png)
+DSH 的 `127.0.0.1:3080` 仅作为 Luban 的内部上游，不应直接用于浏览器访问，也不要开放到局域网。
 
-上图由当前生产 Taskboard 组件和无敏感信息的演示数据直接渲染，展示了六列状态流转、主机/工作区筛选、
-验收条件、Agent 自动完成后的人工复核、关联 Plan，以及顶部 HUD 的上下文和速率状态。
+## 插件与平台
 
-| 登录后功能                        | 操作闭环                                                                  |
-| --------------------------------- | ------------------------------------------------------------------------- |
-| Taskboard                         | 创建任务 → Agent 领单 → 进度回写 → Review → Done；支持拖放和键盘/触控操作 |
-| Plan                              | 起草 → 批准/驳回 → 修订；任务卡可直接打开关联计划                         |
-| HUD / Context                     | 查看模型、推理档位、上下文占用、RPM/TPM，并检索或回放压缩归档             |
-| Image Paste                       | 粘贴或上传图片 → 账号级落盘与预览 → 注入当前 DSH 会话                     |
-| Session Share / Keepalive         | 跨主机查看会话、显式交接控制权，并在重启后恢复受管任务                    |
-| Win Debug / Server Mode / Browser | Windows 设备调试、Ubuntu 构建产物、浏览器模板任务统一回写到任务闭环       |
-
-<details>
-<summary>登录入口（次要界面）</summary>
-
-![Luban 登录界面](docs/screenshots/login.png)
-
-</details>
-
-所有 Web 功能从 `/luban-auth/login` 进入。登录后的看板、HUD、Plan 与图片功能复用同一账号会话，
-匿名 API 请求返回 401，不存在 `/luban/auth/login` 兼容路由。
-
-## 插件一览
-
-| GitHub Packages 包                  | 功能                                       | 平台             |
-| ----------------------------------- | ------------------------------------------ | ---------------- |
-| `@yin52133/dsh-luban`               | 全部 Luban 能力及固定版本的配套插件        | Windows / Ubuntu |
-| `@yin52133/dsh-luban-auth`          | 本地账号登录、认证 sidecar、账号上下文隔离 | Windows / Ubuntu |
-| `@yin52133/dsh-luban-taskboard`     | 六列看板、Agent 领单、夜间任务与 `taskctl` | Windows / Ubuntu |
-| `@yin52133/dsh-luban-keepalive`     | tmux/计划任务保活、心跳、重启恢复与检查点  | Windows / Ubuntu |
-| `@yin52133/dsh-luban-plan`          | 计划草稿、批准、驳回和修订闭环             | Windows / Ubuntu |
-| `@yin52133/dsh-luban-session-share` | 跨主机会话观察、重连与显式控制权交接       | Windows / Ubuntu |
-| `@yin52133/dsh-luban-image-paste`   | Web/剪贴板图片落盘、预览与会话引用         | Windows / Ubuntu |
-| `@yin52133/dsh-luban-hud`           | Web/CLI 状态栏、上下文与速率统计           | Windows / Ubuntu |
-| `@yin52133/dsh-luban-context`       | 上下文压缩、虚拟文件归档、检索与回放       | Windows / Ubuntu |
-| `@yin52133/dsh-luban-server-mode`   | systemd 常驻、构建队列、资源看护与产物下载 | Ubuntu           |
-| `@yin52133/dsh-luban-win-debug`     | 串口、烧录、GDB、ADB、远程通道与桌面 MCP   | Windows          |
-| `@yin52133/dsh-luban-browser`       | browser-use 桥接、任务模板和看板自动执行   | Windows / Ubuntu |
-| `@yin52133/dsh-luban-core`          | 插件共用契约、路由、错误与存储工具         | 内部依赖         |
+| 安装包                              | 用途                                              | 平台             |
+| ----------------------------------- | ------------------------------------------------- | ---------------- |
+| `@yin52133/dsh-luban`               | 安装完整套件                                      | Windows / Ubuntu |
+| `@yin52133/dsh-luban-auth`          | 登录和账号数据隔离                                | Windows / Ubuntu |
+| `@yin52133/dsh-luban-taskboard`     | 任务看板、Agent 领单和进度更新                    | Windows / Ubuntu |
+| `@yin52133/dsh-luban-keepalive`     | 会话保活、心跳、检查点和重启恢复                  | Windows / Ubuntu |
+| `@yin52133/dsh-luban-plan`          | 创建、批准、驳回和修订执行计划                    | Windows / Ubuntu |
+| `@yin52133/dsh-luban-session-share` | 跨主机会话查看、重连和控制权交接                  | Windows / Ubuntu |
+| `@yin52133/dsh-luban-image-paste`   | 图片上传、预览和会话引用                          | Windows / Ubuntu |
+| `@yin52133/dsh-luban-hud`           | 模型、上下文和调用速率状态面板                    | Windows / Ubuntu |
+| `@yin52133/dsh-luban-context`       | 上下文压缩、归档、检索和回放                      | Windows / Ubuntu |
+| `@yin52133/dsh-luban-server-mode`   | systemd 服务、构建队列、资源看护和产物下载        | Ubuntu           |
+| `@yin52133/dsh-luban-win-debug`     | 串口、烧录、GDB、ADB、远程连接和 Windows 桌面操作 | Windows          |
+| `@yin52133/dsh-luban-browser`       | 浏览器自动化、任务模板和看板任务执行              | Windows / Ubuntu |
 
 ## 快速开始
 
-### 使用插件
-
-需要 Node.js 22.19+、pnpm 11 和 DeepSeek Harness 0.1.1-rc.2。GitHub Packages 要求客户端登录；
-先创建只含 `read:packages` 的 classic PAT，并将用户名与 PAT 输入下面的交互式命令（不要把 PAT 写进仓库）：
+公开包可直接从 npm registry 安装，无需 GitHub 账号、Personal Access Token 或 npm 登录：
 
 ```sh
-npm login --scope=@yin52133 --auth-type=legacy --registry=https://npm.pkg.github.com
+dsh plugin --profile web add @yin52133/dsh-luban@0.1.2
 ```
 
-按交互提示填写：
+启动后使用统一入口 `http://127.0.0.1:42600/luban-auth/login`，首次访问时按页面提示创建管理员。
 
-- **Username**：你自己的 GitHub 用户名，不是包作者的用户名。
-- **Password**：只授予 `read:packages` 权限的 GitHub Personal Access Token（classic）。
-- **Email**：你的 GitHub 账号邮箱。
+## 安装
 
-`--scope=@yin52133` 只负责把 `@yin52133/*` 包映射到 GitHub Packages registry。完整安装会同时
-挂载全部 Luban 插件，并安装以下固定版本的配套项目：
+### 环境要求
+
+- Node.js 22.19.x 或 24 及更高版本
+- pnpm 11.24.0
+- DeepSeek Harness 0.1.1-rc.2
+
+软件包公开发布在 npm registry。普通安装不需要 GitHub 账号、Personal Access Token 或 npm 登录。
+如果这台机器以前将 `@yin52133` 指向 GitHub Packages，先清除旧映射：
+
+```sh
+npm config delete @yin52133:registry
+npm config get registry
+```
+
+第二条命令应显示 `https://registry.npmjs.org/`。
+
+安装完整套件：
+
+```sh
+dsh plugin --profile web add @yin52133/dsh-luban@0.1.2
+```
+
+完整套件还会安装以下固定版本的配套插件：
 
 - [`dshmarket@1.36.0`](https://github.com/dsh-market/dsh-market)
 - [`dsh-better-sidebar@0.17.1`](https://github.com/omdsh-dev/DSH-better-sidebar)
 - [`@furongjun1999/dsh-memory@0.4.0`](https://github.com/FuRongJun-1999/dsh-memory)
 
-```sh
-dsh plugin --profile web add @yin52133/dsh-luban@0.1.1
-```
-
-也可以先安装认证插件，再按需添加业务插件：
+也可以只安装需要的插件，例如：
 
 ```sh
 dsh plugin --profile web add @yin52133/dsh-luban-auth
 dsh plugin --profile web add @yin52133/dsh-luban-taskboard @yin52133/dsh-luban-hud @yin52133/dsh-luban-plan
 ```
 
-整包与重复的单包不要同时安装，以免同一插件被挂载两次。CI 发布不需要额外 npmjs 账号或 token：
-Release workflow 使用仓库的 `GITHUB_TOKEN` 发布 13 个包。
-不希望登录 Packages 时，也可以从 GitHub Release 下载已验收的 `.tgz` 文件进行本地安装。
+不要同时安装完整套件和其中的重复单包，否则同一插件会被加载两次。详细部署步骤见
+[Windows 部署](design/05-deployment/deploy-windows.md)和
+[Ubuntu 部署](design/05-deployment/deploy-ubuntu.md)。
 
-启动 profile 后，从认证 sidecar 进入：
+首次启动后打开 `http://127.0.0.1:42600/luban-auth/login`，按页面提示创建管理员并自动登录；
+不需要预先设置密码环境变量。无界面自动化部署仍可选择使用 `LUBAN_ADMIN_PASSWORD` 完成初始化。
 
-```text
-http://<host>:42600/luban-auth/login
+## 网络与安全
+
+只向实际需要访问的局域网地址开放登录服务端口。下面的 `<lan-client-cidr>` 应替换为路由器或网络管理员
+提供的局域网地址范围：
+
+```sh
+LAN_CIDR=<lan-client-cidr>
+sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
 ```
 
-插件统一使用 `/luban-<module>` 路由，例如 `/luban-taskboard`、`/luban-plan` 和
-`/luban-browser`。完整安装与服务注册见 [Windows 部署](design/05-deployment/deploy-windows.md)
-和 [Ubuntu 部署](design/05-deployment/deploy-ubuntu.md)。
+防火墙限制哪些设备能够连接，dsh-luban 的登录页负责用户访问控制。不要将服务直接暴露到公网。
 
-### 开发仓库
+## 开发
 
-Python 浏览器桥接只通过 `uv` 的锁定环境运行，不使用全局 pip：
+仓库使用 pnpm 管理 JavaScript 依赖，Python 浏览器桥接使用 `uv` 的锁定环境：
 
 ```sh
 corepack enable
@@ -142,49 +135,15 @@ pnpm check
 uv run --project tools/browser-bridge --locked python -m unittest discover -s tools/browser-bridge/tests
 ```
 
-## 网络说明
-
-Ubuntu 只需向实际局域网客户端范围开放认证 sidecar 端口。下面的 CIDR 是占位符，应替换为
-路由器或网络管理员提供的实际地址范围，不要把私有部署信息提交到仓库：
-
-```sh
-LAN_CIDR=<lan-client-cidr>
-sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
-```
-
-防火墙规则限制可以连接该端口的设备；访问 DSH 仍需通过 `/luban-auth/login` 登录。
-
-## 架构
-
-```mermaid
-flowchart LR
-    Browser["浏览器 / CLI"] --> Auth["@yin52133/dsh-luban-auth"]
-    Auth --> DSH["DeepSeek Harness"]
-    DSH --> Shared["任务 / Plan / HUD / 上下文 / 会话"]
-    DSH --> Windows["Windows 调试工具"]
-    DSH --> Ubuntu["Ubuntu 构建与保活"]
-    Shared --> Store[("账号级本地数据")]
-```
-
-各独立插件之间不直接依赖：共享类型和基础工具来自 `@yin52133/dsh-luban-core`，运行时协作通过 DSH
-服务、事件和 HTTP 契约完成。整包仅负责聚合安装。设计说明与当前状态分别见
-[design](design/README.md) 和 [design/checklist.json](design/checklist.json)。
+更多信息见[架构与模块设计](design/README.md)。
 
 ## 文档导航
 
+- [架构与模块设计](design/README.md)
 - [Windows 部署](design/05-deployment/deploy-windows.md)
 - [Ubuntu 部署](design/05-deployment/deploy-ubuntu.md)
-- [架构与模块设计](design/README.md)
-- [功能状态台账](design/checklist.json)
-- [English README](README.en.md)
-
-## 当前状态
-
-当前版本为 **0.1.1**：13 个 scoped 包同步进入 GitHub Packages，Release 提供对应 tarball 与
-SHA-256 清单。代码已经过 Windows/Ubuntu 实机及 CI 验收；个别需要外部模型或真实设备的项目仍在
-`design/checklist.json` 中如实标记。
+- [发布原则](design/06-release/release-principles.md)
 
 ## 许可
 
-[MIT](LICENSE)。第三方依赖和参考项目的许可说明见
-[参考项目分析](design/07-references/reference-analysis.md) 及各包的 `THIRD-PARTY-NOTICES.md`。
+[MIT](LICENSE)。第三方依赖的许可信息见各包的 `THIRD-PARTY-NOTICES.md`。

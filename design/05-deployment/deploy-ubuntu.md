@@ -28,7 +28,8 @@ flowchart LR
     U["systemd --user: dsh-luban.service<br/>+ loginctl enable-linger"] --> D["dsh --profile ubuntu-server --no-open"]
     D --> C["dsh-luban M01-M08, M09, M11"]
     D --> T["tmux: luban-* 任务会话"]
-    B["浏览器（同一局域网）"] -->|"账号密码（M01）"| D
+    B["本机 / 局域网浏览器"] -->|"42600 登录入口"| A["luban-auth sidecar"]
+    A -->|"内部 127.0.0.1:3080"| D
     W["Windows 调试机"] -->|"任务领单 / 会话观察（M05）"| D
 ```
 
@@ -38,9 +39,9 @@ flowchart LR
 2. **profile**：先运行 `scripts/deploy/setup-ubuntu.sh` 预览目标与文件清单；确认后增加
    `--apply`，生成 `~/.dsh/profiles/ubuntu-server/`。可用 `--dsh-home <path>` 指向隔离目录。
    脚本不改官方 preset，且目标已存在时拒绝覆盖。
-3. **安装套件**：先按根 README 登录 GitHub Packages，再执行
+3. **安装套件**：直接从公共 npm registry 执行
    `dsh plugin --profile ubuntu-server add @yin52133/dsh-luban-auth ... @yin52133/dsh-luban-server-mode`；
-   也可使用 GitHub Release 的本地 `.tgz`。
+   安装不需要 GitHub 账号或 PAT；也可使用 GitHub Release 的本地 `.tgz`。
 4. **A 档直装**：先运行 `scripts/install-3rd-party.sh --profile ubuntu-server --dry-run` 审核
    本地 lock v3 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
    `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Linux 宿主提供绝对且非根目录的
@@ -80,7 +81,8 @@ systemctl --user is-active dsh-luban.service
 整机重启只用于明确的开机恢复验收，不是常规安装或配置验证步骤。
 
 6. **linger**：`sudo loginctl enable-linger <user>`——不登录桌面也让 user 级服务开机自启（R02 关键）。
-7. **认证初始化**：首启引导建管理员；`config.port` 自定义（默认 42600）。
+7. **认证初始化**：DSH WebServer 仅监听内部 `127.0.0.1:3080`；本机和局域网浏览器统一访问
+   Luban `42600`。首启页面引导创建管理员，无需密码环境变量；`config.port` 仍可自定义。
 
 ```sh
 # Preview only (default)
@@ -116,6 +118,15 @@ dsh --profile ubuntu-server --dump-config
 ```
 
 Windows 与 Ubuntu 分别验证自己的 profile；无需额外证据 runner。
+
+浏览器统一入口：
+
+```text
+本机：http://127.0.0.1:42600/luban-auth/login
+局域网：http://<Ubuntu机器IP>:42600/luban-auth/login
+```
+
+不要直接访问或向局域网开放内部 DSH 上游 `127.0.0.1:3080`。
 
 ## 3. 重启恢复链路（与 M03/M09 协作）
 

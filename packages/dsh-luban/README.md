@@ -15,17 +15,22 @@ plugin together with the pinned companion plugins used by the suite.
 ## Install
 
 ```sh
-dsh plugin --profile <profile> add @yin52133/dsh-luban@0.1.1
+dsh plugin --profile <profile> add @yin52133/dsh-luban@0.1.2
 ```
 
 Use either this aggregate or selected standalone packages. Remove duplicate
 standalone installations before adding the aggregate so a plugin is not mounted twice.
+The public npm registry requires no GitHub account or PAT for installation.
 
 ## Configuration
 
 The bundled `cordis.patch.yml` uses the same row IDs and defaults as the
 standalone packages. Profile-level overrides therefore continue to target IDs
 such as `luban-auth`, `luban-taskboard`, and `better-sidebar`.
+
+Use `http://127.0.0.1:42600/luban-auth/login` locally or
+`http://<host-ip>:42600/luban-auth/login` on the LAN. Port `3080` remains a
+loopback-only DSH upstream and is not a second user entry point.
 
 ## Demo
 

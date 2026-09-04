@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-win-debug",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Safe Windows embedded-debug channels and DSH session injection",
   "type": "module",
   "main": "./dist/index.js",
@@ -36,7 +36,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org/"
   },
   "repository": {
     "type": "git",

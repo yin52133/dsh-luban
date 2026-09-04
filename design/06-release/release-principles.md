@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | v1.0 | 2026-09-01 | Codex | 收敛到标准 GitHub Release 与 npm 发布流程 |
 | v1.1 | 2026-09-02 | Codex | 增加完整套件、13 包发布与成功 CI 前置门禁 |
+| v1.2 | 2026-09-02 | Codex | 迁移到公共 npm registry 与 OIDC Trusted Publishing |
 
 ## 1. 发布目标
 
@@ -47,8 +48,8 @@
 
 ```bash
 node scripts/release/validate-release.mjs
-node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.1 --output .release-artifacts/v0.1.1
-node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.1
+node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.2 --output .release-artifacts/v0.1.2
+node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.2
 ```
 
 ## 5. 发布失败
@@ -71,5 +72,5 @@ npm 多包发布不是事务。任何包失败时立即停止：
 - [ ] 版本、CHANGELOG、README 与 `engines.dsh` 一致
 - [ ] 13 包 files、pack、manifest 与 publish dry-run 通过
 - [ ] 当前树和待公开历史中无凭据、token 或私人部署信息
-- [ ] npm 发布凭据与 GitHub Actions 发布变量已配置
+- [ ] 首次发布者 npm 身份有效，或各包已配置 GitHub Actions Trusted Publisher
 - [ ] tag、GitHub Release 与 npm 发布结果一致

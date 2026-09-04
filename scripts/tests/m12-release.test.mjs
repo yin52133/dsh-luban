@@ -1133,7 +1133,7 @@ describe('M12 release policy', () => {
     }
   })
 
-  it('keeps repository metadata, diagrams, and the design ledger discoverable', async () => {
+  it('keeps public compatibility, installation, and release metadata discoverable', async () => {
     const [chineseReadme, englishReadme, aggregateReadme, releaseWorkflow, checklist] =
       await Promise.all([
         readFile(join(REPOSITORY_ROOT, 'README.md'), 'utf8'),
@@ -1144,22 +1144,30 @@ describe('M12 release policy', () => {
       ])
 
     for (const readme of [chineseReadme, englishReadme]) {
-      expect(readme).toContain('img.shields.io/badge/license-MIT-2ea44f')
-      expect(readme).not.toContain('img.shields.io/github/license/')
-      expect(readme).toContain('Auth["@yin52133/dsh-luban-auth"]')
-      expect(readme).toContain('[design/checklist.json](design/checklist.json)')
+      expect(readme).toContain('img.shields.io/badge/npm%20package-0.1.2')
+      expect(readme).toContain('img.shields.io/badge/pnpm-11.24.0')
+      expect(readme).toContain('img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2')
+      expect(readme).not.toContain('img.shields.io/github/stars/')
+      expect(readme).not.toContain('/actions/workflows/ci.yml')
+      expect(readme).not.toContain('img.shields.io/github/v/release/')
+      expect(readme).not.toContain('[design/checklist.json](design/checklist.json)')
       expect(readme).toContain('https://github.com/dsh-market/dsh-market')
       expect(readme).toContain('https://github.com/omdsh-dev/DSH-better-sidebar')
-      expect(readme).toContain('read:packages')
+      expect(readme).toContain('registry.npmjs.org')
+      expect(readme).not.toContain('read:packages')
     }
     expect(aggregateReadme).toContain('https://github.com/dsh-market/dsh-market')
     expect(aggregateReadme).toContain('https://github.com/omdsh-dev/DSH-better-sidebar')
-    expect(JSON.parse(checklist).meta.version).toBe('0.1.1')
+    expect(JSON.parse(checklist).meta.version).toBe('0.1.2')
     await expect(access(join(REPOSITORY_ROOT, 'LICENSE'))).resolves.toBeUndefined()
     await expect(access(join(REPOSITORY_ROOT, 'checklist.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     })
     expect(releaseWorkflow).toContain('Require successful CI for the release commit')
+    expect(releaseWorkflow).toContain('id-token: write')
+    expect(releaseWorkflow).toContain('registry-url: https://registry.npmjs.org')
+    expect(releaseWorkflow).not.toContain('NODE_AUTH_TOKEN')
+    expect(releaseWorkflow).not.toContain('packages: write')
     expect(releaseWorkflow).toContain('--title "dsh-luban ${GITHUB_REF_NAME}"')
   })
 
@@ -1189,7 +1197,7 @@ describe('M12 release policy', () => {
       /without internal tracking identifiers: M12/u,
     )
     const repositoryChangelog = await readFile(join(REPOSITORY_ROOT, 'CHANGELOG.md'), 'utf8')
-    expect(releaseNotes('0.1.1', repositoryChangelog)).not.toMatch(
+    expect(releaseNotes('0.1.2', repositoryChangelog)).not.toMatch(
       /\b(?:M\d{2}(?:-F\d{3})?|F\d{3})\b/u,
     )
     const policy = await loadPolicy()
@@ -1216,7 +1224,7 @@ describe('M12 release policy', () => {
         './package.json': './package.json',
       },
       files: ['dist/', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
-      publishConfig: { access: 'public', registry: 'https://npm.pkg.github.com' },
+      publishConfig: { access: 'public', registry: 'https://registry.npmjs.org/' },
     }
     const manifest = {
       name: '@yin52133/dsh-luban-sample',
@@ -1234,7 +1242,7 @@ describe('M12 release policy', () => {
         './package.json': './package.json',
       },
       files: ['dist/', 'cordis.patch.yml', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
-      publishConfig: { access: 'public', registry: 'https://npm.pkg.github.com' },
+      publishConfig: { access: 'public', registry: 'https://registry.npmjs.org/' },
       dsh: { bundle: { patch: './cordis.patch.yml' } },
     }
     await json(join(root, 'package.json'), { name: 'fixture', version: '1.0.0', private: true })
@@ -1274,7 +1282,7 @@ describe('M12 release policy', () => {
     const artifacts = join(root, '.release-artifacts')
     await mkdir(artifacts)
     await json(join(root, 'package.json'), { name: 'fixture', version: '1.0.0', private: true })
-    const publishConfig = { access: 'public', registry: 'https://npm.pkg.github.com' }
+    const publishConfig = { access: 'public', registry: 'https://registry.npmjs.org/' }
     const samplePayload = packedManifestTarball({ name: 'sample', version: '1.0.0', publishConfig })
     const corePayload = packedManifestTarball({
       name: '@yin52133/dsh-luban-core',

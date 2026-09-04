@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Complete DSH Luban plugin suite with pinned companion plugins",
   "type": "module",
   "main": "./dist/index.js",
@@ -32,7 +32,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org/"
   },
   "repository": {
     "type": "git",
@@ -42,17 +42,17 @@
   "license": "MIT",
   "dependencies": {
     "@furongjun1999/dsh-memory": "0.4.0",
-    "@yin52133/dsh-luban-auth": "workspace:0.1.1",
-    "@yin52133/dsh-luban-browser": "workspace:0.1.1",
-    "@yin52133/dsh-luban-context": "workspace:0.1.1",
-    "@yin52133/dsh-luban-hud": "workspace:0.1.1",
-    "@yin52133/dsh-luban-image-paste": "workspace:0.1.1",
-    "@yin52133/dsh-luban-keepalive": "workspace:0.1.1",
-    "@yin52133/dsh-luban-plan": "workspace:0.1.1",
-    "@yin52133/dsh-luban-server-mode": "workspace:0.1.1",
-    "@yin52133/dsh-luban-session-share": "workspace:0.1.1",
-    "@yin52133/dsh-luban-taskboard": "workspace:0.1.1",
-    "@yin52133/dsh-luban-win-debug": "workspace:0.1.1",
+    "@yin52133/dsh-luban-auth": "workspace:0.1.2",
+    "@yin52133/dsh-luban-browser": "workspace:0.1.2",
+    "@yin52133/dsh-luban-context": "workspace:0.1.2",
+    "@yin52133/dsh-luban-hud": "workspace:0.1.2",
+    "@yin52133/dsh-luban-image-paste": "workspace:0.1.2",
+    "@yin52133/dsh-luban-keepalive": "workspace:0.1.2",
+    "@yin52133/dsh-luban-plan": "workspace:0.1.2",
+    "@yin52133/dsh-luban-server-mode": "workspace:0.1.2",
+    "@yin52133/dsh-luban-session-share": "workspace:0.1.2",
+    "@yin52133/dsh-luban-taskboard": "workspace:0.1.2",
+    "@yin52133/dsh-luban-win-debug": "workspace:0.1.2",
     "dsh-better-sidebar": "0.17.1",
     "dshmarket": "1.36.0"
   },

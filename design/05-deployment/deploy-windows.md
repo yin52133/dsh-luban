@@ -34,15 +34,16 @@ flowchart LR
 2. **创建 profile**：先运行 `scripts/deploy/setup-windows.ps1` 预览目标与文件清单；确认后增加
    `-Apply`，生成 `%DSH_HOME%\profiles\win-debug\`（`package.json`、`cordis.patch.yml`、
    `README.md`）。可用 `-DshHome <path>` 指向隔离目录。脚本不改官方 preset，且目标已存在时拒绝覆盖。
-3. **安装本套件**：先按根 README 登录 GitHub Packages，再执行
+3. **安装本套件**：直接从公共 npm registry 执行
    `dsh plugin --profile win-debug add @yin52133/dsh-luban-auth @yin52133/dsh-luban-taskboard ...`
-   （也可使用 GitHub Release 的本地 `.tgz` 联调）。
+   安装不需要 GitHub 账号或 PAT；也可使用 GitHub Release 的本地 `.tgz` 联调。
 4. **A 档直装**：先运行 `scripts/install-3rd-party.ps1 -Profile win-debug -DryRun` 审核本地
    lock v3 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
    `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Windows 宿主提供绝对且非根目录的
    `-DshHome` 与 `-ApprovedBy`；变更 lock 中的版本前必须重新 dry-run 并明确确认计划。
 5. **保活注册**：M03-F002 注册计划任务（登录时启动/开机按用户选择）；账本与配置目录 `%DSH_HOME%\luban\`。
-6. **认证初始化**：首次访问 web 引导创建管理员（M01-F001）；端口默认 42600 可配。
+6. **认证初始化**：启动时保持 DSH WebServer 仅监听 `127.0.0.1:3080`；本机和局域网浏览器都从
+   Luban `42600` 端口进入。首次访问登录页会引导创建管理员（M01-F001），无需密码环境变量。
 
 ```powershell
 # Preview only (default)
@@ -79,6 +80,15 @@ dsh --profile win-debug --dump-config
 ```
 
 Windows 与 Ubuntu 分别验证自己的 profile；无需额外证据 runner。
+
+浏览器统一入口：
+
+```text
+本机：http://127.0.0.1:42600/luban-auth/login
+局域网：http://<Windows机器IP>:42600/luban-auth/login
+```
+
+不要把内部 DSH 上游 `127.0.0.1:3080` 作为浏览器入口或开放到局域网。
 
 
 

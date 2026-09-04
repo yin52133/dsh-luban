@@ -3,7 +3,7 @@
   "meta": {
     "project": "dsh-luban",
     "description": "功能进度台账：与 design/01-overview/trace-matrix.md 及各模块文档功能清单三处一致，由 scripts/validate-design.mjs 校验",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "updatedAt": "2026-09-02",
     "idRules": "R=需求(只增不改) M=模块 F=功能点(只增不改，废弃置dropped) MS=里程碑"
   },
@@ -32,7 +32,7 @@
     {
       "id": "MS2",
       "name": "嵌入式 debug 线",
-      "goal": "Win 端可用：串口/adb/烧录/GDB/远程 + browser-use + GitHub Packages/Release 首次发布",
+      "goal": "Win 端可用：串口/adb/烧录/GDB/远程 + browser-use + npm registry/Release 首次发布",
       "order": 2,
       "featureIds": [
         "M10-F001", "M10-F002", "M10-F003", "M10-F004", "M10-F005", "M10-F006", "M10-F007", "M10-F008",
@@ -82,7 +82,7 @@
     { "id": "R11", "title": "Windows 端操作模式：远程、debug、串口、adb/fastboot、桌面与浏览器自动化", "modules": ["M10", "M11"], "status": "blocked" }
   ],
   "features": [
-    { "id": "M01-F001", "requirement": "R01", "module": "M01", "title": "用户账户体系（本地账户文件 + 口令哈希）", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["本地账户、常规口令哈希、首启管理员与原子账户文件测试通过，满足简单账号登录所需的持久化能力"] },
+    { "id": "M01-F001", "requirement": "R01", "module": "M01", "title": "用户账户体系（本地账户文件 + 口令哈希）", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-09-02", "notes": ["本地账户、常规口令哈希和原子账户文件测试通过；首次启动可在登录页创建管理员并自动登录，不需要预设密码环境变量，并发初始化只允许一个请求成功。"] },
     { "id": "M01-F002", "requirement": "R01", "module": "M01", "title": "登录会话与 token", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["登录 cookie、TTL、登出与全端下线后的 401 已由 sidecar 集成测试覆盖；本机 Edge 已渲染 canonical `/luban-auth/login`"] },
     { "id": "M01-F003", "requirement": "R01", "module": "M01", "title": "Web 认证门禁中间件", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["HTTP/SSE/WebSocket/SPA 的匿名跳转或 401 行为已通过集成测试；正向登录路由统一为 `/luban-auth/login`"] },
     { "id": "M01-F004", "requirement": "R10", "module": "M01", "title": "端口与监听地址配置", "priority": "P0", "milestone": "MS1", "status": "done", "designDoc": "design/03-modules/M01-auth.md", "updatedAt": "2026-08-30", "notes": ["host/port 配置、动态端口监听和 upstream 端口匹配测试通过"] },
@@ -156,11 +156,11 @@
     {"id":"M11-F004","requirement":"R11","module":"M11","title":"双平台浏览器内核收口","priority":"P2","milestone":"MS2","status":"done","designDoc":"design/03-modules/M11-browser.md","updatedAt":"2026-09-01","notes":["HAL 配置分支及 browser-use 内核已在 Windows Chrome/Edge 与 Ubuntu headless Chrome 验证，均能访问 fixture、读取 DOM 并干净停止；默认模型驱动的完整 Agent 任务归 M11-F001。"]},
 
     {"id":"M12-F001","requirement":"R04","module":"M12","title":"包脚手架与 dsh manifest 规范落地","priority":"P0","milestone":"MS1","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-02","notes":["13 个包使用统一版本，其中 `@yin52133/dsh-luban` 为完整套件入口，其余包遵循 `@yin52133/dsh-luban-*` 命名；manifest、内部 imports/external、lockfile、Cordis patch、Web loader ID、core-first 顺序、脚手架、架构与发布校验均由 build/typecheck/定向测试和 pack dry-run 直接验证。"]},
-    {"id":"M12-F002","requirement":"R04","module":"M12","title":"市场注册 PR + topic 打标","priority":"P1","milestone":"MS2","status":"dropped","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-01","notes":["dsh 插件市场注册不再属于当前发布目标；保留 ID 并按 statusLegend 标记 dropped，当前发布目标为 GitHub Packages 与 GitHub Release。"]},
-    {"id":"M12-F003","requirement":"R04","module":"M12","title":"发布流水线（tag→GitHub Packages→Release）","priority":"P1","milestone":"MS2","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-02","notes":["v0.1.0 发布流水线已在 GitHub Actions 完整通过；v0.1.1 流水线扩展为 13 个 scoped 包、明确的 Release 版本标题/正文，并要求 tag commit 已有成功的 mainline CI。"]},
+    {"id":"M12-F002","requirement":"R04","module":"M12","title":"市场注册 PR + topic 打标","priority":"P1","milestone":"MS2","status":"dropped","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-02","notes":["dsh 插件市场注册不再属于当前发布目标；保留 ID 并按 statusLegend 标记 dropped，当前发布目标为 npm registry 与 GitHub Release。"]},
+    {"id":"M12-F003","requirement":"R04","module":"M12","title":"发布流水线（tag→npm registry→Release）","priority":"P1","milestone":"MS2","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-09-02","notes":["v0.1.2 的 13 个公开 scoped 包已首次发布到 npm registry；后续发布任务使用 GitHub Actions OIDC Trusted Publishing。"]},
     {"id":"M12-F004","requirement":"R04","module":"M12","title":"A 档第三方插件安装脚本","priority":"P1","milestone":"MS2","status":"done","designDoc":"design/03-modules/M12-market-release.md","updatedAt":"2026-08-31","notes":["Windows 与 Ubuntu disposable profile 均已使用 production wrapper 完成 pinned 三插件的幂等安装、plugin list、dump-config、bundle/manifest/LICENSE 核验及 node-pty 原生加载。"]},
     { "id": "M12-F005", "requirement": "R04", "module": "M12", "title": "安全门禁（gitleaks + files 白名单 + publish dry-run）", "priority": "P0", "milestone": "MS1", "status": "dropped", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-08-30", "notes": ["安全扫描与供应链加固不再作为独立产品 feature；ID 按规则保留。files 白名单、pack/publish dry-run 作为防误发与发布稳定性并入 M12-F003/M12-F006"] },
-    { "id": "M12-F006", "requirement": "R04", "module": "M12", "title": "README 与版本记录规范落地（每包模板/engines.dsh 对齐）", "priority": "P1", "milestone": "MS2", "status": "done", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-09-02", "notes": ["中英根 README 覆盖完整套件与单包安装、明确版本、稳定 MIT 徽章、可渲染 Mermaid、GitHub Packages 登录和 Release tarball 回退；各包 README、CHANGELOG、部署与发布文档、模板、统一版本、DSH rc2 基线和 manifest/engines.dsh 验证器已对齐。"] },
+    { "id": "M12-F006", "requirement": "R04", "module": "M12", "title": "README 与版本记录规范落地（每包模板/engines.dsh 对齐）", "priority": "P1", "milestone": "MS2", "status": "done", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-09-02", "notes": ["中英根 README 覆盖完整套件与单包安装、明确版本、稳定 MIT 徽章、可渲染 Mermaid、npm 公开免登录安装和 Release tarball 回退；各包 README、CHANGELOG、部署与发布文档、模板、统一版本、DSH rc2 基线和 manifest/engines.dsh 验证器已对齐。"] },
     { "id": "M12-F007", "requirement": "R04", "module": "M12", "title": "GitHub dsh-plugin topic 可发现性", "priority": "P1", "milestone": "MS2", "status": "done", "designDoc": "design/03-modules/M12-market-release.md", "updatedAt": "2026-09-02", "notes": ["GitHub 仓库已添加 `dsh-plugin` repository topic，插件目录可按 topic 检索；该 topic 与版本 tag 分开管理。"] }
   ]
 }

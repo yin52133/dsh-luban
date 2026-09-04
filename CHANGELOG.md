@@ -5,6 +5,22 @@ Versioning and remain fixed across all publishable workspace packages.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-02
+
+### Added
+
+- Added an in-browser first-run setup page that creates the initial administrator
+  and signs in without requiring a password environment variable.
+
+### Changed
+
+- Made port `42600` the documented browser entry for both local and LAN users,
+  while keeping the DSH listener on loopback as an internal upstream.
+- Moved all 13 public packages to the npm registry so installation no longer
+  requires a GitHub account or personal access token.
+- Updated protected releases to use npm trusted publishing with short-lived
+  GitHub Actions identity tokens.
+
 ## [0.1.1] - 2026-09-02
 
 ### Added
@@ -62,6 +78,7 @@ Versioning and remain fixed across all publishable workspace packages.
 - Protected tag workflow that publishes identical tarballs to GitHub Packages
   and attaches them to the GitHub Release using the repository `GITHUB_TOKEN`.
 
-[Unreleased]: https://github.com/yin52133/dsh-luban/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/yin52133/dsh-luban/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.2
 [0.1.1]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.0

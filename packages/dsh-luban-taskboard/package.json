@@ -1,6 +1,6 @@
 {
   "name": "@yin52133/dsh-luban-taskboard",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Durable six-column taskboard and autonomous agent work queue for DSH",
   "type": "module",
   "main": "./dist/index.js",
@@ -39,7 +39,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org/"
   },
   "repository": {
     "type": "git",

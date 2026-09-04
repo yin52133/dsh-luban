@@ -24,8 +24,9 @@ Add the package to the Web profile before every business plugin:
 dsh plugin --profile web add @yin52133/dsh-luban-auth
 ```
 
-Bind the built-in DSH WebServer to loopback (the default example upstream is
-`127.0.0.1:3080`) and expose only the auth sidecar port to the LAN.
+Bind the built-in DSH WebServer to loopback (the default internal upstream is
+`127.0.0.1:3080`) and expose only the auth sidecar port to the LAN. Local and
+LAN browsers both use port `42600`; port `3080` is not a user entry point.
 Startup fails closed unless that WebServer reports `127.0.0.1` and its actual
 listening port matches the configured upstream port.
 
@@ -62,10 +63,16 @@ the service is intentionally meant to accept every routable source.
 
 ### First start
 
-Set `LUBAN_ADMIN_PASSWORD` to a password of at least eight characters for the
-first start. The plugin creates the initial `admin` account with a salted scrypt
-hash and never writes or logs the plaintext value. Remove the environment
-variable after the account has been created.
+Open `http://127.0.0.1:42600/luban-auth/login` on the DSH host, or use the
+host's LAN address from a trusted local network. When no account exists, the
+page asks for the first administrator username, password, and confirmation.
+It creates the account atomically, stores only a salted scrypt hash, and signs
+the administrator in. Concurrent setup requests cannot replace the first
+administrator.
+
+No environment variable is required for interactive setup. An unattended
+deployment may optionally set `LUBAN_ADMIN_PASSWORD` for one start to create
+the configured bootstrap administrator, then remove the variable.
 
 Open `http://<host>:42600/luban-auth/login`. This is the only supported login
 route; `/luban/auth/login` is not an alias. Use an HTTPS reverse proxy when the

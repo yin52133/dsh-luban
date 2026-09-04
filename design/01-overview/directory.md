@@ -10,6 +10,7 @@
 | v0.4 | 2026-08-30 | Codex | 移除安全扫描目标并保留发布质量门禁              |
 | v0.5 | 2026-09-01 | Codex | 12 包切换为 GitHub Packages scoped 发布         |
 | v0.6 | 2026-09-02 | Codex | 台账归入 design，并增加完整套件聚合包           |
+| v0.7 | 2026-09-02 | Codex | 13 个公共包迁移到 npm registry                  |
 
 ## 1. 总览
 
@@ -26,7 +27,7 @@ dsh-luban/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml               # lint + typecheck + build + test
-│       └── release.yml          # tag → GitHub Packages → GitHub Release
+│       └── release.yml          # tag → npm registry → GitHub Release
 ├── design/                      # 设计文档（本目录，唯一设计权威来源）
 │   ├── README.md
 │   ├── TEMPLATE.md
@@ -43,7 +44,7 @@ dsh-luban/
 │   ├── install-3rd-party.ps1    # A 档：Windows 受控安装 dshmarket / dsh-better-sidebar / @furongjun1999/dsh-memory
 │   ├── install-3rd-party.sh     # A 档：Ubuntu 同上
 │   ├── deploy/                  # 双端 profile 生成与部署脚本
-│   └── release/                 # 版本对齐、tag、GitHub Packages 发布辅助
+│   └── release/                 # 版本对齐、tag、npm registry 发布辅助
 ├── packages/
 │   ├── dsh-luban/               # @yin52133/dsh-luban：完整套件聚合安装入口
 │   ├── core/                    # @yin52133/dsh-luban-core：L1 HAL + L2 服务 + 契约定义
@@ -83,7 +84,7 @@ packages/dsh-luban-<name>/
 | --- | --- |
 | 完整套件包 | `@yin52133/dsh-luban`；精确依赖并聚合挂载全部单包及审核过的配套插件 |
 | 插件包名 | `@yin52133/dsh-luban-<module>`；源码目录仍为 `packages/dsh-luban-<module>` |
-| 内部核心包 | `@yin52133/dsh-luban-core`（随套件发布到 GitHub Packages，供其他包解析依赖） |
+| 内部核心包 | `@yin52133/dsh-luban-core`（随套件公开发布到 npm registry，供其他包解析依赖） |
 | cordis 插件 id | `luban-<module>`（patch 中的 `id:`） |
 | HTTP 路由前缀 | `/luban-<module>/...`（如 `/luban-auth/login`） |
 | 版本 | 全仓库统一版本号（fixed locking），见 06-release |

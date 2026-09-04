@@ -43,6 +43,24 @@ describe('AuthManager', () => {
     expect(audit.entries.map((entry) => entry.reason)).toContain('bad-credentials')
   })
 
+  it('allows only one concurrent first-administrator creation', async () => {
+    fixture = await createManagerFixture()
+    const { manager } = fixture
+
+    const created = await Promise.all([
+      manager.createInitialAdmin('first-admin', 'first password'),
+      manager.createInitialAdmin('second-admin', 'second password'),
+    ])
+
+    expect(created.filter(Boolean)).toHaveLength(1)
+    expect(await manager.hasUsers()).toBe(true)
+    const successfulUsername = created[0] ? 'first-admin' : 'second-admin'
+    const successfulPassword = created[0] ? 'first password' : 'second password'
+    expect(await manager.verify(successfulUsername, successfulPassword, '127.0.0.1')).toEqual({
+      ok: true,
+    })
+  })
+
   it('uses a dummy hash for unknown accounts and enforces the IP rate budget', async () => {
     fixture = await createManagerFixture({ loginRateLimit: 2 })
     const { manager, hasher } = fixture

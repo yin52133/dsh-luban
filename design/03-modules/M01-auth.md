@@ -14,6 +14,7 @@
 | v0.6 | 2026-08-30 | Codex | 收敛为简单账号登录与账号上下文隔离，废弃安全加固目标 |
 | v0.7 | 2026-08-30 | Codex | 将来源地址降为临时诊断字段，不作为锁定、限速或审计验收 |
 | v0.8 | 2026-08-31 | Codex | 记录原生 DSH HTTP RPC/SSE 账号隔离实机验收 |
+| v0.9 | 2026-09-02 | Codex | 增加首启网页建管理员并明确 42600 单一用户入口 |
 
 ## 1. 概述与目标
 
@@ -44,6 +45,14 @@ sequenceDiagram
     participant G as luban-auth 门禁中间件
     participant A as AuthService (L2)
     participant S as 账户存储 (HAL)
+    alt 尚无账号
+        B->>G: GET /luban-auth/login
+        G-->>B: 首启管理员设置页
+        B->>G: POST {user, password, confirmPassword}
+        G->>A: 原子创建首个管理员并签发 token
+        A->>S: 写入口令哈希与会话
+        G-->>B: 303 → 原目标
+    end
     B->>G: GET /（任意业务路由）
     alt 无有效 token
         G-->>B: 302 → /luban-auth/login
@@ -105,9 +114,9 @@ export type AuthEvent =
     - id: luban-auth
       name: '@yin52133/dsh-luban-auth'
       config:
-        port: 42600            # 默认端口（可自定义）
+        port: 42600            # 本机与局域网的单一用户入口（可自定义）
         host: 0.0.0.0
-        upstream: "http://127.0.0.1:3080"  # DSH WebServer 地址
+        upstream: "http://127.0.0.1:3080"  # 仅供 sidecar 使用的内部 DSH 地址
         sessionTtlHours: 72
         usersFile: "~/.dsh/luban/auth/users.json"   # 经 HAL 解析，win/ubuntu 各自 home
 ```
@@ -131,7 +140,8 @@ M01-F001 ~ M01-F008 共 8 项；M01-F005 保留 ID 但状态为 `dropped`。
 
 ## 10. 实现与验证记录
 
-- `AuthManager` 已覆盖首启、口令验证、会话过期、登出和全端下线；账户状态使用原子文件更新。
+- `AuthManager` 已覆盖首启网页创建管理员、并发唯一创建、口令验证、会话过期、登出和全端下线；
+  账户状态使用原子文件更新。环境变量仅保留为无人值守初始化的可选入口。
 - `AuthSidecar` 代理 HTTP、SSE 与 WebSocket；唯一 canonical 登录入口为 `/luban-auth/login`。
 - DSH 0.1.1-rc.2 的生产会话接口使用 HTTP RPC，变化通知使用 SSE；该版本没有注册
   WebSocket 会话路由。sidecar 对通用 WebSocket upgrade 做登录门禁，不为不存在的会话帧协议

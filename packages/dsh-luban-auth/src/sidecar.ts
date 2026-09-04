@@ -297,24 +297,17 @@ export class AuthSidecar implements AuthGateway {
   ): Promise<void> {
     if (request.method === 'GET' || request.method === 'HEAD') {
       const initialized = await this.#manager.hasUsers()
-      const html = renderLoginPage(
-        safeReturnTo(target.searchParams.get('returnTo')),
-        initialized,
-        '',
-        this.#config.bootstrapAdminPasswordEnv,
+      sendAuthPage(
+        response,
+        {
+          returnTo: safeReturnTo(target.searchParams.get('returnTo')),
+          initialized,
+          username: initialized ? '' : this.#config.bootstrapAdminUser,
+        },
+        200,
+        {},
+        request.method === 'HEAD',
       )
-      const payload = Buffer.from(html, 'utf8')
-      response.writeHead(200, {
-        'cache-control': 'no-store',
-        'content-security-policy':
-          "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-        'content-type': 'text/html; charset=utf-8',
-        'content-length': String(payload.length),
-        'referrer-policy': 'no-referrer',
-        'x-content-type-options': 'nosniff',
-        'x-frame-options': 'DENY',
-      })
-      response.end(request.method === 'HEAD' ? undefined : payload)
       return
     }
     if (request.method !== 'POST') {
@@ -335,30 +328,83 @@ export class AuthSidecar implements AuthGateway {
     if (typeof username !== 'string' || typeof password !== 'string') {
       throw new HttpError(400, 'E_INVALID_INPUT', 'user and password are required')
     }
+    const returnTo = safeReturnTo(body.returnTo)
+    const htmlResponse = contentType === 'application/x-www-form-urlencoded' || wantsHtml(request)
+    if (!(await this.#manager.hasUsers())) {
+      const confirmPassword = body.confirmPassword
+      if (typeof confirmPassword !== 'string' || confirmPassword !== password) {
+        if (htmlResponse) {
+          sendAuthPage(
+            response,
+            {
+              returnTo,
+              initialized: false,
+              username,
+              error: 'The passwords do not match.',
+            },
+            400,
+          )
+        } else {
+          sendJson(response, 400, {
+            error: 'E_INVALID_INPUT',
+            message: 'password and confirmPassword must match',
+          })
+        }
+        return
+      }
+      let created: boolean
+      try {
+        created = await this.#manager.createInitialAdmin(username, password)
+      } catch (error: unknown) {
+        if (!(error instanceof TypeError)) throw error
+        if (htmlResponse) {
+          sendAuthPage(
+            response,
+            {
+              returnTo,
+              initialized: false,
+              username,
+              error: initialSetupInputMessage(error),
+            },
+            400,
+          )
+        } else {
+          sendJson(response, 400, {
+            error: 'E_INVALID_INPUT',
+            message: initialSetupInputMessage(error),
+          })
+        }
+        return
+      }
+      if (!created) {
+        const message = 'Luban was initialized by another request. Sign in to continue.'
+        if (htmlResponse) {
+          sendAuthPage(response, { returnTo, initialized: true, username, error: message }, 409)
+        } else {
+          sendJson(response, 409, { error: 'E_ALREADY_INITIALIZED', message })
+        }
+        return
+      }
+      await this.#issueLoginResponse(response, username, security, returnTo, htmlResponse, 201)
+      return
+    }
     const result = await this.#manager.verify(username, password, security.sourceIp)
     if (!result.ok) {
       const status = result.reason === 'locked' ? 429 : 401
       const headers =
         result.retryAfterSec === undefined ? {} : { 'retry-after': String(result.retryAfterSec) }
-      if (contentType === 'application/x-www-form-urlencoded' || wantsHtml(request)) {
-        const payload = Buffer.from(
-          renderLoginPage(
-            safeReturnTo(body.returnTo),
-            true,
-            'Invalid credentials or account temporarily unavailable.',
-            this.#config.bootstrapAdminPasswordEnv,
-          ),
-          'utf8',
+      if (htmlResponse) {
+        sendAuthPage(
+          response,
+          {
+            returnTo,
+            initialized: true,
+            username,
+            error: 'Invalid credentials or account temporarily unavailable.',
+          },
+          status,
+          headers,
         )
-        response.writeHead(status, {
-          'cache-control': 'no-store',
-          'content-security-policy':
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-          'content-type': 'text/html; charset=utf-8',
-          'content-length': String(payload.length),
-          ...headers,
-        })
-        response.end(payload)
       } else {
         sendJson(
           response,
@@ -369,15 +415,25 @@ export class AuthSidecar implements AuthGateway {
       }
       return
     }
+    await this.#issueLoginResponse(response, username, security, returnTo, htmlResponse, 200)
+  }
+
+  async #issueLoginResponse(
+    response: ServerResponse,
+    username: string,
+    security: RequestSecurityContext,
+    returnTo: string,
+    htmlResponse: boolean,
+    jsonStatus: 200 | 201,
+  ): Promise<void> {
     const issued = await this.#manager.issueBrowserSession(username, security.sourceIp)
-    const returnTo = safeReturnTo(body.returnTo)
     const cookies = issueAuthCookies(
       issued.cookieToken,
       issued.csrfToken,
       Math.max(1, Math.floor((issued.session.expiresAt - issued.session.issuedAt) / 1_000)),
       this.#cookieIsSecure(security),
     )
-    if (contentType === 'application/x-www-form-urlencoded' || wantsHtml(request)) {
+    if (htmlResponse) {
       response.writeHead(303, {
         'cache-control': 'no-store',
         location: returnTo,
@@ -388,7 +444,7 @@ export class AuthSidecar implements AuthGateway {
     }
     sendJson(
       response,
-      200,
+      jsonStatus,
       {
         ok: true,
         user: issued.session.user,
@@ -978,6 +1034,35 @@ export class AuthSidecar implements AuthGateway {
   }
 }
 
+interface AuthPageOptions {
+  readonly returnTo: string
+  readonly initialized: boolean
+  readonly username: string
+  readonly error?: string
+}
+
+function sendAuthPage(
+  response: ServerResponse,
+  options: AuthPageOptions,
+  status = 200,
+  headers: Readonly<Record<string, string>> = {},
+  head = false,
+): void {
+  const payload = Buffer.from(renderLoginPage(options), 'utf8')
+  response.writeHead(status, {
+    'cache-control': 'no-store',
+    'content-security-policy':
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': String(payload.length),
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    ...headers,
+  })
+  response.end(head ? undefined : payload)
+}
+
 class DshSseFilter extends Transform {
   readonly #decoder = new StringDecoder('utf8')
   readonly #filter: (block: string) => Promise<string | null>
@@ -1310,30 +1395,48 @@ function clearAuthCookies(secure: boolean): string[] {
   )
 }
 
-function renderLoginPage(
-  returnTo: string,
-  initialized: boolean,
-  error = '',
-  passwordEnvironment = 'LUBAN_ADMIN_PASSWORD',
-): string {
-  const escapedReturnTo = escapeHtml(returnTo)
-  const state = initialized
+function renderLoginPage(options: AuthPageOptions): string {
+  const escapedReturnTo = escapeHtml(options.returnTo)
+  const escapedUsername = escapeHtml(options.username)
+  const state = options.initialized
     ? `<form method="post" action="${LOGIN_ROUTE}">
         <input type="hidden" name="returnTo" value="${escapedReturnTo}">
-        <label>Username<input name="user" autocomplete="username" required></label>
+        <label>Username<input name="user" value="${escapedUsername}" autocomplete="username" required></label>
         <label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required></label>
         <button type="submit">Sign in</button>
       </form>`
-    : `<p class="notice">No administrator exists. Set <code>${escapeHtml(passwordEnvironment)}</code>, restart DSH once, then remove the environment variable.</p>`
-  const errorMarkup = error === '' ? '' : `<p class="error" role="alert">${escapeHtml(error)}</p>`
+    : `<p class="notice">Create the first administrator to finish setting up Luban.</p>
+      <form method="post" action="${LOGIN_ROUTE}">
+        <input type="hidden" name="returnTo" value="${escapedReturnTo}">
+        <label>Administrator username<input name="user" value="${escapedUsername}" autocomplete="username" minlength="3" maxlength="64" pattern="[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}" required></label>
+        <label>Password<input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="1024" required></label>
+        <label>Confirm password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="1024" required></label>
+        <button type="submit">Create administrator</button>
+      </form>
+      <p class="hint">Complete this step only on a trusted local network.</p>`
+  const errorMarkup =
+    options.error === undefined || options.error === ''
+      ? ''
+      : `<p class="error" role="alert">${escapeHtml(options.error)}</p>`
+  const title = options.initialized ? 'Sign in to Luban' : 'Set up Luban'
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Luban sign in</title><style>
+<title>${escapeHtml(title)}</title><style>
 body{font:16px system-ui;background:#10151d;color:#edf3fa;display:grid;place-items:center;min-height:100vh;margin:0}
 main{width:min(24rem,calc(100% - 2rem));background:#18222e;padding:2rem;border-radius:1rem;box-shadow:0 1rem 3rem #0008}
 label{display:grid;gap:.4rem;margin:1rem 0}input,button{font:inherit;padding:.7rem;border-radius:.45rem;border:1px solid #65758b}
-button{width:100%;background:#4e9df5;color:#07111e;border:0;font-weight:700}.error{color:#ffb2b2}.notice{line-height:1.5}code{color:#9dccff}
-</style></head><body><main><h1>Luban</h1>${errorMarkup}${state}</main></body></html>`
+button{width:100%;background:#4e9df5;color:#07111e;border:0;font-weight:700}.error{color:#ffb2b2}.notice,.hint{line-height:1.5}.hint{color:#aebdce;font-size:.9rem;margin-bottom:0}
+</style></head><body><main><h1>${escapeHtml(title)}</h1>${errorMarkup}${state}</main></body></html>`
+}
+
+function initialSetupInputMessage(error: TypeError): string {
+  if (error.message.includes('username')) {
+    return 'Username must contain 3-64 letters, digits, dots, dashes, or underscores.'
+  }
+  if (error.message.includes('password')) {
+    return 'Password must contain 8-1024 characters.'
+  }
+  return 'The administrator details are invalid.'
 }
 
 function escapeHtml(value: string): string {

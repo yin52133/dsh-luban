@@ -2,139 +2,127 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-[![CI](https://github.com/yin52133/dsh-luban/actions/workflows/ci.yml/badge.svg?branch=mainline)](https://github.com/yin52133/dsh-luban/actions/workflows/ci.yml)
-[![GitHub Stars](https://img.shields.io/github/stars/yin52133/dsh-luban?style=flat-square)](https://github.com/yin52133/dsh-luban/stargazers)
-[![GitHub Release](https://img.shields.io/github/v/release/yin52133/dsh-luban?display_name=tag&style=flat-square)](https://github.com/yin52133/dsh-luban/releases)
-[![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-%40yin52133-24292f?style=flat-square&logo=github)](https://github.com/yin52133/dsh-luban/pkgs/npm/dsh-luban-auth)
-[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square)](LICENSE)
+[![npm package](https://img.shields.io/badge/npm%20package-0.1.2-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/@yin52133/dsh-luban)
+[![pnpm](https://img.shields.io/badge/pnpm-11.24.0-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2-536DFE)](https://github.com/deepseek-ai/deepseek-harness)
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin suite for
-embedded development. It connects a Windows debug workstation and an Ubuntu build server into a
-browser-accessible DSH workbench with persistent jobs and account-separated contexts.
+dsh-luban is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin suite for
+embedded development. It connects a Windows debug workstation and an Ubuntu build server to one
+browser workbench for device debugging, background builds, task tracking, and session recovery.
 
-## Why dsh-luban
+The project is intended for individuals and small teams on a trusted local network. Its built-in
+accounts separate users' tasks, sessions, and attachments; they are not a replacement for enterprise
+identity management or public-network security.
 
-- **Two-host workflow**: use Windows for serial, ADB, flashing, and GDB; use Ubuntu for builds and long-running jobs.
-- **One entry point**: sign in at `/luban-auth/login`; tasks, sessions, attachments, and contexts are separated by account.
-- **Closed task loop**: a six-column board supports human edits, agent claims, progress reports, and human review.
-- **Persistent work**: tmux, Windows Task Scheduler, and systemd keep sessions alive and recover them after restart.
-- **Visible context**: the HUD reports context pressure, model, reasoning level, RPM/TPM, and replayable compaction.
-- **Embedded toolchain**: one surface integrates serial, ADB/Fastboot, OpenOCD, GDB, SSH, Telnet, and TCP serial.
-- **Complete or selective installation**: install `@yin52133/dsh-luban` for the full suite, or add only the standalone plugins a host needs.
+## Features
 
-The project targets a trusted LAN. Its simple account system separates a small number of users'
-working contexts; it is not an enterprise identity or network-hardening product.
-
-## Deployment profiles
-
-| Host                      | Primary role                                                                     | Recommended plugins                                   |
-| ------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Windows debug workstation | Serial, ADB/Fastboot, flashing, GDB, desktop and browser automation              | auth, taskboard, keepalive, HUD, win-debug, browser   |
-| Ubuntu build server       | Web entry point, persistent sessions, build queue, artifacts, browser automation | auth, taskboard, keepalive, HUD, server-mode, browser |
-
-Both hosts can add plan, context, image-paste, and session-share to work with tasks and session views
-under the same account.
+- **Cross-host workflow**: use Windows for serial devices, Android Debug Bridge (ADB), flashing, and GNU Debugger (GDB); use Ubuntu for builds and long-running jobs.
+- **Task management**: create, claim, execute, and review work on a taskboard, with linked execution plans.
+- **Persistent work**: keep sessions and jobs running with tmux, Windows Task Scheduler, and systemd, and recover them after restart.
+- **Context management**: inspect the model, reasoning level, context usage, and request rates; search and replay compacted records.
+- **Images and shared sessions**: upload or paste images into a session, view sessions across hosts, and explicitly hand off control.
+- **Embedded toolchain**: work with serial devices, ADB/Fastboot, OpenOCD, GDB, SSH, Telnet, and TCP serial connections.
+- **Flexible installation**: install the complete suite or only the plugins needed on each host.
 
 ## Interface
 
-![Signed-in Luban Taskboard with linked Plan and HUD status](docs/screenshots/taskboard.png)
+![Luban taskboard with an execution plan and status panel](docs/screenshots/taskboard.png)
 
-This image is rendered directly from the production Taskboard component with non-sensitive demo
-data. It shows the six-column workflow, host/workspace filters, acceptance criteria, human review
-after agent completion, a linked Plan, and context/rate status in the HUD.
+After signing in, users can track task states, filter by host and workspace, define acceptance
+criteria, review agent results, open linked plans, and inspect context usage and request rates.
 
-| Signed-in feature                 | Workflow                                                                                      |
-| --------------------------------- | --------------------------------------------------------------------------------------------- |
-| Taskboard                         | Create → agent claim → progress → Review → Done, with drag and keyboard/touch controls        |
-| Plan                              | Draft → approve/reject → revise; linked plans open directly from task cards                   |
-| HUD / Context                     | Inspect model, reasoning level, context pressure, RPM/TPM, and replayable archives            |
-| Image Paste                       | Paste or upload → account-scoped storage and preview → inject into the active DSH session     |
-| Session Share / Keepalive         | Observe sessions across hosts, explicitly hand off control, and recover managed work          |
-| Win Debug / Server Mode / Browser | Feed Windows debugging, Ubuntu build artifacts, and browser tasks back into the same workflow |
+All Web features use Luban's port `42600` as their single entry point:
 
-<details>
-<summary>Sign-in entry point (secondary screen)</summary>
-
-![Luban sign-in screen](docs/screenshots/login.png)
-
-</details>
-
-All Web features enter through `/luban-auth/login`. The taskboard, HUD, Plan, and image tools reuse
-the same account session after sign-in. Anonymous API requests return 401, and
-`/luban/auth/login` is intentionally not an alias.
-
-## Packages
-
-| GitHub Packages package             | Capability                                                              | Platform            |
-| ----------------------------------- | ----------------------------------------------------------------------- | ------------------- |
-| `@yin52133/dsh-luban`               | Complete Luban suite with pinned companion plugins                      | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-auth`          | Local login, authentication sidecar, and account context separation     | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-taskboard`     | Six-column board, agent claims, night jobs, and `taskctl`               | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-keepalive`     | tmux/Task Scheduler persistence, heartbeat, recovery, and checkpoints   | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-plan`          | Draft, approve, reject, and revise plans                                | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-session-share` | Cross-host session views, reconnect, and explicit control handoff       | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-image-paste`   | Paste and store images, preview them, and reference them from a session | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-hud`           | Web/CLI status bar with context and rate metrics                        | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-context`       | Context compaction, virtual-file archive, search, and replay            | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-server-mode`   | systemd service, build queue, resource checks, and artifacts            | Ubuntu              |
-| `@yin52133/dsh-luban-win-debug`     | Serial, flashing, GDB, ADB, remote channels, and desktop MCP            | Windows             |
-| `@yin52133/dsh-luban-browser`       | browser-use bridge, task templates, and taskboard automation            | Windows / Ubuntu    |
-| `@yin52133/dsh-luban-core`          | Shared contracts, routes, errors, and storage utilities                 | Internal dependency |
-
-## Quick start
-
-### Install plugins
-
-You need Node.js 22.19+, pnpm 11, and DeepSeek Harness 0.1.1-rc.2. GitHub Packages requires
-client authentication. Create a classic PAT with only `read:packages`, then enter your GitHub
-username and PAT in this interactive command (never commit the PAT):
-
-```sh
-npm login --scope=@yin52133 --auth-type=legacy --registry=https://npm.pkg.github.com
+```text
+Local: http://127.0.0.1:42600/luban-auth/login
+LAN:   http://<host-ip>:42600/luban-auth/login
 ```
 
-Enter the following values at the prompts:
+DSH at `127.0.0.1:3080` is an internal Luban upstream. Do not browse to it directly or expose it
+to the LAN.
 
-- **Username**: your own GitHub username, not the package owner's username.
-- **Password**: a GitHub personal access token (classic) limited to `read:packages`.
-- **Email**: the email address associated with your GitHub account.
+## Plugins and platforms
 
-`--scope=@yin52133` only maps `@yin52133/*` packages to the GitHub Packages registry. The
-complete installation mounts every Luban plugin and installs these projects at pinned versions:
+| Package                             | Purpose                                                                     | Platform         |
+| ----------------------------------- | --------------------------------------------------------------------------- | ---------------- |
+| `@yin52133/dsh-luban`               | Install the complete suite                                                  | Windows / Ubuntu |
+| `@yin52133/dsh-luban-auth`          | Sign-in and account-scoped data                                             | Windows / Ubuntu |
+| `@yin52133/dsh-luban-taskboard`     | Taskboard, agent claims, and progress updates                               | Windows / Ubuntu |
+| `@yin52133/dsh-luban-keepalive`     | Session persistence, heartbeats, checkpoints, and restart recovery          | Windows / Ubuntu |
+| `@yin52133/dsh-luban-plan`          | Create, approve, reject, and revise execution plans                         | Windows / Ubuntu |
+| `@yin52133/dsh-luban-session-share` | Cross-host session views, reconnect, and control handoff                    | Windows / Ubuntu |
+| `@yin52133/dsh-luban-image-paste`   | Image upload, preview, and session references                               | Windows / Ubuntu |
+| `@yin52133/dsh-luban-hud`           | Model, context, and request-rate status panel                               | Windows / Ubuntu |
+| `@yin52133/dsh-luban-context`       | Context compaction, archive, search, and replay                             | Windows / Ubuntu |
+| `@yin52133/dsh-luban-server-mode`   | systemd service, build queue, resource checks, and artifacts                | Ubuntu           |
+| `@yin52133/dsh-luban-win-debug`     | Serial, flashing, GDB, ADB, remote connections, and Windows desktop control | Windows          |
+| `@yin52133/dsh-luban-browser`       | Browser automation, task templates, and taskboard execution                 | Windows / Ubuntu |
+
+## Installation
+
+### Requirements
+
+- Node.js 22.19.x or version 24 and later
+- pnpm 11.24.0
+- DeepSeek Harness 0.1.1-rc.2
+
+Packages are public on the npm registry. Installation does not require a GitHub account, personal
+access token, or npm login. If this machine previously mapped `@yin52133` to GitHub Packages, remove
+that legacy mapping first:
+
+```sh
+npm config delete @yin52133:registry
+npm config get registry
+```
+
+The second command should print `https://registry.npmjs.org/`.
+
+Install the complete suite:
+
+```sh
+dsh plugin --profile web add @yin52133/dsh-luban@0.1.2
+```
+
+The complete suite also installs these companion plugins at fixed versions:
 
 - [`dshmarket@1.36.0`](https://github.com/dsh-market/dsh-market)
 - [`dsh-better-sidebar@0.17.1`](https://github.com/omdsh-dev/DSH-better-sidebar)
 - [`@furongjun1999/dsh-memory@0.4.0`](https://github.com/FuRongJun-1999/dsh-memory)
 
-```sh
-dsh plugin --profile web add @yin52133/dsh-luban@0.1.1
-```
-
-Alternatively, install authentication first and then add only the capabilities needed by the profile:
+Alternatively, install only the plugins you need:
 
 ```sh
 dsh plugin --profile web add @yin52133/dsh-luban-auth
 dsh plugin --profile web add @yin52133/dsh-luban-taskboard @yin52133/dsh-luban-hud @yin52133/dsh-luban-plan
 ```
 
-Do not install the aggregate together with duplicate standalone packages, because that would mount a
-plugin twice. Publishing from CI needs no npmjs account or token: the Release workflow publishes all
-13 packages with the repository's `GITHUB_TOKEN`. For a token-free client path, download the validated
-`.tgz` files from the GitHub Release and install them locally.
+Do not install the complete suite together with duplicate standalone packages, because that loads
+the same plugin twice. For detailed setup, see the
+[Windows deployment guide](design/05-deployment/deploy-windows.md) and
+[Ubuntu deployment guide](design/05-deployment/deploy-ubuntu.md).
 
-After starting the profile, enter through the authentication sidecar:
+After the first start, open `http://127.0.0.1:42600/luban-auth/login`, create the administrator in
+the setup page, and continue in the signed-in session. No password environment variable is required.
+Unattended deployments may still opt into `LUBAN_ADMIN_PASSWORD` for bootstrap automation.
 
-```text
-http://<host>:42600/luban-auth/login
+## Network and security
+
+Expose the sign-in service only to the local network range that needs access. Replace
+`<lan-client-cidr>` below with the local network range provided by your router or network
+administrator:
+
+```sh
+LAN_CIDR=<lan-client-cidr>
+sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
 ```
 
-Plugin routes consistently use `/luban-<module>`, including `/luban-taskboard`, `/luban-plan`,
-and `/luban-browser`. See the [Windows deployment guide](design/05-deployment/deploy-windows.md)
-and [Ubuntu deployment guide](design/05-deployment/deploy-ubuntu.md) for installation and service setup.
+The firewall limits which devices can connect, while the dsh-luban sign-in page controls user
+access. Do not expose the service directly to the public internet.
 
-### Develop the repository
+## Development
 
-The Python browser bridge runs only from its locked `uv` environment; no global pip environment is used.
+The repository uses pnpm for JavaScript dependencies. The Python browser bridge uses a locked `uv`
+environment:
 
 ```sh
 corepack enable
@@ -143,46 +131,9 @@ pnpm check
 uv run --project tools/browser-bridge --locked python -m unittest discover -s tools/browser-bridge/tests
 ```
 
-## Network access
-
-On Ubuntu, expose the authentication sidecar only to the actual LAN client range. The CIDR below is
-a placeholder; replace it with the range supplied by the router or network administrator, and never
-commit private deployment details:
-
-```sh
-LAN_CIDR=<lan-client-cidr>
-sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
-```
-
-The firewall rule limits which devices can connect to the port. DSH access still requires a login at
-`/luban-auth/login`.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    Browser["Browser / CLI"] --> Auth["@yin52133/dsh-luban-auth"]
-    Auth --> DSH["DeepSeek Harness"]
-    DSH --> Shared["Tasks / Plan / HUD / Context / Sessions"]
-    DSH --> Windows["Windows debug tools"]
-    DSH --> Ubuntu["Ubuntu builds and persistence"]
-    Shared --> Store[("Account-scoped local data")]
-```
-
-Standalone plugins do not depend on each other directly. Shared types and utilities live in
-`@yin52133/dsh-luban-core`, while runtime cooperation uses DSH services, events, and HTTP contracts.
-The aggregate only coordinates installation. See [design](design/README.md) for design notes and
-[design/checklist.json](design/checklist.json) for current implementation status.
-
-## Project status
-
-The current version is **0.1.1**. All 13 scoped packages are published to GitHub Packages, and the
-Release includes the matching tarballs and SHA-256 manifest. The code passed Windows/Ubuntu host
-acceptance and CI; items that still require an external model or real hardware remain marked honestly
-in `design/checklist.json`.
+See [architecture and module design](design/README.md) for more information.
 
 ## License
 
-[MIT](LICENSE). Third-party dependency and reference-project licensing is documented in
-[reference analysis](design/07-references/reference-analysis.md) and each package's
+[MIT](LICENSE). Third-party license information is available in each package's
 `THIRD-PARTY-NOTICES.md`.

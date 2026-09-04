@@ -62,11 +62,6 @@ export async function apply(ctx: Context, config: LubanAuthConfig): Promise<void
   ctx.effect(() => async (): Promise<void> => manager.close(), 'lubanAuth.state')
   new LubanAuthService(ctx, manager)
 
-  if (!(await manager.hasUsers())) {
-    ctx.logger.warn(
-      `luban-auth: no users configured; set ${config.bootstrapAdminPasswordEnv} for one restart to create ${config.bootstrapAdminUser}`,
-    )
-  }
   if (config.host === '0.0.0.0' && config.secureCookies !== 'always') {
     ctx.logger.warn('luban-auth: LAN HTTP is not safe for public networks; use a TLS reverse proxy')
   }
@@ -85,7 +80,15 @@ export async function apply(ctx: Context, config: LubanAuthConfig): Promise<void
   })
   await ctx.effect(async () => {
     const result = await sidecar.start()
-    ctx.logger.info(`luban-auth: listening on ${result.publicUrl}; upstream ${result.upstreamUrl}`)
+    ctx.logger.info(
+      `luban-auth: user entry ${result.publicUrl}; internal DSH upstream ${result.upstreamUrl}`,
+    )
+    if (!(await manager.hasUsers())) {
+      const setupHost = config.host === '0.0.0.0' ? '127.0.0.1' : config.host
+      ctx.logger.info(
+        `luban-auth: first-run setup http://${setupHost}:${String(sidecar.port)}/luban-auth/login`,
+      )
+    }
     return async (): Promise<void> => sidecar.stop()
   }, 'lubanAuth.sidecar')
 }
