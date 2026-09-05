@@ -123,11 +123,14 @@ dsh plugin --profile web add @yin52133/dsh-luban-taskboard @yin52133/dsh-luban-h
 提供的局域网地址范围：
 
 ```sh
-LAN_CIDR=<lan-client-cidr>
-sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
+LUBAN_LAN_CIDR='<lan-client-cidr>'
+sudo ufw allow proto tcp from "$LUBAN_LAN_CIDR" to any port 42600
 ```
 
 防火墙限制哪些设备能够连接，dsh-luban 的登录页负责用户访问控制。不要将服务直接暴露到公网。
+先检查 UFW 状态；自定义端口时同步替换规则和浏览器地址，不要开放内部 DSH 上游端口。
+检查、放行、撤销和 Windows 连通性验证见
+[Ubuntu 防火墙指引](design/05-deployment/deploy-ubuntu.md#防火墙与-windows-访问排查)。
 
 ## 开发
 

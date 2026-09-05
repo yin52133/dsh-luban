@@ -18,6 +18,7 @@
 | v0.12 | 2026-08-30 | Codex | 完善 M09 验收运行目录与阶段重试 |
 | v0.13 | 2026-08-30 | Codex | 收敛安装与重启 smoke 为幂等、owned cleanup 和真实宿主功能验收 |
 | v0.14 | 2026-08-31 | Codex | 限定 Web 端口为实际 LAN CIDR 并记录跨机登录验收 |
+| v0.15 | 2026-09-05 | Maintainers | 补充防火墙检查、端口放行、撤销和 Windows 访问排查 |
 
 ## 1. 目标形态
 
@@ -149,17 +150,80 @@ sequenceDiagram
 - 日志：`journalctl --user -u dsh-luban -f`；套件自有日志在 `~/.dsh/luban/logs/`（滚动 30 天）。
 - 升级：同 Windows（dsh-market Update API / pnpm）；dsh 本体升级前在测试 profile 验证。
 - 备份：`~/.dsh/luban/`（看板/认证/保活账本）每日 cron 快照保留 7 份；备份包含账号数据，按普通本地备份保存，不作为项目文件提交。
-- 防火墙：只向实际局域网客户端地址范围开放配置的 Web 端口。不要把验收环境的真实网段提交到
-  仓库；应使用路由器或网络管理员提供的客户端 CIDR。
+
+### 防火墙与 Windows 访问排查
+
+默认浏览器端口为 `42600`。如果配置了其他端口（例如独立预览使用 `42601`），下面的
+Ubuntu 命令、Windows 命令和浏览器地址必须一起替换。内部 DSH 上游端口不需要放行，
+应继续只监听 `127.0.0.1`。
+
+**1. 先在 Ubuntu 确认服务就绪。** 在运行 DSH 的用户下执行；自定义服务名也要相应替换：
 
 ```sh
-# Example only: replace this value with the actual LAN client CIDR.
-LAN_CIDR=<lan-client-cidr>
-sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
+LUBAN_WEB_PORT=42600
+systemctl --user status dsh-luban.service --no-pager
+ss -ltnp "sport = :$LUBAN_WEB_PORT"
+curl --noproxy '*' --max-time 5 -I "http://127.0.0.1:$LUBAN_WEB_PORT/luban-auth/login"
 ```
 
-该规则只放通到认证 sidecar 的网络连接；用户仍需在 `/luban-auth/login` 使用本地账号登录。除非明确
-需要接受所有可路由来源，否则不要配置无来源限制的 `ufw allow 42600/tcp`。
+登录页应返回 HTTP `200`。没有监听或本机请求失败时，先查看
+`journalctl --user -u dsh-luban.service -n 50 --no-pager`，不要用放行防火墙代替修复服务。
+局域网访问需要 `luban-auth` 的 `config.host: 0.0.0.0`；只监听 `127.0.0.1` 时其他设备无法直连。
+
+**2. 检查 Ubuntu 防火墙，再按实际来源放行。** 以下管理员命令会要求 Ubuntu 的 sudo 授权，
+与网页登录账号无关：
+
+```sh
+sudo ufw status verbose
+sudo ufw status numbered
+```
+
+若 UFW 为 `inactive`，不要为了排查而直接执行 `ufw enable`。继续检查其他防火墙、路由器或云安全组；
+确需启用 UFW 时，应先由管理员审核现有策略并保留实际 SSH 管理端口，避免远程连接被锁在外面。
+
+若 UFW 已启用且缺少对应允许规则，确认 Windows 客户端 IP 或局域网地址范围后再执行：
+
+```sh
+# Replace the quoted placeholder with the approved client IP or LAN CIDR.
+LUBAN_LAN_CIDR='<lan-client-cidr>'
+LUBAN_WEB_PORT=42600
+sudo ufw --dry-run allow proto tcp from "$LUBAN_LAN_CIDR" to any port "$LUBAN_WEB_PORT"
+# Apply only after reviewing the source and port above.
+sudo ufw allow proto tcp from "$LUBAN_LAN_CIDR" to any port "$LUBAN_WEB_PORT"
+sudo ufw status numbered
+```
+
+不要把实际部署网段写进仓库。单台 Windows 使用其客户端 IP 即可；网段应由路由器或网络管理员确认，
+不要根据一个 IP 猜测子网掩码。不要无来源限制地开放端口，也不要关闭或重置整个防火墙。
+已有拒绝规则时需检查匹配顺序，而不是反复追加相同允许规则。
+
+**3. 从 Windows 验证。** 在 PowerShell 中替换服务器 IP 和实际端口：
+
+```powershell
+Test-NetConnection -ComputerName '<ubuntu-ip>' -Port 42600
+curl.exe --noproxy '*' --connect-timeout 5 -I 'http://<ubuntu-ip>:42600/luban-auth/login'
+```
+
+- `TcpTestSucceeded: False`：检查服务器地址、监听地址、Ubuntu 防火墙及中间网络访问规则。
+  本机 HTTP `200` 而 Windows 超时，只能说明跨机链路受阻，不能单凭这一点断定是 UFW。
+- TCP 成功且命令返回 HTTP `200`，但浏览器打不开：检查浏览器代理是否绕过局域网，
+  并确认使用 `http://` 和实际端口，而不是未配置的 `https://`。
+- 已显示登录页或返回 HTTP `401` / `403`：网络已连通，应检查账号、页面错误提示和同源设置，
+  不要通过扩大防火墙来源或关闭登录保护解决。
+
+浏览器打开 `http://<ubuntu-ip>:42600/luban-auth/login`，首次进入按页面指引创建账号密码。
+防火墙限制可连接的设备，登录页负责用户认证；两者不能互相替代。
+
+**4. 撤销临时放行。** 只撤销本次新加的规则；若规则原本已存在，保留它：
+
+```sh
+# Reuse the exact source and port recorded when adding the temporary rule.
+sudo ufw delete allow proto tcp from "$LUBAN_LAN_CIDR" to any port "$LUBAN_WEB_PORT"
+sudo ufw status numbered
+```
+
+命令依据：[Ubuntu 官方防火墙文档](https://documentation.ubuntu.com/server/how-to/security/firewalls/index.html)
+和 [UFW 命令手册](https://manpages.ubuntu.com/manpages/jammy/man8/ufw.8.html)。
 
 ## 5. 浏览器自动化（M11）无桌面注意点
 
