@@ -28,4 +28,12 @@ describe('@yin52133/dsh-luban aggregate', () => {
       /id: dsh-memory\s+name: '@furongjun1999\/dsh-memory'\s+#[^\n]+\s+disabled: true/u,
     )
   })
+
+  it('uses the host-provided browser directory picker behind the login gateway', async (): Promise<void> => {
+    const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    expect(patch).toContain('- id: directory-picker\n  disabled: true')
+    expect(patch).toContain("name: '@deepseek-ai/dsh-host-directory-picker-browse'")
+    expect(patch).toContain("name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'")
+    expect(patch).not.toContain('directory-picker-native')
+  })
 })

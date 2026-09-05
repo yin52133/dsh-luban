@@ -37,6 +37,8 @@ loopback-only DSH upstream and is not a second user entry point.
 On first visit, the page guides you through creating an administrator username
 and password. After signing in, the bottom status bar shows your account and a
 logout button. No bootstrap password environment variable is required.
+Workspace directories are selected inside the browser, including over the LAN;
+no file chooser needs to be operated on the host desktop.
 
 The optional memory companion is installed but disabled by default because it
 requires a separate Python environment with `aeis`. After preparing that

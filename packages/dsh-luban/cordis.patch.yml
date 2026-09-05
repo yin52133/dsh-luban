@@ -1,5 +1,14 @@
 # Complete DSH Luban aggregate. Install either this package or selected
 # standalone packages; do not mount the same plugin through both channels.
+# The protected upstream is loopback-only even when browsers connect remotely.
+# Use DSH's existing browser picker rather than opening a dialog on the host desktop.
+- id: directory-picker
+  disabled: true
+- insert:
+    - id: luban-directory-picker-host
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: luban-directory-picker-client
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
 - insert:
     - id: luban-auth
       name: '@yin52133/dsh-luban-auth'
