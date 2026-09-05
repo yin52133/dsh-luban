@@ -68,7 +68,7 @@ export type {
   TakeoverStatus,
 } from './types.js'
 
-/** Mount the authenticated dual-host registry, rc2 event bridge, and takeover API. */
+/** Mount the authenticated dual-host registry, DSH event bridge, and takeover API. */
 export function apply(ctx: Context, input: Partial<SessionShareConfig> = {}): void {
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth')

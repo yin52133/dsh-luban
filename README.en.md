@@ -2,9 +2,9 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-[![npm package](https://img.shields.io/badge/npm%20package-0.1.2-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/@yin52133/dsh-luban)
+[![npm package](https://img.shields.io/badge/npm%20package-0.1.3-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/@yin52133/dsh-luban)
 [![pnpm](https://img.shields.io/badge/pnpm-11.24.0-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2-536DFE)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.2--rc.1-536DFE)](https://github.com/deepseek-ai/deepseek-harness)
 
 dsh-luban is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin suite for
 embedded development. It connects a Windows debug workstation and an Ubuntu build server to one
@@ -64,7 +64,7 @@ to the LAN.
 
 - Node.js 22.19.x or version 24 and later
 - pnpm 11.24.0
-- DeepSeek Harness 0.1.1-rc.2
+- DeepSeek Harness 0.1.2-rc.1
 
 Packages are public on the npm registry. Installation does not require a GitHub account, personal
 access token, or npm login. If this machine previously mapped `@yin52133` to GitHub Packages, remove
@@ -80,8 +80,12 @@ The second command should print `https://registry.npmjs.org/`.
 Install the complete suite:
 
 ```sh
-dsh plugin --profile web add @yin52133/dsh-luban@0.1.2
+dsh plugin --profile web add @yin52133/dsh-luban@0.1.3 --allow-build=node-pty@1.1.0 --allow-build=@serialport/bindings-cpp@13.0.0
 ```
+
+The two `--allow-build` flags permit installation scripts only for the suite's pinned terminal and
+serial native bindings. You may omit `@serialport/bindings-cpp` when serial support is not needed.
+Run the same command again if an earlier installation skipped these builds.
 
 The complete suite also installs these companion plugins at fixed versions:
 

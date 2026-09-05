@@ -24,7 +24,7 @@ const ROLE_OVERHEAD = 4
 
 export type AgentLookup = Pick<AgentRegistry, 'currentInitiator' | 'get' | 'list'>
 
-/** Optional read face of DSH's rc2 session-projection capability seam. */
+/** Optional read face of DSH's session-projection capability seam. */
 export interface SessionProjectionReader {
   snapshot(session: Session): {
     readonly values: Readonly<Record<string, unknown>>
@@ -143,7 +143,7 @@ function positiveTokenCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
-/** Read token-meter's official rc2 occupancy view without making the seam mandatory. */
+/** Read token-meter's official occupancy view without making the seam mandatory. */
 function projectedContext(
   session: Session,
   resolveProjections: SessionProjectionResolver | undefined,
@@ -194,8 +194,9 @@ export function contextPressureTotal(usage: TokenUsage): number | 'unknown' {
 }
 
 function latestUsage(session: Session): TokenUsage | undefined {
-  for (let index = session.events.length - 1; index >= 0; index -= 1) {
-    const event = session.events.at(index)
+  const events = session.snapshotEvents()
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events.at(index)
     if (event === undefined) continue
     if (event.type === 'assistant/message' && event.data.usage !== undefined) {
       return event.data.usage
@@ -262,7 +263,7 @@ export function displayWorkspace(cwd: string | undefined, root = process.cwd()):
   return relativePath.replaceAll('\\', '/')
 }
 
-/** Official rc2 Session fields: usage, context window, workspace, model, and reasoning effort. */
+/** Official Session fields: usage, context window, workspace, model, and reasoning effort. */
 export class DshSessionTelemetryProvider implements TelemetryProvider {
   public readonly id = 'dsh-session'
   readonly #agents: AgentLookup
@@ -412,7 +413,7 @@ export class DshContextEstimatorProvider implements TelemetryProvider {
   }
 }
 
-/** Replays recent rc2 assistant usage once, then ingests the live session/event feed by sequence. */
+/** Replays recent assistant usage once, then ingests the live session/event feed by sequence. */
 export class DshRateCollector {
   readonly #window: SlidingRateWindow
   readonly #accountWindows = new Map<AccountId, SlidingRateWindow>()
@@ -435,11 +436,11 @@ export class DshRateCollector {
   }
 
   public adopt(session: Session): void {
-    for (const event of session.events) this.#observe(session, event, false)
+    for (const event of session.snapshotEvents()) this.#observe(session, event, false)
   }
 
   public adoptForAccount(accountId: AccountId, session: Session): void {
-    for (const event of session.events) this.#observe(session, event, false, accountId)
+    for (const event of session.snapshotEvents()) this.#observe(session, event, false, accountId)
   }
 
   public observe(session: Session, event: SessionEvent): void {

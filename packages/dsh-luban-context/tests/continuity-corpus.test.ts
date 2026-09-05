@@ -69,6 +69,7 @@ describe('deterministic bilingual compaction continuity corpus', (): void => {
       id,
       createdAt: 1,
       cwd: directory,
+      isSeeded: false,
     })
     const roundOne = [
       'Requirement AUTH_ROUTE: login must stay at /luban-auth/login; /luban/auth/login must be rejected.',

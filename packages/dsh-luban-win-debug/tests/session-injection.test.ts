@@ -52,7 +52,7 @@ function inboxBackedAgent(context: Context, session: Session): Agent {
 }
 
 describe('serial snippet session injection', (): void => {
-  it('persists a redacted selection into only the identified rc2 session inbox durably', async (): Promise<void> => {
+  it('persists a redacted selection into only the identified DSH session inbox durably', async (): Promise<void> => {
     const root = await mkdtemp(join(tmpdir(), 'luban-win-debug-session-'))
     const context = new Context()
     const agentsFiber = context.plugin(AgentRegistry)
@@ -119,7 +119,7 @@ describe('serial snippet session injection', (): void => {
       expect(targetAgent.inbox.nextTurn).toHaveLength(1)
       expect(targetAgent.inbox.nextStep).toHaveLength(0)
       expect(otherAgent.inbox.hasPending).toBe(false)
-      expect(otherSession.events).toEqual([])
+      expect(otherSession.snapshotEvents()).toEqual([])
 
       const message = targetAgent.inbox.nextTurn[0]
       expect(message).toMatchObject({
@@ -141,7 +141,7 @@ describe('serial snippet session injection', (): void => {
       expect(block.text).not.toContain('outside-before')
       expect(block.text).not.toContain('outside-after')
 
-      expect(targetSession.events).toEqual([
+      expect(targetSession.snapshotEvents()).toEqual([
         expect.objectContaining({
           seq: 0,
           type: 'agent/inbox/spliced',
@@ -152,7 +152,7 @@ describe('serial snippet session injection', (): void => {
           },
         }),
       ])
-      const replayedSession = Session.create(targetSession.id, targetSession.events)
+      const replayedSession = Session.create(targetSession.id, targetSession.snapshotEvents())
       const replayedInbox = new Inbox(replayedSession, {
         inserted: (): void => undefined,
         discarded: (): void => undefined,

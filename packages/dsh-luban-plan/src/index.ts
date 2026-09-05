@@ -36,7 +36,7 @@ export {
   validateSections,
 } from './template.js'
 
-/** Mount the plan service, authenticated review API, and rc2 monotonic tool guard. */
+/** Mount the plan service, authenticated review API, and DSH monotonic tool guard. */
 export async function apply(ctx: Context, input: Partial<PlanConfig> = {}): Promise<void> {
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth') as AuthService | undefined

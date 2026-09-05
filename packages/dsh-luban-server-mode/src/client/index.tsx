@@ -1,5 +1,5 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-client-runtime/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { FormEvent, ReactNode } from 'react'
@@ -31,7 +31,25 @@ interface UiArtifact {
   readonly downloadUrl: string
 }
 
-let runtimeContext: ClientContext | undefined
+type SessionPromptResult =
+  { readonly ok: true } | { readonly ok: false; readonly error: { readonly message: string } }
+
+interface SessionPromptFace {
+  prompt(
+    content: readonly [{ readonly type: 'text'; readonly text: string }],
+    mode: 'queue',
+  ): Promise<SessionPromptResult>
+}
+
+interface SessionControllerFace {
+  readonly list: { getSnapshot(): { readonly current: string | undefined } }
+  scope(id: string): ClientContext | undefined
+  sessionOf(ctx: ClientContext): SessionPromptFace | undefined
+}
+
+type ServerClientContext = ClientContext & { readonly sessions: SessionControllerFace }
+
+let runtimeContext: ServerClientContext | undefined
 
 const STYLE = `
 .luban-server{display:grid;gap:12px;color:var(--color-text,#e5e7eb);max-width:1100px}
@@ -127,7 +145,7 @@ async function enqueue(templateId: string, workspace: string): Promise<void> {
 /** Fetch a bounded server-side excerpt and queue it in the active DSH session. */
 export async function sendErrorToCurrentSession(job: UiJob): Promise<void> {
   const ctx = runtimeContext
-  if (ctx === undefined) throw new Error('DSH client runtime is unavailable')
+  if (ctx === undefined) throw new Error('DSH session controller is unavailable')
   const current = ctx.sessions.list.getSnapshot().current
   if (current === undefined) throw new Error('Open a DSH session first')
   const scoped = ctx.sessions.scope(current)
@@ -336,10 +354,11 @@ export const inject = ['slots', 'sessions']
 
 /** Add an Ubuntu build-operations page to DSH Settings. */
 export function apply(ctx: ClientContext): void {
-  runtimeContext = ctx
+  const runtime = ctx as ServerClientContext
+  runtimeContext = runtime
   ctx.effect(
     () => (): void => {
-      if (runtimeContext === ctx) runtimeContext = undefined
+      if (runtimeContext === runtime) runtimeContext = undefined
     },
     'luban-server-mode: client context lifecycle',
   )

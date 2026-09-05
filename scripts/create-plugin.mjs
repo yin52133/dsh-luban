@@ -36,11 +36,11 @@ function usage() {
   return `Usage: node scripts/create-plugin.mjs --name <module> [options]
 
 Options:
-  --client                 Include the optional rc2 lazy-CJS browser half.
+  --client                 Include the optional DSH lazy-CJS browser half.
   --description <text>     One-line package description.
   --output <path>          Target path (default: packages/dsh-luban-<module>).
   --version <semver>       Initial package version (default: 0.1.0).
-  --dsh-engine <range>     engines.dsh range (default: >=0.1.1-rc.1).
+  --dsh-engine <range>     engines.dsh range (default: >=0.1.2-rc.1).
   --write                  Create files. Without this flag the command is a dry run.
   --dry-run                Explicitly request the default non-writing mode.
   --help                    Show this message.
@@ -151,7 +151,7 @@ export async function generatePlugin(input) {
 
   const description = input.description ?? `DSH Luban ${name} plugin`
   const version = input.version ?? '0.1.0'
-  const dshEngine = input.dshEngine ?? '>=0.1.1-rc.1'
+  const dshEngine = input.dshEngine ?? '>=0.1.2-rc.1'
   assertOneLine('Description', description)
   assertOneLine('DSH engine range', dshEngine)
   if (!VERSION.test(version)) throw new Error(`Invalid semantic version: ${version}`)

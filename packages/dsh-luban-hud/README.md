@@ -5,10 +5,10 @@ An authenticated, always-visible DSH telemetry HUD backed by concurrent, pluggab
 ## Features
 
 - **M07-F001** — concurrent `TelemetryProvider` sampling with field-level first-provider priority, per-provider timeout, immutable snapshots, and partial-failure diagnostics.
-- **M07-F002** — official rc2 `SessionProjectionRegistry.contextPressure` first; only a missing or unloaded projection service/key falls back to `assistant/message.usage`, `request/context.contextWindow`, and content estimation. An incomplete official projection stays unknown.
-- **M07-F003** — workspace-relative display plus live model and reasoning-effort values from public rc2 `Session`/`AgentRegistry` interfaces. Selection prefers the current initiator, then a running agent, then the newest registered agent.
+- **M07-F002** — official DSH `SessionProjectionRegistry.contextPressure` first; only a missing or unloaded projection service/key falls back to `assistant/message.usage`, `request/context.contextWindow`, and content estimation. An incomplete official projection stays unknown.
+- **M07-F003** — workspace-relative display plus live model and reasoning-effort values from public `Session`/`AgentRegistry` interfaces. Selection prefers the current initiator, then a running agent, then the newest registered agent.
 - **M07-F004** — monotonic 1-minute and 5-minute sliding TPM/RPM windows plus a mounted, authenticated UTC-window ledger export. Cached input/output fields are disjoint and included; reasoning tokens are not double-counted inside output.
-- **M07-F005** — compact/full Web status bar in the official rc2 `shell.overlay` slot and a one-line `luban-hud` CLI rendered from the same snapshot response.
+- **M07-F005** — compact/full Web status bar in the official `shell.overlay` slot and a one-line `luban-hud` CLI rendered from the same snapshot response.
 - **M07-F006** — normal/warn/danger/critical states at 70%/85%/95%; critical renders a compaction advisory and, when M02 is present, creates one deduplicated active Taskboard alert while M08 independently requests a fresh `lubanTelemetry.snapshotFor(sessionId)` without a runtime dependency cycle.
 - **M03-F004 integration** — consumes `luban.keepalive.health` without importing M03, exposes bounded/redacted current failures in REST/SSE, and renders `keepalive N down` in both the Web bar and CLI.
 
@@ -22,7 +22,7 @@ select or override an account.
 
 ## Installation
 
-Install after the rc2 agent/Web runtime and `@yin52133/dsh-luban-auth`, then apply the bundled patch:
+Install after the DSH agent/Web runtime and `@yin52133/dsh-luban-auth`, then apply the bundled patch:
 
 ```sh
 dsh plugin --profile default add @yin52133/dsh-luban-hud
@@ -91,21 +91,21 @@ On POSIX shells, use `export` instead of `set`. `LUBAN_URL` defaults to the auth
 
 ## Compatibility
 
-| Component                     | Published floor        | Tested baseline         |
-| ----------------------------- | ---------------------- | ----------------------- |
-| Node.js                       | `^22.19.0 or >=24.0.0` | Node 22.19+             |
-| DSH host/session/client peers | `>=0.1.1-rc.1`         | `0.1.1-rc.2`            |
-| Cordis                        | `^4.0.1`               | DSH rc2 bundled version |
+| Component                     | Published floor        | Tested baseline     |
+| ----------------------------- | ---------------------- | ------------------- |
+| Node.js                       | `^22.19.0 or >=24.0.0` | Node 22.19+         |
+| DSH host/session/client peers | `^0.1.2-rc.1`          | `0.1.2-rc.1`        |
+| Cordis                        | `^4.0.2`               | DSH bundled version |
 
-The implementation uses the public rc2 `AgentRegistry`, `Session.requestContext()`, `Session.requestHeader()`, `Session.events`, `session/event`, and `shell.overlay` contracts. It performs no model or provider-network calls.
+The implementation uses the public `AgentRegistry`, `Session.requestContext()`, `Session.requestHeader()`, `Session.snapshotEvents()`, `session/event`, and `shell.overlay` contracts. It performs no model or provider-network calls.
 
 ## Platform Support
 
 - Windows 10/11 and PowerShell: workspace paths display with portable `/` separators; CLI uses the auth sidecar.
 - Ubuntu/Linux: the same host, Web, and CLI implementation is used.
-- Web: current DSH rc2 browser client; subscriptions pause when `document.hidden`.
+- Web: current DSH browser client; subscriptions pause when `document.hidden`.
 
-Window math, token-source projection, rc2 assistant usage collection, and the
+Window math, token-source projection, assistant usage collection, and the
 Cordis-mounted authenticated capture endpoint are directly tested. Independent billing/token
 exports can additionally validate a provider-specific adapter when one is available.
 

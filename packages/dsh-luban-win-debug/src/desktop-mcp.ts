@@ -66,7 +66,7 @@ function toolDefinition(
   }
 }
 
-/** B-grade MCP bridge exposed through the public DSH rc2 tool registry. */
+/** B-grade MCP bridge exposed through the public DSH tool registry. */
 export class DesktopMcpManager {
   readonly #config: Config
   readonly #client: DesktopMcpClient

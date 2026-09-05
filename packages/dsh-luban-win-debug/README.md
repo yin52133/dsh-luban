@@ -20,7 +20,7 @@ redacted file-plus-excerpt for a DSH session.
 - Explicit adb states (`device`, `offline`, `unauthorized`) and fastboot
   `bootloader` state.
 - Disabled-by-default stdio desktop-MCP bridge. Every local allowlist entry is
-  registered through the public DSH rc2 tool registry and forwarded over a
+  registered through the public DSH tool registry and forwarded over a
   bounded MCP 2024-11-05 session.
 - Configured SSH command allowlists plus raw telnet and TCP-serial endpoints.
 - Authenticated `/luban-win-debug` REST/SSE API, bounded bodies/events/output,
@@ -33,7 +33,7 @@ Install the authentication boundary first, then add this Windows-only plugin to
 the same profile:
 
 ```powershell
-dsh plugin --profile web add @yin52133/dsh-luban-auth @yin52133/dsh-luban-win-debug
+dsh plugin --profile web add @yin52133/dsh-luban-auth@0.1.3 @yin52133/dsh-luban-win-debug@0.1.3 --allow-build=@serialport/bindings-cpp@13.0.0
 ```
 
 `serialport` 13 is an optional native dependency and is loaded only when COM
@@ -41,7 +41,7 @@ support is used. Package managers may skip it when the native build is unavailab
 install it explicitly in the DSH profile if COM discovery reports it missing:
 
 ```powershell
-pnpm add serialport@^13.0.0
+pnpm --dir "$env:USERPROFILE\.dsh\profiles\web" add serialport@13.0.0 --allow-build=@serialport/bindings-cpp@13.0.0
 ```
 
 Install each external debugger/flasher independently and set its executable in
@@ -148,12 +148,12 @@ against a configured endpoint/template is always required.
 
 ## Compatibility
 
-Tested against DeepSeek Harness **0.1.1-rc.2**, Cordis 4.0.1, React 18.2, and
-Node.js 22.19+. Session injection uses the rc2 `AgentRegistry.get/resume` and
+Tested against DeepSeek Harness **0.1.2-rc.1**, Cordis 4.0.2, React 18.2, and
+Node.js 22.19+. Session injection uses the current `AgentRegistry.get/resume` and
 `Agent.followup` APIs; it does not depend on unreleased session-controller APIs.
-Desktop MCP uses rc2's public `ctx.tools.register()` boundary rather than an
+Desktop MCP uses DSH's public `ctx.tools.register()` boundary rather than an
 unpublished MCP registry.
-The browser contribution is a DSH rc2 lazy-CJS module loaded through
+The browser contribution is a DSH lazy-CJS module loaded through
 `window.__ModuleLoader__` and keeps React/Cordis/DSH packages external.
 
 External tool versions are deployment-owned. Record and qualify the exact

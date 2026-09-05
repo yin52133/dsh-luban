@@ -7,7 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                                                     |
 | ---- | ---------- | ----- | ------------------------------------------------------------ |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：看板/范围标签/领单/夜间调度/回写复核/CLI/导入 全量设计 |
-| v0.2 | 2026-08-30 | Codex | 回填 rc2 AgentRegistry 适配、认证 API、实现与测试证据 |
+| v0.2 | 2026-08-30 | Codex | 回填 AgentRegistry 适配、认证 API、实现与测试证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐 SSE 进程重启后的超前游标 baseline 恢复验证 |
 | v0.4 | 2026-08-30 | Codex | 将账本备份从最近 7 次写入修正为按本地日历日保留 |
 | v0.5 | 2026-08-30 | Codex | 夜间 agent 独立模型/工具作用域与显式验收结果改为 fail-closed |
@@ -185,7 +185,7 @@ M02-F001 ~ M02-F010 共 10 项，与 `design/checklist.json` 一一对应。
 
 ## 10. 实现与验证记录
 
-- Host 使用 DSH `0.1.1-rc.2` 已发布的 `AgentRegistry.create({ agentOptions, setup })`、
+- Host 使用 DSH `0.1.2-rc.1` 的 `AgentRegistry.create({ agentOptions, setup })`、
   agent-scoped `tools.restrict()`、`followup()`、`whenIdle()` 与 session events；每轮结束
   释放活动 handle，会话 id 与产出引用保留在任务账本。
 - Host API 统一挂载在 `/luban-taskboard`，所有入口复用 M01 身份并传播 `accountId`；Web 与 CLI 不自行复制认证逻辑。
@@ -219,7 +219,7 @@ M02-F001 ~ M02-F010 共 10 项，与 `design/checklist.json` 一一对应。
   `tests/client-cli.test.ts` 覆盖客户端槽位、拖拽写 API、触屏/键盘迁移控件的合法目标、
   `expectedVersion`、伪造/陈旧 payload 拒绝、快速双提交/拖放互斥、busy/error/lock 清理
   语义与 CLI 同源调用。
-- 发布包生成 Host ESM、`taskctl` 与 rc2 lazy-CJS `client.js`/`client.d.ts`；夜间模式
+- 发布包生成 Host ESM、`taskctl` 与 DSH lazy-CJS `client.js`/`client.d.ts`；夜间模式
   继续默认关闭。46 项 M02 测试通过；真实无人值守执行仍需在目标 profile 进行部署验收后才启用。
 
 ## 11. 开放问题

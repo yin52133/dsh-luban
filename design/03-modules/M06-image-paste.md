@@ -7,7 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：捕获/落盘/注入/预览清理 四功能 |
-| v0.2 | 2026-08-30 | Codex | 回填 rc2 注入、附件边界与验证证据 |
+| v0.2 | 2026-08-30 | Codex | 回填 DSH 注入、附件边界与验证证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐 Settings 挂载、paste/drop 路由与多文件边界验证 |
 | v0.4 | 2026-08-30 | Codex | 补齐 ReactDOM 客户端与真实 Sharp resize 验证 |
 | v0.5 | 2026-08-30 | Codex | 增加 mounted live 视觉读图验收与证据边界 |
@@ -89,7 +89,7 @@ export interface ImageIngestService {
 ## 7. 依赖与边界
 
 - 下层：Node 文件系统、固定参数剪贴板命令和可选 `sharp` peer；上层：M01 认证 WebServer
-  与 rc2 `AgentRegistry`/`Agent.followup`。
+  与 DSH `AgentRegistry`/`Agent.followup`。
 - Windows 使用固定 `powershell.exe -Sta` 脚本；Ubuntu 只尝试 `wl-paste`、`xclip`，均以参数数组、
   `shell: false`、超时和输出上限执行，其他平台显式拒绝。
 - 平台属性：双端公用；剪贴板适配器分 win/ubuntu 两实现（HAL）。

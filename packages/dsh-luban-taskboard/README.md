@@ -64,7 +64,7 @@ section appears under Settings as **Taskboard**.
 
 Night mode remains off until explicitly enabled. It only claims `todo` tasks
 that have acceptance criteria and match both task allowlists. Before enabling
-it, set `model.provider` and `model.id` to an rc2 provider route/model and list
+it, set `model.provider` and `model.id` to a DSH provider route/model and list
 every inherited tool the night agent may use in `toolAllowlist`; an empty list
 leaves only the scoped result-reporting tool. Missing model configuration,
 unknown tools, a missing/failed/duplicate report, unmet acceptance, or a
@@ -96,8 +96,8 @@ the Plan plugin keeps the board available without those links.
 
 ## Compatibility
 
-Tested with DeepSeek Harness `0.1.1-rc.2`, Cordis 4.0.1, and Node.js 22.19+.
-The host adapter uses public rc2 `AgentRegistry.create({ agentOptions, setup })`,
+Tested with DeepSeek Harness `0.1.2-rc.1`, Cordis 4.0.2, and Node.js 22.19+.
+The host adapter uses public `AgentRegistry.create({ agentOptions, setup })`,
 agent-scoped `tools.restrict({ allow })`, `followup()`, `whenIdle()`, and durable
 session events; it does not require unreleased session-controller APIs.
 

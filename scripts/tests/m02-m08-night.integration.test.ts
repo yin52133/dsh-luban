@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { Agent, AgentHandle, AgentRegistry, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { CallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createToolResultMessage, createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import {
   SESSION_FORMAT_VERSION,
   Session,
@@ -139,6 +139,7 @@ function createNightAgentHarness(options: {
     const session = Session.create(input.sessionId, [], {
       version: SESSION_FORMAT_VERSION,
       id: input.sessionId,
+      isSeeded: false,
       createdAt: options.clock.now(),
       cwd: input.meta?.cwd ?? options.directory,
     })
@@ -160,7 +161,7 @@ function createNightAgentHarness(options: {
       if (tool === undefined) throw new Error('night result tool was not registered')
       status.value = 'running'
       options.context.emit('agent/status', { agent, status: status.value })
-      const callId = CallId('night-result-call')
+      const callId = ToolCallId('night-result-call')
       const report = {
         acceptanceMet: true,
         summary: 'Night cadence compacted and archived the task context.',

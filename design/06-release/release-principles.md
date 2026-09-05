@@ -7,6 +7,7 @@
 | v1.0 | 2026-09-01 | Codex | 收敛到标准 GitHub Release 与 npm 发布流程 |
 | v1.1 | 2026-09-02 | Codex | 增加完整套件、13 包发布与成功 CI 前置门禁 |
 | v1.2 | 2026-09-02 | Codex | 迁移到公共 npm registry 与 OIDC Trusted Publishing |
+| v1.3 | 2026-09-04 | Codex | 对齐 v0.1.3、DSH 0.1.2-rc.1 与原生构建授权说明 |
 
 ## 1. 发布目标
 
@@ -48,8 +49,8 @@
 
 ```bash
 node scripts/release/validate-release.mjs
-node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.2 --output .release-artifacts/v0.1.2
-node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.2
+node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.3 --output .release-artifacts/v0.1.3
+node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.3
 ```
 
 ## 5. 发布失败

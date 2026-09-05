@@ -15,12 +15,14 @@ plugin together with the pinned companion plugins used by the suite.
 ## Install
 
 ```sh
-dsh plugin --profile <profile> add @yin52133/dsh-luban@0.1.2
+dsh plugin --profile <profile> add @yin52133/dsh-luban@0.1.3 --allow-build=node-pty@1.1.0 --allow-build=@serialport/bindings-cpp@13.0.0
 ```
 
 Use either this aggregate or selected standalone packages. Remove duplicate
 standalone installations before adding the aggregate so a plugin is not mounted twice.
 The public npm registry requires no GitHub account or PAT for installation.
+The explicit build allowlist covers only the pinned native terminal and serial
+bindings. Omit the serial binding when COM support is not required.
 
 ## Configuration
 
@@ -41,9 +43,9 @@ See the authenticated Taskboard and HUD screenshot in the
 
 | DSH          | Status    |
 | ------------ | --------- |
-| `0.1.1-rc.2` | CI target |
+| `0.1.2-rc.1` | CI target |
 
-Manifest floor: `engines.dsh` = `>=0.1.1-rc.1`.
+Manifest floor: `engines.dsh` = `>=0.1.2-rc.1`.
 
 ## Platform Support
 

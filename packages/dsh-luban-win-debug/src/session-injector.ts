@@ -24,7 +24,7 @@ function prompt(snippet: SnippetFile): string {
   ].join('\n')
 }
 
-/** Inject a redacted file reference and excerpt into a live or persisted rc2 DSH session. */
+/** Inject a redacted file reference and excerpt into a live or persisted DSH session. */
 export class DshSessionInjection implements SessionInjection {
   readonly #agents: AgentRegistry
 

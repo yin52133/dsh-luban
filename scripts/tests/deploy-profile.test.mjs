@@ -28,7 +28,12 @@ describe('profile deployment setup', () => {
     const result = await setupProfile({ profile: 'win-debug', dshHome })
 
     expect(result).toMatchObject({ profile: 'win-debug', dshHome, dryRun: true })
-    expect(result.files).toEqual(['package.json', 'cordis.patch.yml', 'README.md'])
+    expect(result.files).toEqual([
+      'package.json',
+      'pnpm-workspace.yaml',
+      'cordis.patch.yml',
+      'README.md',
+    ])
     await expect(readFile(join(result.target, 'package.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     })

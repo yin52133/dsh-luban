@@ -2,9 +2,9 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-[![npm package](https://img.shields.io/badge/npm%20package-0.1.2-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/@yin52133/dsh-luban)
+[![npm package](https://img.shields.io/badge/npm%20package-0.1.3-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/@yin52133/dsh-luban)
 [![pnpm](https://img.shields.io/badge/pnpm-11.24.0-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2-536DFE)](https://github.com/deepseek-ai/deepseek-harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.2--rc.1-536DFE)](https://github.com/deepseek-ai/deepseek-harness)
 
 ## 项目定位
 
@@ -63,7 +63,7 @@ DSH 的 `127.0.0.1:3080` 仅作为 Luban 的内部上游，不应直接用于浏
 公开包可直接从 npm registry 安装，无需 GitHub 账号、Personal Access Token 或 npm 登录：
 
 ```sh
-dsh plugin --profile web add @yin52133/dsh-luban@0.1.2
+dsh plugin --profile web add @yin52133/dsh-luban@0.1.3 --allow-build=node-pty@1.1.0 --allow-build=@serialport/bindings-cpp@13.0.0
 ```
 
 启动后使用统一入口 `http://127.0.0.1:42600/luban-auth/login`，首次访问时按页面提示创建管理员。
@@ -74,7 +74,7 @@ dsh plugin --profile web add @yin52133/dsh-luban@0.1.2
 
 - Node.js 22.19.x 或 24 及更高版本
 - pnpm 11.24.0
-- DeepSeek Harness 0.1.1-rc.2
+- DeepSeek Harness 0.1.2-rc.1
 
 软件包公开发布在 npm registry。普通安装不需要 GitHub 账号、Personal Access Token 或 npm 登录。
 如果这台机器以前将 `@yin52133` 指向 GitHub Packages，先清除旧映射：
@@ -89,8 +89,11 @@ npm config get registry
 安装完整套件：
 
 ```sh
-dsh plugin --profile web add @yin52133/dsh-luban@0.1.2
+dsh plugin --profile web add @yin52133/dsh-luban@0.1.3 --allow-build=node-pty@1.1.0 --allow-build=@serialport/bindings-cpp@13.0.0
 ```
+
+两个 `--allow-build` 仅允许完整套件中已固定版本的终端和串口原生绑定执行安装脚本；不使用串口时也可以省略
+`@serialport/bindings-cpp`。如果此前安装时未授权构建，请用同一命令重新安装。
 
 完整套件还会安装以下固定版本的配套插件：
 

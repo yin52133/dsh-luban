@@ -1,5 +1,5 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-client-runtime/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
@@ -107,7 +107,7 @@ export function keepaliveIndicator(input: unknown): KeepaliveIndicator | null {
   }
 }
 
-/** Persistent rc2 shell overlay; closing the SSE while hidden prevents browser timer leaks. */
+/** Persistent DSH shell overlay; closing the SSE while hidden prevents browser timer leaks. */
 export function HudStatusBar(): ReactNode {
   const [envelope, setEnvelope] = useState<HudSnapshotResponse>()
   const [error, setError] = useState('')
@@ -264,7 +264,7 @@ export function HudStatusBar(): ReactNode {
 
 export const inject = ['slots']
 
-/** Contribute one ordered status bar to the rc2 frame-wide shell overlay. */
+/** Contribute one ordered status bar to the frame-wide shell overlay. */
 export function apply(ctx: ClientContext): void {
   ctx.slots.inject('shell.overlay', () =>
     ctx.slots.register(

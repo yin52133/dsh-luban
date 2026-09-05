@@ -126,6 +126,7 @@ function telemetrySession(idValue: string, cwd: string): Session {
     id,
     createdAt: Date.now(),
     cwd,
+    isSeeded: false,
   })
 }
 
@@ -214,7 +215,7 @@ afterEach((): void => {
   vi.unstubAllGlobals()
 })
 
-describe('HUD API, CLI, and rc2 client seat', (): void => {
+describe('HUD API, CLI, and DSH client seat', (): void => {
   it('authenticates the snapshot route and returns one shared envelope shape', async (): Promise<void> => {
     const telemetry = new DefaultTelemetryAggregator({ refreshMs: 1_000, providerTimeoutMs: 100 })
     const api = new HudHttpApi({ telemetry, auth: auth(), config: publicConfig })
@@ -392,7 +393,7 @@ describe('HUD API, CLI, and rc2 client seat', (): void => {
     ).rejects.toThrow('upstream failed [31m')
   })
 
-  it('refreshes rc2 session environment changes through the real loopback API and CLI', async (): Promise<void> => {
+  it('refreshes DSH session environment changes through the real loopback API and CLI', async (): Promise<void> => {
     const context = new Context()
     const agentsFiber = context.plugin(AgentRegistry)
     await agentsFiber

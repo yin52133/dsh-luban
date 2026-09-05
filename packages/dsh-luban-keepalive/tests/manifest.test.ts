@@ -9,7 +9,7 @@ describe('keepalive package contract', (): void => {
     expect(manifest).toMatchObject({
       name: '@yin52133/dsh-luban-keepalive',
       files: ['dist/', 'cordis.patch.yml', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
-      engines: { dsh: '>=0.1.1-rc.1' },
+      engines: { dsh: '>=0.1.2-rc.1' },
       dsh: { bundle: { patch: './cordis.patch.yml' } },
       exports: { './cordis.patch.yml': './cordis.patch.yml' },
     })
@@ -28,6 +28,6 @@ describe('keepalive package contract', (): void => {
       'License',
     ])
       expect(readme).toContain(`## ${heading}`)
-    expect(readme).toContain('0.1.1-rc.2')
+    expect(readme).toContain('0.1.2-rc.1')
   })
 })

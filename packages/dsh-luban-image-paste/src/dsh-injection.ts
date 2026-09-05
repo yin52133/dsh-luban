@@ -73,7 +73,7 @@ function isTopLevelRoot(agents: AgentRegistry, agent: Agent): boolean {
 /**
  * Deliver a durable image reference only to a verifiable live, top-level DSH agent.
  *
- * Cold rc2 resume requires the Host-owned persistence, preset composition, and
+ * Cold resume requires the Host-owned persistence, preset composition, and
  * ownership resolver. Reconstructing a session from an id alone can run it with
  * the wrong model, tools, or prompt, so this boundary deliberately fails closed.
  */

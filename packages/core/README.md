@@ -6,7 +6,7 @@ Internal shared contracts, L1 platform adapters, and testable L2 services for th
 ## Compatibility
 
 - Node.js `^22.19.0 || >=24.0.0`
-- DeepSeek Harness `>=0.1.1-rc.1`
+- DeepSeek Harness `>=0.1.2-rc.1`
 - Windows and Ubuntu
 
 ## License

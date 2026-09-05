@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { AgentRegistry, Inbox, type Agent } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
 import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest'
@@ -34,6 +34,7 @@ function maintenanceAgent(idValue: string): {
     id,
     createdAt: 1,
     cwd: process.cwd(),
+    isSeeded: false,
   })
   for (const text of ['older context', 'recent context']) {
     value.append(
@@ -72,6 +73,7 @@ describe('DSH compaction boundary', () => {
       id,
       createdAt: 1,
       cwd: directory,
+      isSeeded: false,
     })
     for (const text of [
       'Requirement: preserve constraint A; token=very-secret',
@@ -140,6 +142,7 @@ describe('DSH compaction boundary', () => {
       id,
       createdAt: 1,
       cwd: directory,
+      isSeeded: false,
     })
     for (const text of ['old context', 'recent context']) {
       session.append(
@@ -237,6 +240,7 @@ describe('DSH compaction boundary', () => {
       id,
       createdAt: 1,
       cwd: directory,
+      isSeeded: false,
     })
     const exactSourceDetail = 'ALPHA-42 uses the copper migration sequence at checkpoint seventeen.'
     for (const text of [
@@ -353,7 +357,7 @@ describe('DSH compaction boundary', () => {
       // This invokes the same deterministic ToolRuntime boundary used by the agent loop;
       // it does not claim that a model autonomously selected the file.
       const readResult = await context.tools.execute({
-        callId: CallId('context-archive-read'),
+        callId: ToolCallId('context-archive-read'),
         name: 'read_file',
         arguments: { path: injectedPath },
         agent,
@@ -389,6 +393,7 @@ describe('DSH compaction boundary', () => {
       id,
       createdAt: 1,
       cwd: directory,
+      isSeeded: false,
     })
     for (const text of [
       'Requirement: retain the durable event identity for the oldest context.',
@@ -451,7 +456,7 @@ describe('DSH compaction boundary', () => {
       before.entries.reduce((total, entry): number => total + entry.segment.estTokens, 0),
     )
 
-    const summaryEventSeq = session.events.at(-1)?.seq
+    const summaryEventSeq = session.snapshotEvents().at(-1)?.seq
     expect(summaryEventSeq).toBe((beforeEventSeqs.at(-1) ?? 0) + 1)
     expect(after.entries.map((entry) => entry.eventSeq)).toEqual([
       summaryEventSeq,

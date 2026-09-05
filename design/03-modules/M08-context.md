@@ -7,7 +7,7 @@ Codex 式上下文工程的本地实现：阈值触发自动压缩 + 旧上下�
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：策略接口/自动压缩/虚拟文件/审计/协同 |
-| v0.2 | 2026-08-30 | Codex | 回填 rc2 回合边界、可审计归档与降级实现验证 |
+| v0.2 | 2026-08-30 | Codex | 回填 DSH 回合边界、可审计归档与降级实现验证 |
 | v0.3 | 2026-08-30 | Codex | 补齐会话定向遥测与卸载期间维护任务收口 |
 | v0.4 | 2026-08-30 | Codex | 补齐版本化前后 surface 快照索引与夜间连续性链路验证 |
 | v0.5 | 2026-08-30 | Codex | 补齐模型可见路径经 agent 工具回读归档原文的直接证据 |
@@ -112,7 +112,7 @@ M08-F001 ~ M08-F005 共 5 项，与 `design/checklist.json` 一一对应。
 
 ## 10. 开放问题
 
-- 已适配 DSH `0.1.1-rc.2` 的 Session surface 与 `agent.runMaintenance()`；仍需在目标
+- 已适配 DSH `0.1.2-rc.1` 的 Session surface 与 `agent.runMaintenance()`；仍需在目标
   win/ubuntu profile 中用真实长会话验证摘要质量、token 估算和无人值守节奏。
 
 ## 11. 实现与验证记录
@@ -123,7 +123,7 @@ M08-F001 ~ M08-F005 共 5 项，与 `design/checklist.json` 一一对应。
   原始持久事件日志保持不变。
 - workspace 内归档原子写入，以内容摘要唯一命名并建立 SHA-256 索引；重复重试幂等，
   多轮复用同一临时序号时仍保留各代文件，可按范围取最新或按索引路径精确回放。
-- 组合策略把归档相对路径注入真实 rc2 Session surface；测试仅从 `session.deriveMessages()` 的模型可见
+- 组合策略把归档相对路径注入真实 DSH Session surface；测试仅从 `session.deriveMessages()` 的模型可见
   文本提取路径，再由绑定目标 Agent 的真实 `ToolRuntime` 调用 `read_file`，回读精确原文并与索引
   SHA-256 双校验。该确定性证据证明 agent-facing 检索边界，不声称外部模型已自主选择文件。
 - 每条新审计记录都在 strategy 执行前后抓取真实 live Session surface，保存 event sequence、segment

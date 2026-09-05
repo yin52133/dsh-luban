@@ -69,7 +69,7 @@ async function assertLazyClient(directory, manifest) {
       !bundle.includes(`id: ${expectedId}`) ||
       !bundle.includes('factory:')
     ) {
-      return [`${manifest.name}: ${clientPath} is not an rc2 lazy-CJS loader registration`]
+      return [`${manifest.name}: ${clientPath} is not a DSH lazy-CJS loader registration`]
     }
     return []
   } catch (error) {

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "dshEngine": ">=0.1.1-rc.1",
-  "testedDshVersion": "0.1.1-rc.2",
+  "dshEngine": ">=0.1.2-rc.1",
+  "testedDshVersion": "0.1.2-rc.1",
   "nodeEngine": "^22.19.0 || >=24.0.0",
   "packageFiles": ["dist/", "cordis.patch.yml", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"],
   "packAllowlist": [

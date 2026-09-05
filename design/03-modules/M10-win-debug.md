@@ -8,7 +8,7 @@
 | ---- | ---------- | ----- | ---------------------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：串口/烧录/GDB/adb-fastboot/桌面自动化/远程/通道层 |
 | v0.2 | 2026-08-30 | Codex | 回填通道层、工具模板与会话注入实现验证               |
-| v0.3 | 2026-08-30 | Codex | 补齐设备占用预检与 rc2 MCP 工具注册/调用闭环       |
+| v0.3 | 2026-08-30 | Codex | 补齐设备占用预检与 DSH MCP 工具注册/调用闭环      |
 | v0.4 | 2026-08-30 | Codex | 补齐串口生命周期与真实 MCP/TCP 本机集成验证        |
 | v0.5 | 2026-08-30 | Codex | 补齐串口片段进入持久会话及重放的直接证据           |
 | v0.6 | 2026-08-30 | Codex | 将约束聚焦于防误操作、会话隔离与真实设备验收       |
@@ -137,13 +137,13 @@ M10-F001 ~ M10-F008 共 8 项，与 `design/checklist.json` 一一对应。
   返回明确安装指引，不影响其他通道加载。打开支持 timeout/abort，迟到连接会被关闭；热插拔 stop
   排空在途轮询并用 generation 阻止卸载后发布。
 - Settings 面板提供实时滚动、时间戳、文本/正则过滤、高亮和范围选择；片段经有界截取、
-  按账号目录原子落盘后，以文件路径、摘录、通道元数据和时间窗写入同账号真实 rc2 `Session`/`Inbox` 的持久
+  按账号目录原子落盘后，以文件路径、摘录、通道元数据和时间窗写入同账号真实 DSH `Session`/`Inbox` 的持久
   `next-turn`；非目标会话保持隔离，新会话视图可从 `agent/inbox/spliced` 事件重放。
 - OpenOCD、J-Link、esptool、STM32CubeProgrammer、adb 与 fastboot 内置模板使用配置的工具和
   参数数组；擦除等危险操作要求精确二次确认，错误行结构化返回。
 - OpenOCD/GDB 托管、adb/fastboot 状态、SSH 命令白名单、telnet/TCP 透传及默认关闭的 stdio MCP
   均复用有界输出、超时、取消和生命周期清理，并可将快照注入会话。
-- `dsh-tools` rc2 已公开 `ctx.tools.register(ToolDefinition)`；启用 Desktop MCP 时，插件把本地
+- `dsh-tools` 0.1.2-rc.1 已公开 `ctx.tools.register(ToolDefinition)`；启用 Desktop MCP 时，插件把本地
   allowlist 中每个名称注册为真实 DSH tool。首次调用或显式启动时通过 MCP 2024-11-05 stdio
   完成 `initialize -> tools/list -> tools/call`，服务端未发布 allowlist 任一项即拒绝连接；协议
   消息、stderr、生命周期和取消均有界。集成测试启动真实 Node stdio MCP 子进程完成
@@ -153,7 +153,7 @@ M10-F001 ~ M10-F008 共 8 项，与 `design/checklist.json` 一一对应。
   session 解析 owner，正常停止或进程退出后释放；启动与停止的原始结构化错误继续传给调用者。
 - `/luban-win-debug` REST/SSE 只采用 M01 middleware 给出的 `accountId`，不接受 query/body 覆盖；
   channel 列表、日志、写入、命令、片段、关闭及 SSE replay/live 都按账号过滤。每个账号使用独立的
-  replay cursor/ring；断档时客户端收到 `resync` 并重新读取当前状态与日志。客户端使用 DSH rc2
+  replay cursor/ring；断档时客户端收到 `resync` 并重新读取当前状态与日志。客户端使用 DSH
   lazy-CJS 加载器，服务注册为 `ctx.lubanWinDebug`。GDB owner 可读取输出、生成快照和停止进程；
   其他账号只看到部署级 running/stopped 状态。
 - 本机原生 `serialport` 枚举读取到 Microsoft COM3/COM4（只读，未打开端口）。本地 Prettier、

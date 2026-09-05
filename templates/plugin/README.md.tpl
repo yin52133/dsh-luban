@@ -1,11 +1,11 @@
-# __PACKAGE_NAME__
+# **PACKAGE_NAME**
 
-__DESCRIPTION__.
+**DESCRIPTION**.
 
 ## 功能亮点
 
 - Host 生命周期遵循 Cordis effect/dispose 契约。
-- Manifest 与 DSH `0.1.1-rc.2` 的 bundle/client 发现机制兼容。
+- Manifest 与 DSH `0.1.2-rc.1` 的 bundle/client 发现机制兼容。
 - 发布内容由 npm `files` 白名单约束。
 
 ## 安装
@@ -30,9 +30,9 @@ dsh plugin --profile <profile> add __PACKAGE_NAME__
 
 ## 兼容性
 
-| DSH | 状态 |
-| --- | --- |
-| `0.1.1-rc.2` | CI 目标版本 |
+| DSH          | 状态        |
+| ------------ | ----------- |
+| `0.1.2-rc.1` | CI 目标版本 |
 
 Manifest 下限：`engines.dsh` = `__DSH_ENGINE__`。
 

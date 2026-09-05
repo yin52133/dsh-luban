@@ -47,7 +47,7 @@ const NIGHT_RESULT_TOOL = 'luban_report_night_result'
 
 function completedLastTurn(agent: Agent): number | undefined {
   let latest: { readonly turn: number; readonly completed: boolean } | undefined
-  for (const event of agent.session.events) {
+  for (const event of agent.session.snapshotEvents()) {
     if (event.type === 'turn/start') latest = { turn: event.data.turn, completed: false }
     if (event.type === 'turn/end') {
       latest = { turn: event.data.turn, completed: event.data.reason.kind === 'completed' }
@@ -65,7 +65,7 @@ function hasSuccessfulResultEvent(
   let callCount = 0
   let resultCount = 0
   let resultSucceeded = false
-  for (const event of agent.session.events) {
+  for (const event of agent.session.snapshotEvents()) {
     if (event.type === 'tool/call' && event.data.name === NIGHT_RESULT_TOOL) {
       callCount += 1
       if (event.data.callId !== state.callId || event.data.turn !== completedTurn) return false
@@ -189,7 +189,7 @@ export function isInWindow(epochMs: number, window: string): boolean {
 }
 
 /**
- * In-process rc2 AgentRegistry adapter. It owns each AgentHandle; M03 owns the
+ * In-process DSH AgentRegistry adapter. It owns each AgentHandle; M03 owns the
  * containing profile process at the deployment boundary and must not be asked
  * to recursively launch another copy of that process from here.
  */

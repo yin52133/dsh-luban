@@ -21,7 +21,7 @@ const IMAGE: StoredImage = {
   compression: { status: 'not-needed', originalBytes: 12, outputBytes: 12 },
 }
 
-describe('DSH rc2 image injection', () => {
+describe('DSH image injection', () => {
   it('renders both accessible reference styles', () => {
     expect(imagePrompt(IMAGE, 'markdown')).toContain(
       '![scope](.luban/attachments/20260830-scope-1.png)',

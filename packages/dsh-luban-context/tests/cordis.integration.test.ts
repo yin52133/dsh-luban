@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {
   AccountSessionRegistry,
   AuthService,
@@ -37,13 +37,17 @@ describe('Cordis integration', (): void => {
     const append = vi.fn()
     const events = [1, 2, 3].map(
       (seq): SessionEvent =>
-        ({ seq, data: { text: `Decision ${String(seq)} must remain` } }) as SessionEvent,
+        ({
+          seq: SessionSeq(seq),
+          data: { text: `Decision ${String(seq)} must remain` },
+        }) as SessionEvent,
     )
     const session = {
       id: sessionId,
       header: { cwd: workspace },
-      surface: { nodes: [1, 2, 3] },
-      events,
+      surface: { nodes: events.map((event): SessionSeq => event.seq) },
+      eventAt: (seq: SessionSeq): SessionEvent | undefined =>
+        events.find((event): boolean => event.seq === seq),
       deriveEventMessage: (event: SessionEvent): unknown => event.data,
       append,
     } as unknown as Session

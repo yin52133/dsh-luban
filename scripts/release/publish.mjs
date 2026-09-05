@@ -125,15 +125,36 @@ function runNpm(args, options = {}) {
   })
 }
 
-function publishedVersion(name, version) {
-  const result = runNpm(['view', `${name}@${version}`, 'version', '--json'])
-  if (result.status !== 0) return undefined
+function parsedJson(result) {
+  if (result.status !== 0 || typeof result.stdout !== 'string') return undefined
   try {
-    const value = JSON.parse(result.stdout)
-    return typeof value === 'string' ? value : undefined
+    return JSON.parse(result.stdout)
   } catch {
     return undefined
   }
+}
+
+/** Resolve an exact published version, falling back to registry dist-tags during propagation. */
+export function resolvePublishedVersion(expectedVersion, exactResult, distTagsResult) {
+  const exact = parsedJson(exactResult)
+  if (exact === expectedVersion) return expectedVersion
+  const distTags = parsedJson(distTagsResult)
+  if (
+    distTags !== null &&
+    typeof distTags === 'object' &&
+    !Array.isArray(distTags) &&
+    Object.values(distTags).includes(expectedVersion)
+  ) {
+    return expectedVersion
+  }
+  return undefined
+}
+
+function publishedVersion(name, version) {
+  const exactResult = runNpm(['view', `${name}@${version}`, 'version', '--json'])
+  if (parsedJson(exactResult) === version) return version
+  const distTagsResult = runNpm(['view', name, 'dist-tags', '--json'])
+  return resolvePublishedVersion(version, exactResult, distTagsResult)
 }
 
 function publishPackage(artifacts, record) {

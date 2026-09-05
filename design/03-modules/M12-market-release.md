@@ -10,6 +10,7 @@
 | v1.1 | 2026-09-01 | Codex | 12 包改为 `@yin52133/*` 并发布到 GitHub Packages |
 | v1.2 | 2026-09-02 | Codex | 增加完整套件包、CI 前置门禁与 topic 可发现性 |
 | v1.3 | 2026-09-02 | Codex | 公共包迁移到 npm registry，并采用 GitHub Actions OIDC 发布 |
+| v1.4 | 2026-09-04 | Codex | 对齐 v0.1.3、DSH 0.1.2-rc.1 与原生构建授权说明 |
 
 ## 1. 目标与边界
 
@@ -55,8 +56,8 @@ flowchart TD
 
 ```bash
 node scripts/release/validate-release.mjs
-node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.2 --output .release-artifacts/v0.1.2
-node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.2
+node scripts/release/pack-artifacts.mjs --prepare --tag v0.1.3 --output .release-artifacts/v0.1.3
+node scripts/release/publish.mjs --dry-run --artifacts .release-artifacts/v0.1.3
 ```
 
 发布脚本校验 manifest、npm registry、tarball SHA-256、scoped 包名、版本和

@@ -46,11 +46,8 @@ function segmentTopic(content: string): string | undefined {
 }
 
 function segmentSnapshots(session: Session): readonly SegmentSnapshot[] {
-  const bySequence = new Map(
-    session.events.map((event): readonly [number, SessionEvent] => [event.seq, event]),
-  )
   return session.surface.nodes.map((eventSeq, index): SegmentSnapshot => {
-    const event = bySequence.get(eventSeq)
+    const event = session.eventAt(eventSeq)
     if (event === undefined)
       throw new LubanError('E_IO', `Surface event ${String(eventSeq)} is missing`)
     const content = stringifyEvent(session, event)
@@ -148,6 +145,9 @@ export class DshCompactionContext implements ReadableCompactionContext {
     const surfaceNodes = this.#session.surface.nodes
     const selected = surfaceNodes.filter((sequence): boolean => this.#touched.has(sequence))
     if (selected.length === 0) return Promise.resolve()
+    const firstSelected = selected[0]
+    const lastSelected = selected.at(-1)
+    if (firstSelected === undefined || lastSelected === undefined) return Promise.resolve()
     const positions = selected.map((sequence): number => surfaceNodes.indexOf(sequence))
     const firstPosition = Math.min(...positions)
     const lastPosition = Math.max(...positions)
@@ -169,7 +169,7 @@ export class DshCompactionContext implements ReadableCompactionContext {
         source: { kind: 'plugin', plugin: 'dsh-luban-context' },
       }),
       {
-        surfaceOp: { op: 'replace', start: selected[0] ?? 0, end: selected.at(-1) ?? 0 },
+        surfaceOp: { op: 'replace', start: firstSelected, end: lastSelected },
         sourceEventSeqs: selected,
       },
     )

@@ -5,6 +5,29 @@ Versioning and remain fixed across all publishable workspace packages.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-04
+
+### Changed
+
+- Raised the tested DeepSeek Harness baseline to `0.1.2-rc.1` and Cordis to
+  `4.0.2` across all 13 public packages.
+- Migrated browser plugins from the retired client runtime to the split Session
+  Controller and UI Renderer services introduced by DeepSeek Harness.
+- Adapted Session history access, event lookup, headers, and branded sequence
+  identifiers to the new public APIs.
+- Documented explicit native-build allowlists for terminal and serial support so
+  pnpm installations do not silently skip required bindings.
+- Made generated host profiles keep DSH peers host-provided, preventing pnpm
+  from resolving unpublished stable versions while installing release candidates.
+
+### Fixed
+
+- Made DSH peer ranges prerelease-aware and pinned the development settings
+  service so pnpm resolves the `0.1.2-rc.1` graph without requesting unpublished
+  stable versions.
+- Made idempotent npm publishing fall back to dist-tags when an exact-version
+  lookup has not propagated yet.
+
 ## [0.1.2] - 2026-09-02
 
 ### Added
@@ -78,7 +101,8 @@ Versioning and remain fixed across all publishable workspace packages.
 - Protected tag workflow that publishes identical tarballs to GitHub Packages
   and attaches them to the GitHub Release using the repository `GITHUB_TOKEN`.
 
-[Unreleased]: https://github.com/yin52133/dsh-luban/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/yin52133/dsh-luban/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.3
 [0.1.2]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.2
 [0.1.1]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yin52133/dsh-luban/releases/tag/v0.1.0

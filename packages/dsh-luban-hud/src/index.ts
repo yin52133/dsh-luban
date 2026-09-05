@@ -95,7 +95,7 @@ function diagnostic(error: unknown): string {
   }
 }
 
-/** Mount rc2 telemetry providers, authenticated API/SSE, and the shared aggregator service. */
+/** Mount DSH telemetry providers, authenticated API/SSE, and the shared aggregator service. */
 export function apply(ctx: Context, input: Partial<HudConfig> = {}): void {
   const config = parseConfig(input)
   const auth = ctx.get('lubanAuth')

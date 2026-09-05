@@ -68,7 +68,7 @@ function isShareableRoot(agents: AgentRegistry, agent: Agent): boolean {
   return agents.roots().includes(agent) && agent.session.header.origin !== 'subagent'
 }
 
-/** Inject operator text at the rc2 Agent inbox boundary. */
+/** Inject operator text at the DSH Agent inbox boundary. */
 export class DshSessionInputSink implements SessionInputSink {
   readonly #agents: AgentRegistry
 
@@ -91,7 +91,7 @@ export class DshSessionInputSink implements SessionInputSink {
   }
 }
 
-/** Project live rc2 Agent and durable Session events into the shared registry. */
+/** Project live DSH Agent and durable Session events into the shared registry. */
 export class DshSessionBridge {
   readonly #agents: AgentRegistry
   readonly #registry: SharedSessionRegistry

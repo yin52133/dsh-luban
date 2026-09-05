@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
-import { SESSION_FORMAT_VERSION, Session, SessionId } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TokenMeter, type ContextPressureProjection } from '@deepseek-ai/dsh-token-meter'
 import type { AccountId, AccountSessionRegistry, TelemetrySnapshot } from '@yin52133/dsh-luban-core'
@@ -47,6 +47,7 @@ function session(idValue: string, cwd: string): Session {
     id,
     createdAt: Date.now(),
     cwd,
+    isSeeded: false,
   })
 }
 
@@ -70,7 +71,7 @@ function lookup(agent: Agent): AgentLookup {
 function appendAssistant(
   value: Session,
   usage?: TokenUsage,
-  step = value.seq,
+  step: number = value.seq,
 ): SessionEvent<'assistant/message'> {
   return value.append(
     'assistant/message',
@@ -91,7 +92,7 @@ function historicalSession(idValue: string, time: number, usage: TokenUsage): Se
   const id = SessionId(idValue)
   const event: SessionEvent<'assistant/message'> = {
     type: 'assistant/message',
-    seq: 0,
+    seq: SessionSeq(0),
     time,
     data: {
       turn: 0,
@@ -104,7 +105,7 @@ function historicalSession(idValue: string, time: number, usage: TokenUsage): Se
     },
     surfaceOp: 'append',
   }
-  return { id, events: [event] } as unknown as Session
+  return { id, snapshotEvents: (): readonly SessionEvent[] => [event] } as unknown as Session
 }
 
 function publish(context: Context, value: Session, event: SessionEvent): void {
@@ -144,7 +145,7 @@ function expectWithinFivePercent(
   expect(ratioError).toBeLessThanOrEqual(0.05)
 }
 
-describe('rc2 DSH telemetry providers', (): void => {
+describe('DSH telemetry providers', (): void => {
   it('selects the current initiator, then newest running, then newest registered agent', (): void => {
     const initiator = agentFor(session('hud-initiator', resolve('workspace-root', 'initiator')))
     const runningOld = {
@@ -223,7 +224,7 @@ describe('rc2 DSH telemetry providers', (): void => {
     ).toBe(115)
   })
 
-  it('tracks the real rc2 token-meter projection across append and compaction', async (): Promise<void> => {
+  it('tracks the real token-meter projection across append and compaction', async (): Promise<void> => {
     const context = new Context()
     const projectionFiber = context.plugin(SessionProjectionRegistry)
     await projectionFiber
@@ -330,7 +331,7 @@ describe('rc2 DSH telemetry providers', (): void => {
       const start = shadowed.at(0)?.seq
       const end = shadowed.at(-1)?.seq
       if (start === undefined || end === undefined) throw new Error('surface prefix is missing')
-      const shadowedSeqs = shadowed.map((node): number => node.seq)
+      const shadowedSeqs = shadowed.map((node) => node.seq)
       const shadowedTokenCount = shadowed.reduce((total, node): number => total + node.tokens, 0)
       publish(
         context,
@@ -572,7 +573,7 @@ describe('rc2 DSH telemetry providers', (): void => {
     const shared = appendAssistant(parent, { inputTokens: 8, outputTokens: 2 })
     const child = {
       id: SessionId('hud-rate-fork'),
-      events: [shared],
+      snapshotEvents: (): readonly SessionEvent[] => [shared],
     } as unknown as Session
 
     collector.adopt(parent)

@@ -98,10 +98,10 @@ session immediately.
 
 ## Compatibility
 
-Tested with DeepSeek Harness `0.1.1-rc.2`, Cordis 4.0.1, and Node.js 22.19+.
-DSH rc2 does not expose global WebServer middleware, so this package is an
+Tested with DeepSeek Harness `0.1.2-rc.1`, Cordis 4.0.2, and Node.js 22.19+.
+DSH `0.1.2-rc.1` does not expose global WebServer middleware, so this package is an
 outer sidecar by design rather than a route-local authentication plugin.
-Its native session API uses HTTP RPC plus SSE; rc2 registers no production
+Its native session API uses HTTP RPC plus SSE; DSH `0.1.2-rc.1` registers no production
 WebSocket session route. Generic WebSocket upgrades still require a valid login.
 
 ## Platform Support

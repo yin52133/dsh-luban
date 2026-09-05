@@ -17,7 +17,7 @@ Auditable context compaction for DSH. The plugin compacts only at an idle turn b
 | Component | Supported baseline                                                                 |
 | --------- | ---------------------------------------------------------------------------------- |
 | Node.js   | `^22.19.0 or >=24.0.0`                                                             |
-| DSH       | `0.1.1-rc.2` validation baseline (`engines.dsh` accepts compatible `>=0.1.1-rc.1`) |
+| DSH       | `0.1.2-rc.1` validation baseline (`engines.dsh` accepts compatible `>=0.1.2-rc.1`) |
 | Platforms | Windows and Linux                                                                  |
 
 No production package is added beyond `@yin52133/dsh-luban-core`. The plugin consumes `lubanTelemetry` and `lubanAuth` only through their core contracts and provides `lubanCompaction`.

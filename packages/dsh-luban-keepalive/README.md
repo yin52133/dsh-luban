@@ -61,7 +61,7 @@ keepalive restores it from the persisted ledger and latest checkpoint.
 
 ## Compatibility
 
-- DSH: `>=0.1.1-rc.1`; tested with `0.1.1-rc.2`
+- DSH: `>=0.1.2-rc.1`; tested with `0.1.2-rc.1`
 - Node.js: `^22.19.0 || >=24.0.0`
 - Ubuntu: tmux session management and restart restoration
 - Windows: Scheduled Tasks and process probing

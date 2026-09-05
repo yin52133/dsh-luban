@@ -134,7 +134,7 @@ function fakeAgentRegistry(options: {
       followup,
       whenIdle,
       session: {
-        events,
+        snapshotEvents: (): readonly { readonly type: string; readonly data: unknown }[] => events,
       },
     } as unknown as Agent
     return { agent, dispose }
@@ -259,7 +259,7 @@ describe('night scheduler', (): void => {
     await scheduler.dispose()
   })
 
-  it('applies a dedicated rc2 model/tool scope and accepts one verified result report', async (): Promise<void> => {
+  it('applies a dedicated DSH model/tool scope and accepts one verified result report', async (): Promise<void> => {
     const clock = new MutableClock()
     const { store } = await state(clock)
     const task = await store.create({

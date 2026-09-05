@@ -25,7 +25,7 @@ import {
   sha256,
 } from '../release/lib.mjs'
 import { releaseNotes, releasePlan } from '../release/pack-artifacts.mjs'
-import { verifyArtifactManifest } from '../release/publish.mjs'
+import { resolvePublishedVersion, verifyArtifactManifest } from '../release/publish.mjs'
 import { validateDshEngineRange, validateRepository } from '../release/validate-release.mjs'
 import { createStagedDirectoryPublisher, pathIsWithin } from '../path-boundary.mjs'
 
@@ -233,7 +233,7 @@ describe('M12 plugin scaffolder', () => {
     await expect(access(target)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('builds a loadable rc2 lazy-CJS client and ships lifecycle tests', async () => {
+  it('builds a loadable DSH lazy-CJS client and ships lifecycle tests', async () => {
     const root = await temporaryRoot()
     await writeFile(
       join(root, 'tsconfig.base.json'),
@@ -1029,6 +1029,23 @@ describe('M12 install and safety plans', () => {
 })
 
 describe('M12 release policy', () => {
+  it('falls back to npm dist-tags when an exact version lookup is not yet visible', () => {
+    expect(
+      resolvePublishedVersion(
+        '0.1.3',
+        { status: 1, stdout: '' },
+        { status: 0, stdout: '{"latest":"0.1.3"}' },
+      ),
+    ).toBe('0.1.3')
+    expect(
+      resolvePublishedVersion(
+        '0.1.3',
+        { status: 1, stdout: '' },
+        { status: 0, stdout: '{"latest":"0.1.2"}' },
+      ),
+    ).toBeUndefined()
+  })
+
   it('excludes deployment runtime roots from repository-wide style gates', async () => {
     const [gitIgnore, prettierIgnore, eslintConfig] = await Promise.all([
       readFile(join(REPOSITORY_ROOT, '.gitignore'), 'utf8'),
@@ -1045,11 +1062,10 @@ describe('M12 release policy', () => {
 
   it('allows a package-specific DSH floor within the tested compatibility window', async () => {
     const policy = await loadPolicy()
-    expect(validateDshEngineRange('>=0.1.1-rc.1', policy)).toBeUndefined()
-    expect(validateDshEngineRange('>=0.1.1-rc.2', policy)).toBeUndefined()
-    expect(validateDshEngineRange('>=0.1.1-rc.0', policy)).toMatch(/repository floor/)
-    expect(validateDshEngineRange('>=0.1.1-rc.3', policy)).toMatch(/tested DSH/)
-    expect(validateDshEngineRange('^0.1.1-rc.2', policy)).toMatch(/canonical/)
+    expect(validateDshEngineRange('>=0.1.2-rc.1', policy)).toBeUndefined()
+    expect(validateDshEngineRange('>=0.1.2-rc.0', policy)).toMatch(/repository floor/)
+    expect(validateDshEngineRange('>=0.1.2-rc.2', policy)).toMatch(/tested DSH/)
+    expect(validateDshEngineRange('^0.1.2-rc.1', policy)).toMatch(/canonical/)
   })
 
   it('fails closed unless the tag comes from mainline and every CI-equivalent gate passes', async () => {
@@ -1144,9 +1160,9 @@ describe('M12 release policy', () => {
       ])
 
     for (const readme of [chineseReadme, englishReadme]) {
-      expect(readme).toContain('img.shields.io/badge/npm%20package-0.1.2')
+      expect(readme).toContain('img.shields.io/badge/npm%20package-0.1.3')
       expect(readme).toContain('img.shields.io/badge/pnpm-11.24.0')
-      expect(readme).toContain('img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2')
+      expect(readme).toContain('img.shields.io/badge/DeepSeek%20Harness-0.1.2--rc.1')
       expect(readme).not.toContain('img.shields.io/github/stars/')
       expect(readme).not.toContain('/actions/workflows/ci.yml')
       expect(readme).not.toContain('img.shields.io/github/v/release/')
@@ -1158,7 +1174,7 @@ describe('M12 release policy', () => {
     }
     expect(aggregateReadme).toContain('https://github.com/dsh-market/dsh-market')
     expect(aggregateReadme).toContain('https://github.com/omdsh-dev/DSH-better-sidebar')
-    expect(JSON.parse(checklist).meta.version).toBe('0.1.2')
+    expect(JSON.parse(checklist).meta.version).toBe('0.1.3')
     await expect(access(join(REPOSITORY_ROOT, 'LICENSE'))).resolves.toBeUndefined()
     await expect(access(join(REPOSITORY_ROOT, 'checklist.json'))).rejects.toMatchObject({
       code: 'ENOENT',
@@ -1218,7 +1234,7 @@ describe('M12 release policy', () => {
       types: './dist/index.d.ts',
       license: 'MIT',
       repository: { type: 'git', url: 'https://example.invalid/repository.git' },
-      engines: { node: '^22.19.0 || >=24.0.0', dsh: '>=0.1.1-rc.1' },
+      engines: { node: '^22.19.0 || >=24.0.0', dsh: '>=0.1.2-rc.1' },
       exports: {
         '.': { types: './dist/index.d.ts', default: './dist/index.js' },
         './package.json': './package.json',
@@ -1235,7 +1251,7 @@ describe('M12 release policy', () => {
       types: './dist/index.d.ts',
       license: 'MIT',
       repository: { type: 'git', url: 'https://example.invalid/repository.git' },
-      engines: { node: '^22.19.0 || >=24.0.0', dsh: '>=0.1.1-rc.1' },
+      engines: { node: '^22.19.0 || >=24.0.0', dsh: '>=0.1.2-rc.1' },
       exports: {
         '.': { types: './dist/index.d.ts', default: './dist/index.js' },
         './cordis.patch.yml': './cordis.patch.yml',
@@ -1258,11 +1274,11 @@ describe('M12 release policy', () => {
     )
     await writeFile(
       join(root, 'packages/core/README.md'),
-      '# Core\n\n## Compatibility\n\nDSH 0.1.1-rc.2.\n\n## License\n\nMIT.\n',
+      '# Core\n\n## Compatibility\n\nDSH 0.1.2-rc.1.\n\n## License\n\nMIT.\n',
     )
     await writeFile(
       join(root, 'packages/sample/README.md'),
-      '# Sample\n\n## 功能亮点\n\nOne.\n\n## 安装\n\nInstall.\n\n## 配置\n\nNone.\n\n## 演示\n\nDemo.\n\n## 兼容性\n\nDSH 0.1.1-rc.2.\n\n## 平台支持\n\nBoth.\n\n## License 与致谢\n\nMIT.\n',
+      '# Sample\n\n## 功能亮点\n\nOne.\n\n## 安装\n\nInstall.\n\n## 配置\n\nNone.\n\n## 演示\n\nDemo.\n\n## 兼容性\n\nDSH 0.1.2-rc.1.\n\n## 平台支持\n\nBoth.\n\n## License 与致谢\n\nMIT.\n',
     )
     const result = await validateRepository(root)
     expect(result.issues).toEqual([])

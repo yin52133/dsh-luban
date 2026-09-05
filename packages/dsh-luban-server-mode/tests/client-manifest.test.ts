@@ -46,7 +46,7 @@ describe('server-mode client and package contract', (): void => {
     expect(manifest).toMatchObject({
       name: '@yin52133/dsh-luban-server-mode',
       files: ['dist/', 'cordis.patch.yml', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'],
-      engines: { dsh: '>=0.1.1-rc.1' },
+      engines: { dsh: '>=0.1.2-rc.1' },
       dsh: {
         bundle: { patch: './cordis.patch.yml' },
         client: { platform: 'web' },
@@ -56,7 +56,7 @@ describe('server-mode client and package contract', (): void => {
     expect((manifest.dsh as Readonly<Record<string, unknown>>).engines).toBeUndefined()
     const peers = manifest.peerDependencies as Readonly<Record<string, unknown>>
     for (const [name, range] of Object.entries(peers)) {
-      if (name.startsWith('@deepseek-ai/dsh-')) expect(range).toBe('>=0.1.1-rc.1')
+      if (name.startsWith('@deepseek-ai/dsh-')) expect(range).toBe('^0.1.2-rc.1')
     }
     const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
     for (const heading of [
@@ -69,7 +69,7 @@ describe('server-mode client and package contract', (): void => {
       'License',
     ])
       expect(readme).toContain(`## ${heading}`)
-    expect(readme).toContain('0.1.1-rc.2')
+    expect(readme).toContain('0.1.2-rc.1')
   })
 
   it('queues the authenticated failure excerpt in the active DSH session', async (): Promise<void> => {

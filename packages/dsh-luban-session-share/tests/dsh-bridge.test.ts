@@ -1,5 +1,6 @@
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
+import { SessionSeq } from '@deepseek-ai/dsh-session/types'
 import {
   asAccountId,
   asActorId,
@@ -12,7 +13,7 @@ import { DshSessionBridge, DshSessionInputSink } from '../src/dsh-bridge.js'
 import { SharedSessionRegistry } from '../src/registry.js'
 import { host, session, user } from './helpers.js'
 
-describe('rc2 DSH bridge', (): void => {
+describe('DSH bridge', (): void => {
   it('registers only sessions with a persisted account owner', async (): Promise<void> => {
     const bound = {
       id: 'S-bound',
@@ -367,7 +368,7 @@ describe('rc2 DSH bridge', (): void => {
 
     bridge.sessionEvent(dshSession, {
       type: 'assistant/chunk',
-      seq: 9,
+      seq: SessionSeq(9),
       time: 456,
       data: {
         turn: 1,
@@ -377,7 +378,7 @@ describe('rc2 DSH bridge', (): void => {
     })
     bridge.sessionEvent(dshSession, {
       type: 'assistant/chunk',
-      seq: 10,
+      seq: SessionSeq(10),
       time: 457,
       data: {
         turn: 1,
@@ -387,7 +388,7 @@ describe('rc2 DSH bridge', (): void => {
     })
     bridge.sessionEvent(dshSession, {
       type: 'turn/end',
-      seq: 11,
+      seq: SessionSeq(11),
       time: 458,
       data: { turn: 1, reason: { kind: 'completed' } },
     })
@@ -402,7 +403,7 @@ describe('rc2 DSH bridge', (): void => {
 
     bridge.sessionEvent(dshSession, {
       type: 'assistant/chunk',
-      seq: 12,
+      seq: SessionSeq(12),
       time: 459,
       data: {
         turn: 2,
@@ -412,7 +413,7 @@ describe('rc2 DSH bridge', (): void => {
     })
     bridge.sessionEvent(dshSession, {
       type: 'turn/end',
-      seq: 13,
+      seq: SessionSeq(13),
       time: 460,
       data: { turn: 2, reason: { kind: 'completed' } },
     })
@@ -428,7 +429,7 @@ describe('rc2 DSH bridge', (): void => {
 
     bridge.sessionEvent(dshSession, {
       type: 'assistant/chunk',
-      seq: 14,
+      seq: SessionSeq(14),
       time: 461,
       data: {
         turn: 3,
@@ -438,7 +439,7 @@ describe('rc2 DSH bridge', (): void => {
     })
     bridge.sessionEvent(dshSession, {
       type: 'assistant/chunk',
-      seq: 15,
+      seq: SessionSeq(15),
       time: 462,
       data: {
         turn: 3,
@@ -448,7 +449,7 @@ describe('rc2 DSH bridge', (): void => {
     })
     bridge.sessionEvent(dshSession, {
       type: 'turn/end',
-      seq: 16,
+      seq: SessionSeq(16),
       time: 463,
       data: { turn: 3, reason: { kind: 'completed' } },
     })
@@ -458,7 +459,7 @@ describe('rc2 DSH bridge', (): void => {
 
     bridge.sessionEvent(dshSession, {
       type: 'assistant/chunk',
-      seq: 17,
+      seq: SessionSeq(17),
       time: 464,
       data: {
         turn: 4,
@@ -468,7 +469,7 @@ describe('rc2 DSH bridge', (): void => {
     })
     bridge.sessionEvent(dshSession, {
       type: 'assistant/chunk',
-      seq: 18,
+      seq: SessionSeq(18),
       time: 465,
       data: {
         turn: 4,
@@ -478,7 +479,7 @@ describe('rc2 DSH bridge', (): void => {
     })
     bridge.sessionEvent(dshSession, {
       type: 'turn/end',
-      seq: 19,
+      seq: SessionSeq(19),
       time: 466,
       data: { turn: 4, reason: { kind: 'completed' } },
     })
@@ -508,7 +509,7 @@ describe('rc2 DSH bridge', (): void => {
     expect(registry.getView(session('S-agent'))).toBeUndefined()
   })
 
-  it('uses rc2 runtime roots and rejects a non-root agent without relying on durable origin', (): void => {
+  it('uses runtime roots and rejects a non-root agent without relying on durable origin', (): void => {
     const followup = vi.fn<Agent['followup']>()
     const subagent = {
       id: 'S-subagent',
@@ -542,7 +543,7 @@ describe('rc2 DSH bridge', (): void => {
     expect(followup).not.toHaveBeenCalled()
   })
 
-  it('rejects a durable subagent even when rc2 restores it as a runtime root', (): void => {
+  it('rejects a durable subagent even when DSH restores it as a runtime root', (): void => {
     const followup = vi.fn<Agent['followup']>()
     const subagent = {
       id: 'S-restored-subagent',

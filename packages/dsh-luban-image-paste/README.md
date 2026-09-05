@@ -15,7 +15,7 @@ session injection for Windows and Ubuntu.
   attachment directory, with runtime directory-identity and SHA-256 checks.
 - Optional dynamic `sharp` resize. With `compression: true`, a missing peer,
   decode failure, or unverifiable size bound fails closed before persistence.
-- Real DSH rc2 `AgentRegistry` injection in Markdown or absolute-path form,
+- Real DSH `AgentRegistry` injection in Markdown or absolute-path form,
   limited to live, top-level sessions in the configured workspace.
 - Authenticated recent-image previews, reference-safe manual deletion, and TTL
   cleanup that always retains attachments referenced by a session. Recent
@@ -103,9 +103,9 @@ The CLI sends `x-luban-csrf` on both upload and injection writes.
 
 ## Compatibility
 
-Tested with DeepSeek Harness `0.1.1-rc.2`, Cordis 4.0.1, React 18, and Node.js
-`^22.19.0` or `>=24.0.0`. The DSH peer baseline is `>=0.1.1-rc.2`; injection uses
-the rc2 `AgentRegistry.get` and identified user-message APIs. Dormant sessions,
+Tested with DeepSeek Harness `0.1.2-rc.1`, Cordis 4.0.2, React 18, and Node.js
+`^22.19.0` or `>=24.0.0`. The DSH peer range is `^0.1.2-rc.1`; injection uses
+the current `AgentRegistry.get` and identified user-message APIs. Dormant sessions,
 subagent-owned sessions, and sessions from another workspace are rejected; this
 plugin does not reconstruct the host-owned model/tool composition for cold resume.
 

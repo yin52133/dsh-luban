@@ -9,7 +9,12 @@ import { createStagedDirectoryPublisher, pathIsWithin, safeChildPath } from '../
 const SCRIPT_ROOT = fileURLToPath(new URL('.', import.meta.url))
 const REPOSITORY_ROOT = resolve(SCRIPT_ROOT, '..', '..')
 const TEMPLATE_ROOT = join(REPOSITORY_ROOT, 'profiles')
-const PROFILE_FILES = Object.freeze(['package.json', 'cordis.patch.yml', 'README.md'])
+const PROFILE_FILES = Object.freeze([
+  'package.json',
+  'pnpm-workspace.yaml',
+  'cordis.patch.yml',
+  'README.md',
+])
 const PROFILE_NAMES = new Set(['win-debug', 'ubuntu-server'])
 
 function defaultDshHome(env = process.env, userHome = homedir()) {

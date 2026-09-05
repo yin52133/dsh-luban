@@ -24,7 +24,7 @@ first run and does not install into global Python.
 pnpm add @yin52133/dsh-luban-browser
 ```
 
-The integration is tested against DSH `0.1.1-rc.2`, Node.js 22.19+, Python 3.12,
+The integration is tested against DSH `0.1.2-rc.1`, Node.js 22.19+, Python 3.12,
 `uv`, and `browser-use==0.13.8`.
 
 ## Runtime isolation
@@ -139,7 +139,7 @@ website, download Chromium, or call an LLM.
 
 ## Compatibility
 
-- DSH: `0.1.1-rc.2`
+- DSH: `0.1.2-rc.1`
 - Node.js: `^22.19.0 || >=24.0.0`
 - Python: `3.12`, managed only through the packaged locked `uv` project
 - browser-use: exactly `0.13.8`

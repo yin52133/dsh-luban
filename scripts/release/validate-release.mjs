@@ -172,13 +172,13 @@ function validateManifest(manifest, rootVersion, policy, label, issues) {
   }
 }
 
-function validatePackageReadme(manifest, readme, label, issues) {
+function validatePackageReadme(manifest, readme, policy, label, issues) {
   if (isPluginPackage(String(manifest.name))) {
     for (const [section, pattern] of PLUGIN_README_SECTIONS) {
       if (!pattern.test(readme)) issues.push(`${label}: README is missing ${section} section`)
     }
-    if (!readme.includes('0.1.1-rc.2'))
-      issues.push(`${label}: README must record tested DSH 0.1.1-rc.2`)
+    if (!readme.includes(policy.testedDshVersion))
+      issues.push(`${label}: README must record tested DSH ${policy.testedDshVersion}`)
   } else {
     if (!/^## (?:Compatibility|兼容性)(?:\s|$)/im.test(readme))
       issues.push(`${label}: README is missing compatibility section`)
@@ -211,6 +211,7 @@ export async function validateRepository(root = REPOSITORY_ROOT, packageSelectio
       validatePackageReadme(
         manifest,
         await readFile(join(directory, 'README.md'), 'utf8'),
+        policy,
         label,
         issues,
       )

@@ -141,7 +141,7 @@ The Settings → Server Mode page offers the same queue, resource, error-log, an
 
 ## Compatibility
 
-The published compatibility floor is DSH **0.1.1-rc.1**. The tested baseline is **0.1.1-rc.2** on
+The published compatibility floor and tested baseline are DSH **0.1.2-rc.1** on
 Node 22.19+ (or Node 24+). The package uses the current `engines.dsh`, `dsh.bundle.patch`,
 `dsh.client`, `exports["./client"]`, and lazy-CJS loader contract. It depends on M01 `lubanAuth`
 and M03 `lubanKeepalive`, without alpha-only host session APIs.

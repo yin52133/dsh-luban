@@ -7,7 +7,7 @@ and input authority, not the process.
 
 ## Features
 
-- One registry combines local top-level rc2 Agent sessions with health and task
+- One registry combines local top-level DSH Agent sessions with health and task
   metadata mirrored from configured peers. The canonical `AgentRegistry.roots()`
   ownership boundary excludes every non-root agent from views and input.
 - A takeover records the requester's consent, then requires the session owner to
@@ -74,8 +74,8 @@ Direct API calls reuse the current M01 login session and its request token.
 
 ## Compatibility
 
-Tested with DeepSeek Harness `0.1.1-rc.2`, Cordis 4.0.1, and Node.js 22.19 or
-newer. The bridge uses the rc2 `AgentRegistry`, `agent/status`, `session/event`,
+Tested with DeepSeek Harness `0.1.2-rc.1`, Cordis 4.0.2, and Node.js 22.19 or
+newer. The bridge uses the current `AgentRegistry`, `agent/status`, `session/event`,
 and `Agent.followup` surfaces; it does not require unreleased
 session-controller APIs.
 

@@ -7,7 +7,7 @@
 | 版本 | 日期       | 作者  | 变更说明                              |
 | ---- | ---------- | ----- | ------------------------------------- |
 | v0.1 | 2026-08-29 | Maintainers | 初稿：注册表/控制权交接/状态同步/权限 |
-| v0.2 | 2026-08-30 | Codex | 回填 rc2 注册表、认证联邦与 SSE 验证证据 |
+| v0.2 | 2026-08-30 | Codex | 回填 DSH 注册表、认证联邦与 SSE 验证证据 |
 | v0.3 | 2026-08-30 | Codex | 补齐双 loopback peer 联邦与控制权链路验证 |
 | v0.4 | 2026-08-30 | Codex | 改为账号默认会话隔离，废弃三级权限功能 |
 | v0.5 | 2026-08-30 | Codex | 落实强制账号契约、late-bind 恢复与 SSE/peer 隔离验证 |
@@ -106,7 +106,7 @@ M05-F001 ~ M05-F004 共 4 项；M05-F004 保留 ID 但状态为 `dropped`。
 
 ## 10. 实现与验证记录
 
-- `DshSessionBridge` 基于 rc2 `AgentRegistry`、`agent/status`、`session/event` 与
+- `DshSessionBridge` 基于 DSH `AgentRegistry`、`agent/status`、`session/event` 与
   `Agent.followup` 投影顶层会话；生产只注册 M01 session map 已绑定的会话，M02 task claim 触发
   late-bind 重查；旧无归属会话保持不可见，M03 task link 仅在账号一致时合并。
 - 本机会话接管在 per-session mutex 内执行账号归属检查、对端确认、过期检查与 version CAS；peer mutation 使用真实 HTTP transport。

@@ -31,7 +31,7 @@
 ## 3. 与底座的关系（L0 纪律）
 
 - **P3.1** 只依赖 dsh 公开 API 与已核实机制（manifest、patch、client.inject）；不 hack 内部模块，不做 monkey-patch。
-- **P3.2** dsh 版本对齐：仓库最低下限为 `>=0.1.1-rc.1`；包可按所用公开 API 提高 `engines.dsh` 下限，但不得超过当前实测版本，升级 dsh 先在 CI 矩阵验证。
+- **P3.2** dsh 版本对齐：仓库最低下限为 `>=0.1.2-rc.1`；包可按所用公开 API 提高 `engines.dsh` 下限，但不得超过当前实测版本，升级 dsh 先在 CI 矩阵验证。
 - **P3.3** 不修改、不 fork L0 的任何组件（dsh 本体、A 档原版插件）。
 
 ## 4. 复用策略三档（license 合规的执行细则）

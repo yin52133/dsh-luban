@@ -70,6 +70,7 @@ describe('HUD Cordis integration', (): void => {
       id,
       createdAt: Date.now(),
       cwd: process.cwd(),
+      isSeeded: false,
     })
     const agent = { id, session: value, status: 'idle', options: {} } as unknown as Agent
     const agents = {
@@ -157,6 +158,7 @@ describe('HUD Cordis integration', (): void => {
       id,
       createdAt: 1,
       cwd: process.cwd(),
+      isSeeded: false,
     })
     session.append('request/context', {
       provider: 'deepseek',

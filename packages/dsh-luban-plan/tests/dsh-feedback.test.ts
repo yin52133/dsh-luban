@@ -45,7 +45,7 @@ function inboxBackedAgent(context: Context, session: Session): Agent {
 }
 
 describe('DshPlanFeedbackSink', () => {
-  it('routes a real plan rejection into the identified rc2 session inbox durably', async () => {
+  it('routes a real plan rejection into the identified DSH session inbox durably', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'luban-plan-feedback-'))
     const context = new Context()
     const agentsFiber = context.plugin(AgentRegistry)
@@ -105,7 +105,7 @@ describe('DshPlanFeedbackSink', () => {
       expect(targetAgent.inbox.nextTurn).toHaveLength(1)
       expect(targetAgent.inbox.nextStep).toHaveLength(1)
       expect(otherAgent.inbox.hasPending).toBe(false)
-      expect(otherSession.events).toEqual([])
+      expect(otherSession.snapshotEvents()).toEqual([])
 
       const rejectionMessage = targetAgent.inbox.nextTurn[0]
       expect(rejectionMessage).toMatchObject({
@@ -145,7 +145,7 @@ describe('DshPlanFeedbackSink', () => {
         status: 'in-review',
         version: submitted.version,
       })
-      expect(targetSession.events).toEqual([
+      expect(targetSession.snapshotEvents()).toEqual([
         expect.objectContaining({
           seq: 0,
           type: 'agent/inbox/spliced',
@@ -166,7 +166,7 @@ describe('DshPlanFeedbackSink', () => {
         }),
       ])
 
-      const replayedSession = Session.create(targetSession.id, targetSession.events)
+      const replayedSession = Session.create(targetSession.id, targetSession.snapshotEvents())
       const replayedInbox = new Inbox(replayedSession, {
         inserted: (): void => undefined,
         discarded: (): void => undefined,
