@@ -9,6 +9,11 @@ Versioning and remain fixed across all publishable workspace packages.
 
 ### Changed
 
+- Accepted short and Chinese usernames, including spaces, with shared form and
+  authentication validation.
+- Added an Ubuntu terminal command for administrator password recovery after
+  sudo authentication, with hidden input, backups, session revocation, and
+  service stop/restart handling. No web recovery endpoint is exposed.
 - Upgraded the market and sidebar companions for DSH `0.1.2-rc.1`. The optional
   Python memory companion now starts only after explicit configuration.
 - Added visible account/logout controls and an image file picker. Unavailable

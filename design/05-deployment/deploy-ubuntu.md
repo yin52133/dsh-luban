@@ -225,6 +225,26 @@ sudo ufw status numbered
 命令依据：[Ubuntu 官方防火墙文档](https://documentation.ubuntu.com/server/how-to/security/firewalls/index.html)
 和 [UFW 命令手册](https://manpages.ubuntu.com/manpages/jammy/man8/ufw.8.html)。
 
+### 管理员忘记密码
+
+网页登录密码与 Ubuntu 系统账号密码是两套凭据。忘记网页登录密码时，通过服务器终端或 SSH
+登录后，使用 sudo 验证系统管理权限，再执行本地复位；网页和本机 IP 均不能绕过这一验证。
+
+```sh
+sudo /absolute/path/to/node /absolute/path/to/dsh-luban-auth/dist/recovery-cli.js \
+  reset-admin --users-file /absolute/path/to/auth/users.json --service dsh-luban
+```
+
+将 Node、命令和账号文件路径替换为实际安装位置。账号文件取自当前 profile 的 `luban-auth.config.usersFile`，
+服务名必须与该部署匹配；不通过隐藏环境变量选择目标或传密码。
+命令会显示目标、列出管理员，要求两次不回显的新密码及确认；输错可重试，确认前不会停服或修改账号。
+
+确认后自动停止原来运行的用户服务，备份、原子更新密码、解除该管理员锁定并撤销其登录会话，
+随后恢复服务。原来未运行的服务仍保持停止。其他账号和业务数据不变，浏览器继续使用原端口 `42600`。
+若提示“密码已复位，但服务启动失败”，先检查服务日志并手动启动，不要直接恢复旧账号备份。
+备份含旧登录凭据和会话，需妥善保管。详细限制见
+[认证插件本地复位说明](../../packages/dsh-luban-auth/README.md#forgotten-administrator-password-ubuntu)。
+
 ## 5. 浏览器自动化（M11）无桌面注意点
 
 ubuntu-server 无显示环境：M11-F004 HAL 默认走无头 Chromium；插件以 `uv run --locked` 启动随包 Python 项目，隔离环境位于 `~/.dsh/luban/browser/uv-env`，禁止使用全局 pip；Chromium 在安装脚本中预下载（或配置离线包），部署文档给出磁盘占用预估。

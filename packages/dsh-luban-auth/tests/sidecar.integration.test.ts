@@ -46,6 +46,37 @@ describe('AuthSidecar integration', () => {
     harness = undefined
   })
 
+  it('registers and signs in with a short Unicode username while refusing HTTP recovery', async () => {
+    harness = await createHarness({}, false)
+    const { baseUrl } = harness
+    const registration = await fetch(`${baseUrl}/luban-auth/login`, {
+      method: 'POST',
+      headers: {
+        origin: baseUrl,
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'text/html',
+      },
+      body: new URLSearchParams({
+        user: ' 王 ',
+        password: 'valid password',
+        confirmPassword: 'valid password',
+        intent: 'setup',
+      }),
+      redirect: 'manual',
+    })
+    expect(registration.status).toBe(303)
+    const cookie = await loginUser(baseUrl, '王', 'valid password')
+    const session = await fetch(`${baseUrl}/luban-auth/session`, { headers: { cookie } })
+    expect(session.status).toBe(200)
+    expect(await session.text()).toContain('王')
+    for (const path of ['/luban-auth/reset-admin', '/luban-auth/recover']) {
+      expect(
+        (await fetch(baseUrl + path, { method: 'POST', headers: { cookie, origin: baseUrl } }))
+          .status,
+      ).toBe(404)
+    }
+  })
+
   it('isolates real WebSocket streams, rejects forged event replies, and closes on logout', async () => {
     harness = await createHarness()
     const { baseUrl, fixture } = harness

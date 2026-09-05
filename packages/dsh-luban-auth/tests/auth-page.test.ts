@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { renderLoginPage, validateAuthInput } from '../src/auth-page.js'
 
 describe('account form validation', () => {
+  it('explains local administrator recovery without exposing a reset endpoint', () => {
+    const html = renderLoginPage({ returnTo: '/', initialized: true, username: '' })
+    expect(html).toContain('管理员忘记密码怎么办')
+    expect(html).toContain('sudo')
+    expect(html).not.toContain('action="/luban-auth/reset')
+  })
   it('identifies each invalid field and accepts normalized usernames and Unicode passwords', () => {
     expect(
       Object.keys(

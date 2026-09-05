@@ -47,12 +47,12 @@ listening port matches the configured upstream port.
 ### LAN firewall
 
 Expose the sidecar only to the client address range of the actual LAN. The
-following CIDR matches one example network; it is not a universal default:
+following placeholder must be replaced before running the command:
 
 ```sh
 # Example only: replace this value with the actual LAN client CIDR.
-LAN_CIDR=<lan-client-cidr>
-sudo ufw allow proto tcp from "$LAN_CIDR" to any port 42600
+LUBAN_LAN_CIDR='<lan-client-cidr>'
+sudo ufw allow proto tcp from "$LUBAN_LAN_CIDR" to any port 42600
 ```
 
 Use the CIDR reported by the router or network administrator, and do not commit
@@ -73,6 +73,51 @@ administrator.
 Create the initial administrator through the setup page. Startup does not read
 password environment variables or create accounts. The form marks invalid fields,
 keeps the username, and asks for passwords again before retrying.
+
+Usernames accept 1–64 Unicode letters, numbers, combining marks, spaces, dots,
+hyphens, and underscores. Leading/trailing spaces and letter case are ignored;
+path separators, control characters, and reserved system names are rejected.
+
+### Forgotten administrator password (Ubuntu)
+
+Use the server terminal or an authenticated SSH session. Recovery requires
+`sudo`/root authorization and an interactive terminal; neither a web login nor
+a loopback IP grants recovery privileges. There is no HTTP recovery endpoint.
+
+Find the real `usersFile` path in this deployment's `luban-auth` configuration
+and the matching user systemd service name. Do not use another deployment's file.
+Run the installed command's help, then use absolute paths with sudo:
+
+```sh
+luban-auth --help
+sudo /absolute/path/to/node /absolute/path/to/dsh-luban-auth/dist/recovery-cli.js \
+  reset-admin --users-file /absolute/path/to/auth/users.json --service dsh-luban
+```
+
+The executable is in the installed auth package (`dist/recovery-cli.js`); its
+`luban-auth` launcher is in the profile's `node_modules/.bin`. Use Node 22.19+
+or 24+, including when sudo has a different PATH. Passwords cannot be supplied
+as arguments, piped input, or environment variables.
+
+After OS authorization, the command drops root privileges to the account-file
+owner. It lists existing administrators, asks for a username and two hidden
+password entries, and requests explicit confirmation. Invalid input is retried.
+It then stops the selected user service, saves a private backup, atomically
+replaces only that administrator's password, clears their lockout, and revokes
+their login sessions. Other accounts and data remain unchanged. An originally
+running service is restarted, including after a failed reset; an originally
+stopped service stays stopped. The browser port does not change.
+
+The account file must already exist, be private to its owner, and have no symbolic
+or hard links; its parent must belong to that owner and not be writable by others.
+Missing/corrupt state, a missing service, or a service that does not stop causes
+recovery to fail closed. This command does not create or promote accounts.
+
+The printed `.recovery-*.json` backup retains the old credentials and sessions:
+keep it private. Do not restore it merely because a service restart failed;
+if the command says the password was reset, repair/start the service and use the
+new password. Restoring a backup also restores old authentication state. Windows
+does not currently support this local recovery command.
 
 Open `http://<host>:42600/luban-auth/login`. This is the only supported login
 route; `/luban/auth/login` is not an alias. Use an HTTPS reverse proxy when the
@@ -101,8 +146,8 @@ session immediately.
 Tested with DeepSeek Harness `0.1.2-rc.1`, Cordis 4.0.2, and Node.js 22.19+.
 DSH `0.1.2-rc.1` does not expose global WebServer middleware, so this package is an
 outer sidecar by design rather than a route-local authentication plugin.
-Its native session API uses HTTP RPC plus SSE; DSH `0.1.2-rc.1` registers no production
-WebSocket session route. Generic WebSocket upgrades still require a valid login.
+Its native session API uses HTTP RPC and multiplexed Remote WebSocket streams.
+The sidecar scopes both session requests and streams to the signed-in account.
 
 ## Platform Support
 

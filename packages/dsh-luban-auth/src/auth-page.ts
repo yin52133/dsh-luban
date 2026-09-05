@@ -87,6 +87,7 @@ ${field('user', '用户名', USERNAME_HINT)}
 ${field('password', '密码', '8–1024 个字符，可以使用空格和中文；区分大小写。')}
 ${setup ? field('confirmPassword', '确认密码', '再次输入相同的密码。') : ''}
 <button type="submit">${setup ? '创建账号并登录' : '登录'}</button></form>
-<p class="hint footer">${setup ? '此账号将成为这台主机的管理员。请妥善保存账号密码，并在可信网络中完成设置。' : '没有账号或忘记密码？请联系这台主机的管理员。已有账号的主机不开放匿名注册。'}</p>
+<p class="hint footer">${setup ? '此账号将成为这台主机的管理员。请妥善保存账号密码，并在可信网络中完成设置。' : '没有账号？请联系这台主机的管理员。已有账号的主机不开放匿名注册。'}</p>
+${setup ? '' : '<details class="hint"><summary>管理员忘记密码怎么办？</summary><p>请通过服务器终端（也可使用 SSH）按部署文档执行本地管理员复位命令，需通过 sudo 验证系统管理权限。密码在终端交互输入，不通过网页、环境变量或密码管理器复位。</p></details>'}
 </main></body></html>`
 }
