@@ -5,10 +5,16 @@ Versioning and remain fixed across all publishable workspace packages.
 
 ## [Unreleased]
 
-## [0.1.3] - 2026-09-04
+## [0.1.3] - 2026-09-05
 
 ### Changed
 
+- Upgraded the market and sidebar companions for DSH `0.1.2-rc.1`. The optional
+  Python memory companion now starts only after explicit configuration.
+- Added visible account/logout controls and an image file picker. Unavailable
+  Server Mode hosts now show setup guidance instead of endless reconnect errors.
+- Kept workspace directory selection inside the browser when using the login
+  gateway, including from a remote device.
 - Raised the tested DeepSeek Harness baseline to `0.1.2-rc.1` and Cordis to
   `4.0.2` across all 13 public packages.
 - Migrated browser plugins from the retired client runtime to the split Session
@@ -22,6 +28,16 @@ Versioning and remain fixed across all publishable workspace packages.
 
 ### Fixed
 
+- Fixed same-origin registration and login being rejected as cross-site requests.
+  Forms now identify invalid fields, retain usernames, and allow password retries.
+- Removed environment-based administrator bootstrap; first-run account creation
+  is guided entirely by the login page.
+- Bridged Luban sessions to the upstream DSH browser authentication without
+  exposing the upstream authentication token to the browser.
+- Fixed Session Share preventing client plugins from loading due to a missing
+  service declaration, and caught failed plan/build live-update refreshes.
+- Fixed the aggregate package's missing TypeScript declarations and added tarball
+  checks for declared type entry points.
 - Made DSH peer ranges prerelease-aware and pinned the development settings
   service so pnpm resolves the `0.1.2-rc.1` graph without requesting unpublished
   stable versions.
