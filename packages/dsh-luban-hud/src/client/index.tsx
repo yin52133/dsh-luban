@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { HudDisplayField } from '../config.js'
 import { HUD_TELEMETRY_EVENT } from '../types.js'
 import type { HudSnapshotResponse } from '../types.js'
+import { AccountControls } from './account.js'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
@@ -18,6 +19,7 @@ const STYLE = `
 .luban-hud__bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:7px 10px;border:1px solid #475569;border-radius:8px;background:rgba(15,23,42,.96);box-shadow:0 7px 22px rgba(0,0,0,.35);cursor:pointer;color:inherit;font:inherit;text-align:left}
 .luban-hud__bar:hover{border-color:#94a3b8}.luban-hud__level{width:8px;height:8px;border-radius:50%;background:#64748b;flex:none}.luban-hud--normal .luban-hud__level{background:#22c55e}.luban-hud--warn .luban-hud__level{background:#eab308}.luban-hud--danger .luban-hud__level{background:#f97316}.luban-hud--critical .luban-hud__level{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.22)}
 .luban-hud__item{white-space:nowrap}.luban-hud__label{color:#94a3b8}.luban-hud__error,.luban-hud__health{color:#fca5a5}.luban-hud__hint{color:#fde68a}.luban-hud__toggle{color:#64748b;margin-left:2px}
+.luban-hud__account{display:flex;justify-content:flex-end;align-items:center;gap:12px;padding:6px 10px;background:#0f172a;border-radius:8px}.luban-hud__account button{font:inherit;color:#9fc9ff;background:none;border:1px solid #64748b;border-radius:4px;padding:3px 6px;cursor:pointer}
 @media(max-width:680px){.luban-hud{left:8px;right:8px;bottom:8px}.luban-hud__bar{gap:7px}.luban-hud__item--secondary{display:none}}
 `
 
@@ -179,6 +181,7 @@ export function HudStatusBar(): ReactNode {
     return (
       <aside className="luban-hud luban-hud--unknown" aria-live="polite">
         <style>{STYLE}</style>
+        <AccountControls />
         <div className="luban-hud__bar">
           <span className="luban-hud__level" />
           <span>{error === '' ? 'Luban HUD loading…' : error}</span>
@@ -199,6 +202,7 @@ export function HudStatusBar(): ReactNode {
       data-keepalive={keepalive === null ? 'healthy' : 'unhealthy'}
     >
       <style>{STYLE}</style>
+      <AccountControls />
       <button
         className="luban-hud__bar"
         type="button"

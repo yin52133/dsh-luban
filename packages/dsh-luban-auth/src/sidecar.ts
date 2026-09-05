@@ -247,6 +247,15 @@ export class AuthSidecar implements AuthGateway {
       }
       assertRequestOrigin(request, security, csrfValid)
       await this.#manager.revoke(authenticated.session.id)
+      if (wantsHtml(request)) {
+        response.writeHead(303, {
+          'cache-control': 'no-store',
+          location: LOGIN_ROUTE,
+          'set-cookie': clearAuthCookies(this.#cookieIsSecure(security)),
+        })
+        response.end()
+        return
+      }
       sendJson(
         response,
         200,

@@ -370,6 +370,22 @@ describe('AuthSidecar integration', () => {
     expect((await fetch(`${baseUrl}/api/private`, { headers: { cookie } })).status).toBe(401)
   })
 
+  it('returns browser logout to the login form and invalidates the session', async () => {
+    harness = await createHarness()
+    const cookie = await loginUser(harness.baseUrl, 'admin', 'correct horse')
+    const response = await fetch(`${harness.baseUrl}/luban-auth/logout`, {
+      method: 'POST',
+      headers: { cookie, origin: harness.baseUrl, accept: 'text/html' },
+      redirect: 'manual',
+    })
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('/luban-auth/login')
+    expect(response.headers.get('set-cookie')).toContain('Max-Age=0')
+    expect(
+      (await fetch(`${harness.baseUrl}/luban-auth/session`, { headers: { cookie } })).status,
+    ).toBe(401)
+  })
+
   it('scopes native DSH session HTTP and fallback events by authenticated account', async () => {
     harness = await createHarness()
     const aliceCookie = await loginUser(harness.baseUrl, 'admin', 'correct horse')

@@ -152,7 +152,9 @@ describe('HUD React overlay', (): void => {
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
     const fetcher = vi.fn((): Promise<Response> => Promise.resolve(Response.json(warn)))
     vi.stubGlobal('EventSource', FakeEventSource)
-    vi.stubGlobal('fetch', fetcher)
+    vi.stubGlobal('fetch', (url: string): Promise<Response> =>
+      url === '/luban-auth/session' ? Promise.resolve(Response.json({ user: 'admin' })) : fetcher(),
+    )
     const mounted = await mountHud()
 
     try {
@@ -167,6 +169,10 @@ describe('HUD React overlay', (): void => {
       expect(text).toContain('TPM 120/80')
       expect(text).toContain('RPM 2/1')
       expect(text).toContain('partial')
+      expect(text).toContain('账号：admin')
+      const logout = mounted.container.querySelector<HTMLFormElement>('form')
+      expect(logout?.getAttribute('action')).toBe('/luban-auth/logout')
+      expect(logout?.method).toBe('post')
       const partial = requiredElement(mounted.container, '.luban-hud__error')
       expect(partial.title).toBe('private upstream diagnostic')
       expect(FakeEventSource.instances).toHaveLength(1)
@@ -215,7 +221,11 @@ describe('HUD React overlay', (): void => {
       .mockResolvedValueOnce(Response.json(warn))
       .mockReturnValueOnce(pendingRefresh.promise)
     vi.stubGlobal('EventSource', FakeEventSource)
-    vi.stubGlobal('fetch', fetcher)
+    vi.stubGlobal('fetch', (url: string): Promise<Response> =>
+      url === '/luban-auth/session'
+        ? Promise.resolve(new Response(null, { status: 404 }))
+        : fetcher(),
+    )
     const mounted = await mountHud()
 
     try {
