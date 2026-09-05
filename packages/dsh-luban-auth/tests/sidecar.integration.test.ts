@@ -7,7 +7,8 @@ import {
 } from 'node:http'
 import { connect, type Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import WebSocket, { WebSocketServer } from 'ws'
 import { asAccountId, asSessionId } from '@yin52133/dsh-luban-core'
 import { localHostnames, parseUpstream, resolveAuthConfig } from '../src/config.js'
 import { AuthSidecar } from '../src/sidecar.js'
@@ -43,6 +44,105 @@ describe('AuthSidecar integration', () => {
   afterEach(async () => {
     await harness?.close()
     harness = undefined
+  })
+
+  it('isolates real WebSocket streams, rejects forged event replies, and closes on logout', async () => {
+    harness = await createHarness()
+    const { baseUrl, fixture } = harness
+    const cookie = await loginUser(baseUrl, 'admin', 'correct horse')
+    await fetch(`${baseUrl}/luban-auth/users`, {
+      method: 'POST',
+      headers: { cookie, origin: baseUrl, 'content-type': 'application/json' },
+      body: JSON.stringify({ user: 'bob', password: 'bob password', role: 'operator' }),
+    })
+    await fixture.manager.bindDshSession(asAccountId('admin'), asSessionId('alice-session'))
+    await fixture.manager.bindDshSession(asAccountId('bob'), asSessionId('bob-session'))
+    const client = new WebSocket(`${baseUrl.replace('http:', 'ws:')}/api/remote.mux`, {
+      headers: { cookie, origin: baseUrl },
+    })
+    const messages: Record<string, unknown>[] = []
+    client.on('message', (data): void => {
+      messages.push(
+        JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as Record<string, unknown>,
+      )
+    })
+    await new Promise<void>((resolve, reject): void => {
+      client.once('open', resolve)
+      client.once('error', reject)
+    })
+    try {
+      client.send(
+        JSON.stringify({
+          type: 'open',
+          streamId: 'control',
+          endpoint: 'session/control',
+          payload: { args: {} },
+        }),
+      )
+      await vi.waitFor((): void => {
+        expect(messages).toHaveLength(1)
+      })
+      expect(messages[0]).toEqual({
+        type: 'item',
+        streamId: 'control',
+        value: {
+          type: 'baseline',
+          value: {
+            queues: { 'alice-session': [] },
+            jobs: { 'alice-session': [] },
+            projections: { 'alice-session': {} },
+          },
+        },
+      })
+      client.send(
+        JSON.stringify({
+          type: 'open',
+          streamId: 'foreign',
+          endpoint: 'session/follow',
+          payload: {
+            args: { request: { address: { kind: 'session', sessionId: 'bob-session' } } },
+          },
+        }),
+      )
+      await vi.waitFor((): void => {
+        expect(messages).toHaveLength(2)
+      })
+      expect(messages[1]).toMatchObject({
+        type: 'error',
+        streamId: 'foreign',
+        error: { code: 'session/not-found' },
+      })
+      client.send(
+        JSON.stringify({
+          type: 'open',
+          streamId: 'own',
+          endpoint: 'session/follow',
+          payload: {
+            args: { request: { address: { kind: 'session', sessionId: 'alice-session' } } },
+          },
+        }),
+      )
+      await vi.waitFor((): void => {
+        expect(messages).toHaveLength(3)
+      })
+      expect(messages[2]).toMatchObject({ streamId: 'own', value: { type: 'snapshot' } })
+      const forged = await dshRpc(baseUrl, cookie, '$events/result', {
+        args: { clientId: 'forged', eventId: 'foreign', outcome: { kind: 'result', value: true } },
+      })
+      expect(forged.result).toMatchObject({ ok: true, value: { accepted: false } })
+      const closed = new Promise<void>((resolve): void => {
+        client.once('close', (): void => resolve())
+      })
+      const logout = await fetch(`${baseUrl}/luban-auth/logout`, {
+        method: 'POST',
+        headers: { cookie, origin: baseUrl },
+      })
+      expect(logout.status).toBe(200)
+      await closed
+      expect(client.readyState).toBe(WebSocket.CLOSED)
+    } finally {
+      client.terminate()
+    }
   })
 
   it('guides first-run setup in the browser and signs in the created administrator', async () => {
@@ -998,6 +1098,7 @@ async function createHarness(
 }
 
 function createUpstreamServer(): { readonly server: Server; readonly state: UpstreamTestState } {
+  const remote = new WebSocketServer({ noServer: true })
   const upgradeSockets = new Set<Duplex>()
   const state: UpstreamTestState = { racedHostStreams: new Set(), racedHostWaiters: new Set() }
   const server = createServer((request, response): void => {
@@ -1005,11 +1106,40 @@ function createUpstreamServer(): { readonly server: Server; readonly state: Upst
       response.destroy(error instanceof Error ? error : new Error(String(error)))
     })
   })
-  server.on('upgrade', (_request, socket): void => {
+  server.on('close', (): void => {
+    remote.close()
+  })
+  server.on('upgrade', (request, socket, head): void => {
     upgradeSockets.add(socket)
     socket.once('close', (): void => {
       upgradeSockets.delete(socket)
     })
+    if (request.url === '/api/remote.mux') {
+      remote.handleUpgrade(request, socket, head, (client): void => {
+        client.on('message', (data): void => {
+          const message = JSON.parse(Buffer.from(data as Uint8Array).toString('utf8')) as {
+            type: string
+            streamId: string
+            endpoint: string
+          }
+          if (message.type !== 'open') return
+          const rows = { 'alice-session': [], 'bob-session': ['private'], unbound: ['private'] }
+          const value =
+            message.endpoint === 'session/control'
+              ? {
+                  type: 'baseline',
+                  value: {
+                    queues: rows,
+                    jobs: rows,
+                    projections: { 'alice-session': {}, 'bob-session': { private: true } },
+                  },
+                }
+              : { type: 'snapshot', records: [] }
+          client.send(JSON.stringify({ type: 'item', streamId: message.streamId, value }))
+        })
+      })
+      return
+    }
     socket.write(
       'HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n',
     )

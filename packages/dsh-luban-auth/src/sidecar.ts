@@ -21,6 +21,8 @@ import { withUpstreamCookie } from './upstream-auth.js'
 import { DshEventScope, type DshEventChannel } from './dsh-event-scope.js'
 import { dshMethodFromPath, dshRequestSessionIds } from './dsh-http-scope.js'
 import { DshSessionOperationBarrier } from './dsh-session-operation-barrier.js'
+import { RemoteReplyRegistry, RemoteStreamScope } from './remote-stream-scope.js'
+import { proxyRemoteStreams } from './remote-stream-proxy.js'
 import {
   AUTH_COOKIE_NAME,
   AUTH_ROOT,
@@ -115,6 +117,8 @@ export class AuthSidecar implements AuthGateway {
   readonly #onError: (error: Error) => void
   readonly #dshEventScope: DshEventScope
   readonly #dshSessionOperations = new DshSessionOperationBarrier()
+  readonly #remoteReplies = new RemoteReplyRegistry()
+  readonly #remoteStreams = new Map<() => void, string>()
   readonly #sockets = new Set<Duplex>()
   readonly #upstreamRequests = new Set<ClientRequest>()
   #server: Server | undefined
@@ -192,6 +196,8 @@ export class AuthSidecar implements AuthGateway {
     if (server === undefined) return
     this.#server = undefined
     this.#listenPort = undefined
+    for (const close of this.#remoteStreams.keys()) close()
+    this.#remoteStreams.clear()
     for (const request of this.#upstreamRequests) request.destroy()
     this.#upstreamRequests.clear()
     server.closeAllConnections()
@@ -247,6 +253,9 @@ export class AuthSidecar implements AuthGateway {
       }
       assertRequestOrigin(request, security, csrfValid)
       await this.#manager.revoke(authenticated.session.id)
+      for (const [close, sessionId] of this.#remoteStreams) {
+        if (sessionId === authenticated.session.id) close()
+      }
       if (wantsHtml(request)) {
         response.writeHead(303, {
           'cache-control': 'no-store',
@@ -628,6 +637,16 @@ export class AuthSidecar implements AuthGateway {
     const message = parseJsonRecord(body)
     const rpcId = typeof message?.rpcId === 'string' ? message.rpcId : undefined
     const method = dshMethodFromPath(target.pathname)
+    if (method === '$events/result' && !this.#remoteReplies.accepts(accountId, message?.payload)) {
+      if (rpcId === undefined)
+        throw new HttpError(
+          403,
+          'E_ACCOUNT_SCOPE_MISMATCH',
+          'Remote event reply is not owned by this account',
+        )
+      sendDshRpcValue(response, rpcId, { accepted: false })
+      return
+    }
     const sessionIds = dshRequestSessionIds(method, message)
     const denial = await this.#firstSessionScopeDenial(accountId, sessionIds)
     if (denial !== null) {
@@ -1007,6 +1026,52 @@ export class AuthSidecar implements AuthGateway {
     if (authenticated === null)
       throw new HttpError(401, 'E_AUTH_REQUIRED', 'Authentication required')
     assertWebSocketOrigin(request, security)
+    if (target.pathname === '/api/remote.mux') {
+      const cookie = this.#upstreamCookie?.()
+      const decline = async (clientId: string, eventId: string): Promise<void> => {
+        const result = await fetch(new URL('/api/$events/result', this.#upstream), {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            origin: this.#upstream.origin,
+            ...(cookie === undefined ? {} : { cookie }),
+          },
+          body: JSON.stringify({
+            type: 'client-request',
+            rpcId: `decline-${eventId}`,
+            method: '$events/result',
+            payload: { args: { clientId, eventId, outcome: { kind: 'next' } } },
+          }),
+          signal: AbortSignal.timeout(10_000),
+        })
+        await result.body?.cancel()
+        if (!result.ok) throw new Error('Unable to decline unrelated Remote event')
+      }
+      const scope = new RemoteStreamScope(
+        authenticated.session.accountId,
+        (account, id) => this.#dshSessionOwnerAfterOperations(account, id),
+        this.#remoteReplies,
+        this.#dshEventScope,
+        decline,
+      )
+      const close = proxyRemoteStreams({
+        request,
+        socket,
+        head,
+        upstream: this.#upstream,
+        cookie,
+        scope,
+        maxBytes: this.#config.maxProxyBodyBytes,
+        authenticated: async (): Promise<boolean> => (await this.#authenticate(request)) !== null,
+        onClose: (): void => {
+          queueMicrotask((): void => {
+            this.#remoteStreams.delete(close)
+          })
+        },
+      })
+      if (!socket.destroyed) this.#remoteStreams.set(close, authenticated.session.id)
+      return
+    }
     const headers = buildProxyHeaders(request.headers, security, this.#upstream, true)
     if (this.#upstreamCookie !== undefined) {
       headers.cookie = withUpstreamCookie(

@@ -41,7 +41,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@yin52133/dsh-luban-core": "workspace:^"
+    "@yin52133/dsh-luban-core": "workspace:^",
+    "ws": "8.21.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
@@ -49,7 +50,8 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-host-webserver": "0.1.2-rc.1"
+    "@deepseek-ai/dsh-host-webserver": "0.1.2-rc.1",
+    "@types/ws": "8.18.1"
   },
   "dsh": {
     "bundle": {

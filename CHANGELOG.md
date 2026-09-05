@@ -28,6 +28,10 @@ Versioning and remain fixed across all publishable workspace packages.
 
 ### Fixed
 
+- Applied account isolation to the new DSH Remote WebSocket streams and event
+  replies. Logging out now closes live streams immediately.
+- Bound sessions created through Typert routes to the signed-in account, restoring
+  session visibility in HUD and Session Share.
 - Fixed same-origin registration and login being rejected as cross-site requests.
   Forms now identify invalid fields, retain usernames, and allow password retries.
 - Removed environment-based administrator bootstrap; first-run account creation

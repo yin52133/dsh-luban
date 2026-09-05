@@ -15,6 +15,7 @@ export default defineConfig({
       '@deepseek-ai/cordis',
       '@deepseek-ai/dsh-host-webserver',
       '@yin52133/dsh-luban-core',
+      'ws',
     ],
   },
 })
