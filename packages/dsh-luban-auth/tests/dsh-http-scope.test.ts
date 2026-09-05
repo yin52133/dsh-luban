@@ -46,6 +46,9 @@ const TYPERT_AGENT_ID_METHODS = [
 describe('dshMethodFromPath', () => {
   it.each([
     ['/api/session.prompt', 'session.prompt'],
+    ['/api/session/create', 'session.create'],
+    ['/api/session/follow', 'session.follow'],
+    ['/api/workspace/follow', 'workspace.follow'],
     ['/api/commands/list', 'commands/list'],
     ['/api/dynamicCordisRunner/runHostHalf', 'dynamicCordisRunner/runHostHalf'],
     ['/api/commands/list/extra', 'commands/list/extra'],
@@ -59,6 +62,37 @@ describe('dshMethodFromPath', () => {
 })
 
 describe('dshRequestSessionIds', () => {
+  it('reads Typert requests and durable session addresses without changing the forwarded body', () => {
+    expect(
+      dshRequestSessionIds(
+        'session.prompt',
+        request('session/prompt', {
+          args: { request: { sessionId: 'owned', content: [] } },
+        }),
+      ),
+    ).toEqual(['owned'])
+    expect(
+      dshRequestSessionIds(
+        'session.follow',
+        request('session/follow', {
+          args: { request: { address: { kind: 'session', sessionId: 'owned' } } },
+        }),
+      ),
+    ).toEqual(['owned'])
+    expect(
+      dshRequestSessionIds(
+        'session.page',
+        request('session/page', {
+          args: {
+            request: {
+              address: { kind: 'subagent', parentSessionId: 'parent', childSessionId: 'child' },
+            },
+          },
+        }),
+      ),
+    ).toEqual(['parent', 'child'])
+  })
+
   it.each(LEGACY_SESSION_ID_METHODS)('extracts %s payload.sessionId', (method) => {
     expect(dshRequestSessionIds(method, request(method, { sessionId: 'owned-session' }))).toEqual([
       'owned-session',

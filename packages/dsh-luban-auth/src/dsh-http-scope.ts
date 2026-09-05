@@ -12,6 +12,11 @@ const LEGACY_SESSION_ID_METHODS: ReadonlySet<string> = new Set([
   'session.attachment',
   'session.updateQueue',
   'session.cancel',
+  'session.header',
+  'session.page',
+  'session.follow',
+  'session.openWorkspacePath',
+  'session.canOpenWorkspacePath',
   'skill.list',
   'agentPreset.select',
   'goal.create',
@@ -56,14 +61,15 @@ const MESSAGE_FEEDBACK_METHODS: ReadonlySet<string> = new Set([
   'messageFeedback/put',
 ])
 
-/** Return the complete DSH endpoint after `/api/`, including Typert namespace separators. */
+/** Normalize migrated DSH namespaces while preserving other Typert endpoints. */
 export function dshMethodFromPath(pathname: string): string | undefined {
   if (!pathname.startsWith(DSH_API_ROOT)) return undefined
   const method = pathname.slice(DSH_API_ROOT.length)
-  return method === '' ? undefined : method
+  if (method === '') return undefined
+  return method.replace(/^(session|workspace|subagent|skill|agentPreset)\/([^/]+)$/u, '$1.$2')
 }
 
-/** Extract only the account-scoped Session ids named by the current DSH rc.2 wire contract. */
+/** Extract only resource identities from the legacy and 0.1.2 Typert request contracts. */
 export function dshRequestSessionIds(method: string | undefined, message: unknown): string[] {
   if (method === undefined) return []
   const root = asRecord(message)
@@ -75,11 +81,21 @@ export function dshRequestSessionIds(method: string | undefined, message: unknow
     return sessionIdValues(value?.sessionId)
   }
 
-  const payload = asRecord(root.payload)
-  if (payload === null) return []
+  const envelope = asRecord(root.payload)
+  if (envelope === null) return []
+  const args = asRecord(envelope.args)
+  const payload = asRecord(args?.request) ?? envelope
   const ids: string[] = []
 
-  if (LEGACY_SESSION_ID_METHODS.has(method)) pushSessionId(ids, payload.sessionId)
+  if (LEGACY_SESSION_ID_METHODS.has(method)) {
+    pushSessionId(ids, payload.sessionId)
+    const address = asRecord(payload.address)
+    if (address?.kind === 'session') pushSessionId(ids, address.sessionId)
+    if (address?.kind === 'subagent') {
+      pushSessionId(ids, address.parentSessionId)
+      pushSessionId(ids, address.childSessionId)
+    }
+  }
 
   if (method === 'workspace.insertSessionBefore') {
     pushSessionId(ids, payload.sessionId)
@@ -93,7 +109,6 @@ export function dshRequestSessionIds(method: string | undefined, message: unknow
     pushSessionId(ids, payload.childSessionId)
   }
 
-  const args = asRecord(payload.args)
   if (TYPERT_AGENT_ID_METHODS.has(method)) pushSessionId(ids, args?.agentId)
 
   if (MESSAGE_FEEDBACK_METHODS.has(method)) {

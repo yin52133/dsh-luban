@@ -756,7 +756,11 @@ export class AuthSidecar implements AuthGateway {
     if ((method === 'session.create' || method === 'session.fork') && result.ok === false) {
       const error = asRecord(result.error)
       const details = asRecord(error?.details)
-      if (error?.code === 'workspace-attach-failed' && typeof details?.sessionId === 'string') {
+      if (
+        (error?.code === 'workspace-attach-failed' ||
+          error?.code === 'session/workspace-attach-failed') &&
+        typeof details?.sessionId === 'string'
+      ) {
         const denial = await this.#bindCreatedSession(context.accountId, details.sessionId)
         if (denial !== null) {
           return { body: dshScopeErrorBody(message.rpcId, denial), changed: true }

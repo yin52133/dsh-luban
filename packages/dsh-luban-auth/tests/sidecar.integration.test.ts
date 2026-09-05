@@ -386,6 +386,26 @@ describe('AuthSidecar integration', () => {
     ).toBe(401)
   })
 
+  it('binds Typert-created sessions and checks nested request identities', async () => {
+    harness = await createHarness()
+    const cookie = await loginUser(harness.baseUrl, 'admin', 'correct horse')
+    const created = await dshRpc(harness.baseUrl, cookie, 'session/create', {
+      args: { request: {} },
+    })
+    expect(created.result).toMatchObject({ ok: true, value: { sessionId: 'created-session' } })
+    expect(await harness.fixture.manager.dshSessionOwner(asSessionId('created-session'))).toBe(
+      'admin',
+    )
+    const allowed = await dshRpc(harness.baseUrl, cookie, 'session/prompt', {
+      args: { request: { sessionId: 'created-session', content: [] } },
+    })
+    expect(allowed.result.ok).toBe(true)
+    const denied = await dshRpc(harness.baseUrl, cookie, 'session/page', {
+      args: { request: { address: { kind: 'session', sessionId: 'foreign' } } },
+    })
+    expect(denied.result.ok).toBe(false)
+  })
+
   it('scopes native DSH session HTTP and fallback events by authenticated account', async () => {
     harness = await createHarness()
     const aliceCookie = await loginUser(harness.baseUrl, 'admin', 'correct horse')
@@ -1113,7 +1133,10 @@ async function handleUpstreamRequest(
         ],
         ...(target.pathname === '/api/session.search' ? { hasMore: false } : {}),
       }
-    } else if (target.pathname === '/api/session.create') {
+    } else if (
+      target.pathname === '/api/session.create' ||
+      target.pathname === '/api/session/create'
+    ) {
       if (payload.race === 'success' || payload.race === 'failure') {
         const sessionId = payload.race === 'success' ? 'raced-session' : 'failed-race-session'
         publishRacedHostEvents(state, sessionId)
