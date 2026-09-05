@@ -67,6 +67,7 @@ const DSH_FILTERED_UNARY_METHODS = new Set([
   'sessionReferenceResolver/candidates',
   'dynamicCordisRunner/inventory',
   'subagent.list',
+  'subagents/list',
 ])
 const SENSITIVE_COOKIE_NAMES = new Set([AUTH_COOKIE_NAME, CSRF_COOKIE_NAME])
 const HOP_BY_HOP_HEADERS = new Set([
@@ -821,7 +822,7 @@ export class AuthSidecar implements AuthGateway {
     const value = asRecord(result.value)
     if (value === null) return { body, changed: false }
 
-    if (method === 'subagent.list') {
+    if (method === 'subagent.list' || method === 'subagents/list') {
       if (!Array.isArray(value.entries)) return { body, changed: false }
       for (const entry of value.entries) {
         const childId = asRecord(entry)?.id

@@ -504,6 +504,27 @@ describe('AuthSidecar integration', () => {
       args: { request: { address: { kind: 'session', sessionId: 'foreign' } } },
     })
     expect(denied.result.ok).toBe(false)
+    for (const [method, args] of [
+      ['skills/list', { request: { sessionId: 'foreign' } }],
+      ['agentPresets/select', { agentId: 'foreign', agentPreset: 'default' }],
+      ['subagents/list', { parentSessionId: 'foreign' }],
+      [
+        'subagents/interruptByParent',
+        { parentSessionId: 'created-session', childSessionId: 'foreign', mode: 'continuable' },
+      ],
+      [
+        'subagents/prompt',
+        { request: { parentSessionId: 'created-session', childSessionId: 'foreign', content: [] } },
+      ],
+    ] as const) {
+      const foreign = await dshRpc(harness.baseUrl, cookie, method, { args })
+      expect(foreign.result.ok).toBe(false)
+    }
+    const children = await dshRpc(harness.baseUrl, cookie, 'subagents/list', {
+      args: { parentSessionId: 'created-session' },
+    })
+    expect(children.result.ok).toBe(true)
+    expect(await harness.fixture.manager.dshSessionOwner(asSessionId('alice-child'))).toBe('admin')
   })
 
   it('scopes native DSH session HTTP and fallback events by authenticated account', async () => {
@@ -1390,7 +1411,10 @@ async function handleUpstreamRequest(
         },
         { pluginId: 'legacy-plugin', agentId: 'legacy-session', packages: [] },
       ]
-    } else if (target.pathname === '/api/subagent.list') {
+    } else if (
+      target.pathname === '/api/subagent.list' ||
+      target.pathname === '/api/subagents/list'
+    ) {
       value = {
         entries: [
           {

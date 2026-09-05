@@ -23,6 +23,7 @@ const LEGACY_SESSION_ID_METHODS = [
 ] as const
 
 const TYPERT_AGENT_ID_METHODS = [
+  'agentPresets/select',
   'commands/execute',
   'commands/list',
   'fileReferences/list',
@@ -62,6 +63,40 @@ describe('dshMethodFromPath', () => {
 })
 
 describe('dshRequestSessionIds', () => {
+  it.each([
+    ['skills/list', { request: { sessionId: 'owned' } }, ['owned']],
+    ['subagents/list', { parentSessionId: 'parent' }, ['parent']],
+    [
+      'subagents/interruptByParent',
+      { parentSessionId: 'parent', childSessionId: 'child', mode: 'continuable' },
+      ['parent', 'child'],
+    ],
+    [
+      'subagents/prompt',
+      { request: { parentSessionId: 'parent', childSessionId: 'child', content: [] } },
+      ['parent', 'child'],
+    ],
+  ] as const)('scopes migrated %s arguments', (method, args, expected) => {
+    expect(dshRequestSessionIds(method, request(method, { args }))).toEqual(expected)
+  })
+
+  it('checks session references in subagent prompts', () => {
+    expect(
+      dshRequestSessionIds(
+        'subagents/prompt',
+        request('subagents/prompt', {
+          args: {
+            request: {
+              parentSessionId: 'parent',
+              childSessionId: 'child',
+              content: [{ type: 'text', text: encodeSessionReferenceUri('foreign') }],
+            },
+          },
+        }),
+      ),
+    ).toEqual(['parent', 'child', 'foreign'])
+  })
+
   it('reads Typert requests and durable session addresses without changing the forwarded body', () => {
     expect(
       dshRequestSessionIds(

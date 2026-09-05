@@ -13,6 +13,7 @@ const allowedRuntimeDependencies = new Set([
   'argon2',
   'serialport',
   'sharp',
+  'ws',
   'yaml',
 ])
 

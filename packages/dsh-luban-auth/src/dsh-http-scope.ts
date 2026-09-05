@@ -18,6 +18,7 @@ const LEGACY_SESSION_ID_METHODS: ReadonlySet<string> = new Set([
   'session.openWorkspacePath',
   'session.canOpenWorkspacePath',
   'skill.list',
+  'skills/list',
   'agentPreset.select',
   'goal.create',
   'goal.edit',
@@ -32,9 +33,13 @@ const SUBAGENT_METHODS: ReadonlySet<string> = new Set([
   'subagent.history',
   'subagent.prompt',
   'subagent.interrupt',
+  'subagents/list',
+  'subagents/prompt',
+  'subagents/interruptByParent',
 ])
 
 const TYPERT_AGENT_ID_METHODS: ReadonlySet<string> = new Set([
+  'agentPresets/select',
   'commands/execute',
   'commands/list',
   'fileReferences/list',
@@ -105,8 +110,9 @@ export function dshRequestSessionIds(method: string | undefined, message: unknow
   }
 
   if (SUBAGENT_METHODS.has(method)) {
-    pushSessionId(ids, payload.parentSessionId)
-    pushSessionId(ids, payload.childSessionId)
+    const address = method.startsWith('subagents/') ? (asRecord(args?.request) ?? args) : payload
+    pushSessionId(ids, address?.parentSessionId)
+    pushSessionId(ids, address?.childSessionId)
   }
 
   if (TYPERT_AGENT_ID_METHODS.has(method)) pushSessionId(ids, args?.agentId)
@@ -116,7 +122,8 @@ export function dshRequestSessionIds(method: string | undefined, message: unknow
     pushSessionId(ids, request?.sessionId)
   }
 
-  if (method === 'session.prompt') appendPromptReferenceSessionIds(ids, payload.content)
+  if (method === 'session.prompt' || method === 'subagents/prompt')
+    appendPromptReferenceSessionIds(ids, payload.content)
   return ids
 }
 
