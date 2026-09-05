@@ -5,7 +5,7 @@ describe('account form validation', () => {
   it('identifies each invalid field and accepts normalized usernames and Unicode passwords', () => {
     expect(
       Object.keys(
-        validateAuthInput({ user: '.ab', password: 'short', confirmPassword: 'other' }, false),
+        validateAuthInput({ user: '/ab', password: 'short', confirmPassword: 'other' }, false),
       ),
     ).toEqual(['user', 'password', 'confirmPassword'])
     expect(

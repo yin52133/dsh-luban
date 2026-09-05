@@ -10,6 +10,7 @@ import {
   type VerifyResult,
 } from '@yin52133/dsh-luban-core'
 import { authStateCodec, initialAuthState } from './state.js'
+import { normalizeUsername } from './username.js'
 import type {
   AccountRecord,
   AuthManagerOptions,
@@ -21,7 +22,6 @@ import type {
   PersistentSession,
 } from './types.js'
 
-const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/u
 const PASSWORD_MIN_LENGTH = 8
 const PASSWORD_MAX_LENGTH = 1_024
 const RATE_WINDOW_MS = 60_000
@@ -31,7 +31,8 @@ const SCRYPT_PARALLELISM = 1
 const SCRYPT_KEY_BYTES = 32
 const SCRYPT_SALT_BYTES = 16
 
-const defaultPasswordHasher: PasswordHasher = Object.freeze({
+/** Password encoding shared by sign-in and the offline recovery command. */
+export const defaultPasswordHasher: PasswordHasher = Object.freeze({
   hash: async (password: string): Promise<string> => {
     const salt = systemRandomBytes(SCRYPT_SALT_BYTES)
     const key = await deriveScryptKey(password, salt)
@@ -490,16 +491,6 @@ function normalizeContextSessionId(value: SessionId): string {
   return normalized
 }
 
-function normalizeUsername(value: string): string {
-  const normalized = value.trim().toLowerCase()
-  if (!USERNAME_PATTERN.test(normalized)) {
-    throw new TypeError(
-      'luban-auth: username must be 3-64 lowercase letters, digits, dot, dash, or underscore',
-    )
-  }
-  return normalized
-}
-
 function tryNormalizeUsername(value: string): string | undefined {
   try {
     return normalizeUsername(value)
@@ -508,7 +499,8 @@ function tryNormalizeUsername(value: string): string | undefined {
   }
 }
 
-function assertPassword(password: string): void {
+/** Reject invalid passwords before hashing or modifying account data. */
+export function assertPassword(password: string): void {
   const length = passwordLength(password)
   if (length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
     throw new TypeError(

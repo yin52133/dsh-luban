@@ -1,3 +1,5 @@
+import { normalizeUsername, USERNAME_HINT } from './username.js'
+
 export type AuthField = 'user' | 'password' | 'confirmPassword'
 export type AuthFieldErrors = Partial<Record<AuthField, string>>
 
@@ -17,8 +19,10 @@ export function validateAuthInput(
   const errors: AuthFieldErrors = {}
   const username = typeof body.user === 'string' ? body.user.trim() : ''
   const password = typeof body.password === 'string' ? body.password : ''
-  if (!/^[a-z0-9][a-z0-9._-]{2,63}$/iu.test(username)) {
-    errors.user = '用户名须为 3–64 位英文字母、数字、点、短横线或下划线，并以字母或数字开头。'
+  try {
+    normalizeUsername(username)
+  } catch (error) {
+    errors.user = error instanceof Error ? error.message : USERNAME_HINT
   }
   if (Array.from(password).length < 8 || password.length > 1_024) {
     errors.password = '密码须为 8–1024 个字符，请重新输入。'
@@ -79,7 +83,7 @@ ${notice === undefined ? '' : `<div class="error summary" role="alert">${escapeH
 <form method="post" action="/luban-auth/login" novalidate>
 <input type="hidden" name="returnTo" value="${escapeHtml(options.returnTo)}">
 <input type="hidden" name="intent" value="${setup ? 'setup' : 'login'}">
-${field('user', '用户名', '3–64 位英文字母、数字、点（.）、短横线（-）或下划线（_）；以字母或数字开头，不区分大小写。')}
+${field('user', '用户名', USERNAME_HINT)}
 ${field('password', '密码', '8–1024 个字符，可以使用空格和中文；区分大小写。')}
 ${setup ? field('confirmPassword', '确认密码', '再次输入相同的密码。') : ''}
 <button type="submit">${setup ? '创建账号并登录' : '登录'}</button></form>
