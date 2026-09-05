@@ -1,2 +1,8 @@
-export { apply, approveTakeover, injectSessionInput, SessionShareSection } from './client/index.js'
+export {
+  apply,
+  inject,
+  approveTakeover,
+  injectSessionInput,
+  SessionShareSection,
+} from './client/index.js'
 export type { UiSession, UiTakeover } from './client/index.js'

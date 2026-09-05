@@ -2,10 +2,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply,
+  inject,
   approveTakeover,
   injectSessionInput,
   SessionShareSection,
-} from '../src/client/index.js'
+} from '../src/client.js'
 
 afterEach((): void => {
   vi.unstubAllGlobals()
@@ -13,6 +14,7 @@ afterEach((): void => {
 
 describe('Session Share client entry', (): void => {
   it('registers the lazy Settings section', (): void => {
+    expect(inject).toEqual(['slots'])
     let registered: Readonly<Record<string, unknown>> | undefined
     let component: unknown
     const context = {
