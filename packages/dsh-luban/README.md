@@ -31,6 +31,9 @@ by default; plans and builds are under 工作, shared sessions under 协作, and
 images or supported device tools under 工具. Only installed/enabled pages appear.
 Use **返回对话** or Escape to return to the existing DSH conversation.
 Business pages no longer appear as separate Settings sections.
+Keepalive, context compression, and browser automation remain background/tool
+capabilities. Account controls and telemetry remain in the status bar; these
+plugins do not need separate business pages to run.
 
 ## Configuration
 

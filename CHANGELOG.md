@@ -9,6 +9,11 @@ Versioning and remain fixed across all publishable workspace packages.
 
 ### Changed
 
+- Moved taskboard, plan review, builds, shared sessions, images, and device tools
+  into one sidebar workbench, with taskboard as the default page. Settings now
+  remain focused on configuration.
+- Matched business pages to DSH light/dark themes, added narrow-screen navigation,
+  localized primary controls, and made new plan forms collapsible with field labels.
 - Accepted short and Chinese usernames, including spaces, with shared form and
   authentication validation.
 - Added an Ubuntu terminal command for administrator password recovery after
@@ -33,6 +38,10 @@ Versioning and remain fixed across all publishable workspace packages.
 
 ### Fixed
 
+- Reported expired login and failed verification before submitting business
+  mutations. Added visible refresh errors and retries instead of silent failures.
+- Removed shared module state from build-error delivery and added artifact
+  loading errors, retry controls, and cancellation when leaving the page.
 - Applied account isolation to the new DSH Remote WebSocket streams and event
   replies. Logging out now closes live streams immediately.
 - Bound sessions created through Typert routes to the signed-in account, restoring
