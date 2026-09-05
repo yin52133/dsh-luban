@@ -292,6 +292,7 @@ export function PlanReviewSection(_props: SettingsSectionOwnerProps): ReactNode 
     const response = await fetch('/luban-plan/plans', { headers: { accept: 'application/json' } })
     if (!response.ok) throw new Error(`Unable to load plans (${String(response.status)})`)
     setPlans(plansFrom(await response.json()))
+    setError('')
   }, [])
 
   useEffect(() => {
@@ -300,7 +301,9 @@ export function PlanReviewSection(_props: SettingsSectionOwnerProps): ReactNode 
     )
     const events = new EventSource('/luban-plan/events')
     events.addEventListener('plan', (): void => {
-      void refresh()
+      void refresh().catch((reason: unknown): void =>
+        setError(reason instanceof Error ? reason.message : 'Unable to load plans'),
+      )
     })
     events.onerror = (): void => setError('Plan live updates disconnected; retrying automatically')
     return (): void => events.close()

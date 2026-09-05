@@ -66,6 +66,32 @@ afterEach((): void => {
 })
 
 describe('server-mode artifact links', (): void => {
+  it('explains an unavailable host without starting a failing event stream', async (): Promise<void> => {
+    vi.stubGlobal('fetch', (): Promise<Response> =>
+      Promise.resolve(new Response(null, { status: 404 })),
+    )
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const mounted = await mountServerMode()
+    try {
+      await waitForUi((): void => {
+        expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain(
+          'Ubuntu host',
+        )
+      })
+      expect(FakeEventSource.instances).toHaveLength(0)
+      const refresh = [...mounted.container.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Refresh',
+      )
+      await act(async (): Promise<void> => {
+        refresh?.click()
+        await Promise.resolve()
+      })
+      expect(mounted.container.textContent).toContain('Ubuntu host')
+    } finally {
+      await unmount(mounted)
+    }
+  })
+
   it('renders a signed same-origin link and triggers an authenticated browser download', async (): Promise<void> => {
     const signedDownloadUrl =
       '/luban-server-mode/jobs/job%2F42/artifacts/nested%2Ffirmware.bin?expires=1800000300&signature=test-signature'

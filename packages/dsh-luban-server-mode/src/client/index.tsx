@@ -222,6 +222,15 @@ export function ServerModeSection(_props: SettingsSectionOwnerProps): ReactNode 
       fetch('/luban-server-mode/resources', { headers: { accept: 'application/json' } }),
     ])
     if (!jobsResponse.ok || !templatesResponse.ok || !resourceResponse.ok) {
+      if (
+        [jobsResponse, templatesResponse, resourceResponse].some(
+          (response) => response.status === 404,
+        )
+      ) {
+        throw new Error(
+          'Server Mode is unavailable on this host. Open the Luban page on an Ubuntu host with Server Mode enabled.',
+        )
+      }
       throw new Error('Unable to load server mode')
     }
     const nextTemplates = parseRows(await templatesResponse.json(), 'templates', isTemplate)
@@ -229,21 +238,32 @@ export function ServerModeSection(_props: SettingsSectionOwnerProps): ReactNode 
     setTemplates(nextTemplates)
     setTemplateId((current): string => (current !== '' ? current : (nextTemplates[0]?.id ?? '')))
     setResource(parseResource(await resourceResponse.json()))
+    setError('')
   }, [])
 
   useEffect(() => {
-    void refresh().catch((reason: unknown): void => {
-      setError(reason instanceof Error ? reason.message : 'Unable to load server mode')
-    })
-    const events = new EventSource('/luban-server-mode/events')
-    const update = (): void => {
-      void refresh()
+    let active = true
+    let events: EventSource | undefined
+    const report = (reason: unknown): void => {
+      if (active) setError(reason instanceof Error ? reason.message : 'Unable to load server mode')
     }
-    events.addEventListener('build', update)
-    events.addEventListener('resource', update)
-    events.addEventListener('baseline', update)
-    events.onerror = (): void => setError('Live updates disconnected; the browser will retry')
-    return (): void => events.close()
+    const update = (): void => {
+      void refresh().catch(report)
+    }
+    void refresh()
+      .then((): void => {
+        if (!active) return
+        events = new EventSource('/luban-server-mode/events')
+        events.addEventListener('build', update)
+        events.addEventListener('resource', update)
+        events.addEventListener('baseline', update)
+        events.onerror = (): void => setError('Live updates disconnected; the browser will retry')
+      })
+      .catch(report)
+    return (): void => {
+      active = false
+      events?.close()
+    }
   }, [refresh])
 
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -273,6 +293,10 @@ export function ServerModeSection(_props: SettingsSectionOwnerProps): ReactNode 
     <section className="luban-server" aria-label="Luban server mode">
       <style>{STYLE}</style>
       <h2>Luban Server Mode</h2>
+      <p>
+        Queue allowlisted builds on an Ubuntu host. Build templates and allowed workspace
+        directories are configured by the host administrator.
+      </p>
       {resource === null ? null : (
         <div className="luban-server__resource">
           <span>Disk free: {resource.diskFreeGb.toFixed(1)} GiB</span>
@@ -290,6 +314,7 @@ export function ServerModeSection(_props: SettingsSectionOwnerProps): ReactNode 
         }}
       >
         <select
+          aria-label="Build template"
           value={templateId}
           onChange={(event): void => setTemplateId(event.currentTarget.value)}
         >
@@ -311,7 +336,9 @@ export function ServerModeSection(_props: SettingsSectionOwnerProps): ReactNode 
         <button
           type="button"
           onClick={(): void => {
-            void refresh()
+            void refresh().catch((reason: unknown): void =>
+              setError(reason instanceof Error ? reason.message : 'Unable to load server mode'),
+            )
           }}
         >
           Refresh

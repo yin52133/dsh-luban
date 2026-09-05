@@ -91,6 +91,33 @@ afterEach((): void => {
 })
 
 describe('image paste Settings component', (): void => {
+  it('offers a file picker and explains invalid files without uploading', async (): Promise<void> => {
+    const fetcher = vi.fn((): Promise<Response> => Promise.resolve(Response.json({ images: [] })))
+    vi.stubGlobal('fetch', fetcher)
+    const mounted = await mountImageSection()
+    try {
+      const picker = mounted.container.querySelector<HTMLInputElement>('input[type="file"]')
+      expect(picker?.accept).toBe('image/png,image/jpeg,image/webp')
+      if (picker === null) throw new Error('file picker was not rendered')
+      Object.defineProperty(picker, 'files', {
+        value: [new File(['invalid'], 'test.txt', { type: 'text/plain' })],
+      })
+      await act(async (): Promise<void> => {
+        picker.dispatchEvent(new Event('change', { bubbles: true }))
+        await Promise.resolve()
+      })
+      await waitForUi((): void => {
+        expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain(
+          'PNG, JPEG, or WebP',
+        )
+      })
+      expect(fetcher).toHaveBeenCalledOnce()
+      expect(picker.value).toBe('')
+    } finally {
+      await unmount(mounted)
+    }
+  })
+
   it('drives paste/drop, preview rendering, delete, and a completed cleanup refresh through React', async (): Promise<void> => {
     let images: ImageFixture[] = []
     let nextId = 1

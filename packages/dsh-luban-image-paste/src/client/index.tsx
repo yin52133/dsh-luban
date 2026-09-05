@@ -304,6 +304,7 @@ export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode 
   }
 
   const paste = (event: ClipboardEvent<HTMLElement>): void => {
+    if (busy) return
     const file = selectAcceptedImage(event.clipboardData.files)
     if (file === undefined) {
       setError('Clipboard does not contain a PNG, JPEG, or WebP image')
@@ -315,6 +316,7 @@ export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode 
 
   const drop = (event: DragEvent<HTMLElement>): void => {
     event.preventDefault()
+    if (busy) return
     const file = selectAcceptedImage(event.dataTransfer.files)
     if (file === undefined) {
       setError('Drop a PNG, JPEG, or WebP image')
@@ -327,6 +329,23 @@ export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode 
     <section className="luban-image" aria-label="Luban image paste">
       <style>{STYLE}</style>
       <h2>Luban Image Paste</h2>
+      <p>
+        Choose, paste or drop a PNG, JPEG or WebP image up to 10 MB. Leave Session id empty to store
+        it without sending it to a session.
+      </p>
+      <label>
+        Choose image
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          disabled={busy}
+          onChange={(event): void => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ''
+            if (file !== undefined) void ingest(file, 'drop')
+          }}
+        />
+      </label>
       <div className="luban-image__controls">
         <input
           aria-label="Session id"
@@ -359,7 +378,7 @@ export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode 
       <div
         className="luban-image__drop"
         tabIndex={0}
-        role="button"
+        role="group"
         aria-label="Paste or drop an image"
         onPaste={paste}
         onDragOver={(event): void => event.preventDefault()}
@@ -372,7 +391,12 @@ export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode 
           {error}
         </div>
       )}
-      {notice === '' ? null : <div className="luban-image__ok">{notice}</div>}
+      {notice === '' ? null : (
+        <div className="luban-image__ok" role="status">
+          {notice}
+        </div>
+      )}
+      {images.length === 0 ? <p>No images stored yet.</p> : null}
       <div className="luban-image__list" aria-label="Recent images">
         {images.map((image) => (
           <article className="luban-image__card" key={image.id}>
