@@ -7,6 +7,7 @@ import { Config, expandHomePath, localHostnames, parseUpstream } from './config.
 import { AuthSidecar } from './sidecar.js'
 import { LubanAuthService } from './service.js'
 import type { LubanAuthConfig } from './types.js'
+import { createUpstreamAuthCookie } from './upstream-auth.js'
 
 export * from './audit.js'
 export * from './auth-manager.js'
@@ -53,12 +54,7 @@ export async function apply(ctx: Context, config: LubanAuthConfig): Promise<void
     lockoutMs: config.lockoutMinutes * 60 * 1_000,
     loginRateLimit: config.loginRateLimitPerMinute,
   })
-  const bootstrapPassword = process.env[config.bootstrapAdminPasswordEnv]
-  await manager.initialize(
-    bootstrapPassword === undefined || bootstrapPassword === ''
-      ? undefined
-      : { username: config.bootstrapAdminUser, password: bootstrapPassword },
-  )
+  await manager.initialize()
   ctx.effect(() => async (): Promise<void> => manager.close(), 'lubanAuth.state')
   new LubanAuthService(ctx, manager)
 
@@ -76,6 +72,7 @@ export async function apply(ctx: Context, config: LubanAuthConfig): Promise<void
     upstream,
     manager,
     trustedHostnames: localHostnames(config.trustedHosts),
+    upstreamCookie: createUpstreamAuthCookie(() => ctx.get('connection'), upstream),
     onError: (error): void => ctx.logger.warn(error),
   })
   await ctx.effect(async () => {

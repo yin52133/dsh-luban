@@ -127,6 +127,7 @@ export interface LubanAuthConfig {
   readonly maxAuthBodyBytes: number
   readonly maxProxyBodyBytes: number
   readonly bootstrapAdminUser: string
+  /** Legacy config key accepted for old profiles only; setup always uses the browser form. */
   readonly bootstrapAdminPasswordEnv: string
 }
 

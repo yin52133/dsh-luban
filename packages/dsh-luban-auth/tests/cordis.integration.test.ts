@@ -3,18 +3,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import plugin, { assertProtectedDshUpstream, resolveAuthConfig } from '../src/index.js'
 
 describe('Cordis lifecycle', () => {
   let directory: string | undefined
 
   afterEach(async () => {
+    vi.unstubAllEnvs()
     if (directory !== undefined) await rm(directory, { recursive: true, force: true })
     directory = undefined
   })
 
   it('provides ctx.lubanAuth and releases the listening effect on unload', async () => {
+    vi.stubEnv('LUBAN_ADMIN_PASSWORD', 'legacy-env-must-not-create-an-account')
     directory = await mkdtemp(join(tmpdir(), 'dsh-luban-cordis-test-'))
     const context = new Context()
     const webFiber = context.plugin(WebServer, { host: '127.0.0.1', port: 0 })

@@ -54,8 +54,9 @@ describe('AuthSidecar integration', () => {
     )
     const setupHtml = await setupPage.text()
     expect(setupPage.status).toBe(200)
-    expect(setupHtml).toContain('Set up Luban')
-    expect(setupHtml).toContain('Create administrator')
+    expect(setupPage.headers.get('referrer-policy')).toBe('same-origin')
+    expect(setupHtml).toContain('创建管理员账号')
+    expect(setupHtml).toContain('创建账号并登录')
     expect(setupHtml).toContain('value="/welcome?&lt;safe&gt;"')
     expect(setupHtml).not.toContain('LUBAN_ADMIN_PASSWORD')
 
@@ -74,7 +75,7 @@ describe('AuthSidecar integration', () => {
       }),
     })
     expect(mismatch.status).toBe(400)
-    expect(await mismatch.text()).toContain('passwords do not match')
+    expect(await mismatch.text()).toContain('两次输入的密码不一致')
     expect(await fixture.manager.hasUsers()).toBe(false)
 
     const invalid = await fetch(`${baseUrl}/luban-auth/login`, {
@@ -108,8 +109,8 @@ describe('AuthSidecar integration', () => {
 
     const loginPage = await fetch(`${baseUrl}/luban-auth/login`)
     const loginHtml = await loginPage.text()
-    expect(loginHtml).toContain('Sign in')
-    expect(loginHtml).not.toContain('Create administrator')
+    expect(loginHtml).toContain('登录 Luban')
+    expect(loginHtml).not.toContain('创建账号并登录')
   })
 
   it('rejects cross-origin first-run setup', async () => {
@@ -127,6 +128,47 @@ describe('AuthSidecar integration', () => {
       }),
     })
     expect(setup.status).toBe(403)
+    expect(await harness.fixture.manager.hasUsers()).toBe(false)
+  })
+
+  it('shows field errors without using login attempts and preserves a usable retry form', async () => {
+    harness = await createHarness()
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const response = await fetch(`${harness.baseUrl}/luban-auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: harness.baseUrl },
+        body: new URLSearchParams({ user: 'admin', password: 'short', returnTo: '/work' }),
+      })
+      const html = await response.text()
+      expect(response.status).toBe(400)
+      expect(html).toContain('password-error')
+      expect(html).toContain('value="admin"')
+      expect(html).toContain('value="/work"')
+      expect(html).not.toContain('value="short"')
+    }
+    const response = await fetch(`${harness.baseUrl}/luban-auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: harness.baseUrl },
+      body: JSON.stringify({ user: 'admin', password: 'correct horse' }),
+    })
+    expect(response.status).toBe(200)
+  })
+
+  it('keeps browser request errors on a page with a link back to first-run setup', async () => {
+    harness = await createHarness({}, false)
+    const response = await fetch(`${harness.baseUrl}/luban-auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'text/html',
+        origin: 'http://attacker.invalid',
+      },
+      body: new URLSearchParams({ user: 'admin', password: 'correct horse' }),
+    })
+    expect(response.status).toBe(403)
+    const html = await response.text()
+    expect(html).toContain('页面来源验证失败')
+    expect(html).toContain('href="/luban-auth/login"')
     expect(await harness.fixture.manager.hasUsers()).toBe(false)
   })
 
@@ -189,7 +231,7 @@ describe('AuthSidecar integration', () => {
       body: new URLSearchParams({ user: 'admin', password: 'wrong pass', returnTo: '/' }),
     })
     expect(invalidFormLogin.status).toBe(401)
-    expect(await invalidFormLogin.text()).toContain('Invalid credentials')
+    expect(await invalidFormLogin.text()).toContain('用户名或密码不正确')
 
     const login = await fetch(`${baseUrl}/luban-auth/login`, {
       method: 'POST',

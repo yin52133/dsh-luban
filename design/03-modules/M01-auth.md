@@ -141,7 +141,7 @@ M01-F001 ~ M01-F008 共 8 项；M01-F005 保留 ID 但状态为 `dropped`。
 ## 10. 实现与验证记录
 
 - `AuthManager` 已覆盖首启网页创建管理员、并发唯一创建、口令验证、会话过期、登出和全端下线；
-  账户状态使用原子文件更新。环境变量仅保留为无人值守初始化的可选入口。
+  账户状态使用原子文件更新。首次账号创建仅通过页面完成，启动时不读取密码环境变量。
 - `AuthSidecar` 代理 HTTP、SSE 与 WebSocket；唯一 canonical 登录入口为 `/luban-auth/login`。
 - DSH 0.1.2-rc.1 的生产会话接口使用 HTTP RPC，变化通知使用 SSE；该版本没有注册
   WebSocket 会话路由。sidecar 对通用 WebSocket upgrade 做登录门禁，不为不存在的会话帧协议

@@ -107,7 +107,7 @@ the same plugin twice. For detailed setup, see the
 
 After the first start, open `http://127.0.0.1:42600/luban-auth/login`, create the administrator in
 the setup page, and continue in the signed-in session. No password environment variable is required.
-Unattended deployments may still opt into `LUBAN_ADMIN_PASSWORD` for bootstrap automation.
+Startup does not read password environment variables or create accounts. Invalid input is marked next to the field; the username is retained and passwords must be entered again.
 
 ## Network and security
 

@@ -70,9 +70,9 @@ It creates the account atomically, stores only a salted scrypt hash, and signs
 the administrator in. Concurrent setup requests cannot replace the first
 administrator.
 
-No environment variable is required for interactive setup. An unattended
-deployment may optionally set `LUBAN_ADMIN_PASSWORD` for one start to create
-the configured bootstrap administrator, then remove the variable.
+Create the initial administrator through the setup page. Startup does not read
+password environment variables or create accounts. The form marks invalid fields,
+keeps the username, and asks for passwords again before retrying.
 
 Open `http://<host>:42600/luban-auth/login`. This is the only supported login
 route; `/luban/auth/login` is not an alias. Use an HTTPS reverse proxy when the

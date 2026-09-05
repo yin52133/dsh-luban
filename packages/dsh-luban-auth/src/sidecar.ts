@@ -16,6 +16,8 @@ import { pipeline } from 'node:stream/promises'
 import { StringDecoder } from 'node:string_decoder'
 import { asSessionId, type AccountId, type SessionId } from '@yin52133/dsh-luban-core'
 import type { AuthManager } from './auth-manager.js'
+import { renderLoginPage, validateAuthInput, type AuthPageOptions } from './auth-page.js'
+import { withUpstreamCookie } from './upstream-auth.js'
 import { DshEventScope, type DshEventChannel } from './dsh-event-scope.js'
 import { dshMethodFromPath, dshRequestSessionIds } from './dsh-http-scope.js'
 import { DshSessionOperationBarrier } from './dsh-session-operation-barrier.js'
@@ -81,6 +83,7 @@ interface SidecarOptions {
   readonly upstream: URL
   readonly manager: AuthManager
   readonly trustedHostnames: ReadonlySet<string>
+  readonly upstreamCookie?: () => string
   readonly onError?: (error: Error) => void
 }
 
@@ -108,6 +111,7 @@ export class AuthSidecar implements AuthGateway {
   readonly #upstream: URL
   readonly #manager: AuthManager
   readonly #trustedHostnames: ReadonlySet<string>
+  readonly #upstreamCookie: (() => string) | undefined
   readonly #onError: (error: Error) => void
   readonly #dshEventScope: DshEventScope
   readonly #dshSessionOperations = new DshSessionOperationBarrier()
@@ -121,6 +125,7 @@ export class AuthSidecar implements AuthGateway {
     this.#upstream = options.upstream
     this.#manager = options.manager
     this.#trustedHostnames = options.trustedHostnames
+    this.#upstreamCookie = options.upstreamCookie
     this.#onError = options.onError ?? (() => undefined)
     this.#dshEventScope = new DshEventScope((accountId, sessionId) =>
       this.#dshSessionOwnerAfterOperations(accountId, sessionId),
@@ -135,7 +140,7 @@ export class AuthSidecar implements AuthGateway {
     if (this.#server !== undefined) throw new Error('luban-auth: sidecar already started')
     const server = createServer((request, response): void => {
       this.#handleHttp(request, response).catch((error: unknown): void => {
-        this.#handleHttpError(error, response)
+        this.#handleHttpError(error, response, request)
       })
     })
     this.#server = server
@@ -323,35 +328,31 @@ export class AuthSidecar implements AuthGateway {
       contentType === 'application/x-www-form-urlencoded'
         ? await readBoundedForm(request, this.#config.maxAuthBodyBytes)
         : await readBoundedJson(request, this.#config.maxAuthBodyBytes)
-    const username = body.user
-    const password = body.password
-    if (typeof username !== 'string' || typeof password !== 'string') {
-      throw new HttpError(400, 'E_INVALID_INPUT', 'user and password are required')
-    }
     const returnTo = safeReturnTo(body.returnTo)
     const htmlResponse = contentType === 'application/x-www-form-urlencoded' || wantsHtml(request)
-    if (!(await this.#manager.hasUsers())) {
-      const confirmPassword = body.confirmPassword
-      if (typeof confirmPassword !== 'string' || confirmPassword !== password) {
-        if (htmlResponse) {
-          sendAuthPage(
-            response,
-            {
-              returnTo,
-              initialized: false,
-              username,
-              error: 'The passwords do not match.',
-            },
-            400,
-          )
-        } else {
-          sendJson(response, 400, {
-            error: 'E_INVALID_INPUT',
-            message: 'password and confirmPassword must match',
-          })
-        }
-        return
-      }
+    const initialized = await this.#manager.hasUsers()
+    const username = typeof body.user === 'string' ? body.user : ''
+    const password = typeof body.password === 'string' ? body.password : ''
+    const fieldErrors = validateAuthInput(body, initialized)
+    if (Object.keys(fieldErrors).length > 0) {
+      if (htmlResponse)
+        sendAuthPage(response, { returnTo, initialized, username, fieldErrors }, 400)
+      else
+        sendJson(response, 400, {
+          error: 'E_INVALID_INPUT',
+          message: '请修正标出的字段后重新提交。',
+          fieldErrors,
+        })
+      return
+    }
+    if (initialized && body.intent === 'setup') {
+      const message = '管理员账号已创建，请使用已有账号登录。'
+      if (htmlResponse)
+        sendAuthPage(response, { returnTo, initialized, username, error: message }, 409)
+      else sendJson(response, 409, { error: 'E_ALREADY_INITIALIZED', message })
+      return
+    }
+    if (!initialized) {
       let created: boolean
       try {
         created = await this.#manager.createInitialAdmin(username, password)
@@ -364,20 +365,20 @@ export class AuthSidecar implements AuthGateway {
               returnTo,
               initialized: false,
               username,
-              error: initialSetupInputMessage(error),
+              error: '账号信息不符合要求，请检查用户名和密码后重新输入。',
             },
             400,
           )
         } else {
           sendJson(response, 400, {
             error: 'E_INVALID_INPUT',
-            message: initialSetupInputMessage(error),
+            message: '账号信息不符合要求，请检查用户名和密码后重新输入。',
           })
         }
         return
       }
       if (!created) {
-        const message = 'Luban was initialized by another request. Sign in to continue.'
+        const message = '管理员账号已由另一个页面创建，请使用已有账号登录。'
         if (htmlResponse) {
           sendAuthPage(response, { returnTo, initialized: true, username, error: message }, 409)
         } else {
@@ -400,7 +401,10 @@ export class AuthSidecar implements AuthGateway {
             returnTo,
             initialized: true,
             username,
-            error: 'Invalid credentials or account temporarily unavailable.',
+            error:
+              result.reason === 'locked'
+                ? `尝试次数过多，请在 ${String(result.retryAfterSec ?? 60)} 秒后重新登录。`
+                : '用户名或密码不正确，请检查用户名并重新输入密码。',
           },
           status,
           headers,
@@ -409,7 +413,13 @@ export class AuthSidecar implements AuthGateway {
         sendJson(
           response,
           status,
-          { error: 'E_BAD_CREDENTIALS', message: 'Invalid credentials' },
+          {
+            error: result.reason === 'locked' ? 'E_ACCOUNT_LOCKED' : 'E_BAD_CREDENTIALS',
+            message:
+              result.reason === 'locked'
+                ? `尝试次数过多，请在 ${String(result.retryAfterSec ?? 60)} 秒后重试。`
+                : '用户名或密码不正确，请重新输入。',
+          },
           headers,
         )
       }
@@ -932,6 +942,15 @@ export class AuthSidecar implements AuthGateway {
     failureMessage = 'luban-auth: upstream proxy failed',
   ): Promise<void> {
     const transport = this.#upstream.protocol === 'https:' ? httpsRequest : httpRequest
+    if (
+      this.#upstreamCookie !== undefined &&
+      !isPublicStaticRequest(request.method, target.pathname)
+    ) {
+      headers.cookie = withUpstreamCookie(
+        typeof headers.cookie === 'string' ? headers.cookie : undefined,
+        this.#upstreamCookie(),
+      )
+    }
     await new Promise<void>((resolve, reject): void => {
       let settled = false
       const settle = (error?: unknown): void => {
@@ -976,6 +995,12 @@ export class AuthSidecar implements AuthGateway {
       throw new HttpError(401, 'E_AUTH_REQUIRED', 'Authentication required')
     assertWebSocketOrigin(request, security)
     const headers = buildProxyHeaders(request.headers, security, this.#upstream, true)
+    if (this.#upstreamCookie !== undefined) {
+      headers.cookie = withUpstreamCookie(
+        typeof headers.cookie === 'string' ? headers.cookie : undefined,
+        this.#upstreamCookie(),
+      )
+    }
     const upstreamSocket = await connectUpstream(this.#upstream)
     this.#sockets.add(upstreamSocket)
     upstreamSocket.once('close', (): void => {
@@ -1006,7 +1031,7 @@ export class AuthSidecar implements AuthGateway {
     socket.pipe(upstreamSocket).pipe(socket)
   }
 
-  #handleHttpError(error: unknown, response: ServerResponse): void {
+  #handleHttpError(error: unknown, response: ServerResponse, request: IncomingMessage): void {
     const normalized = error instanceof Error ? error : new Error(String(error))
     if (!(error instanceof HttpError)) this.#onError(normalized)
     if (response.headersSent) {
@@ -1016,6 +1041,27 @@ export class AuthSidecar implements AuthGateway {
     const status = error instanceof HttpError ? error.status : 502
     const code = error instanceof HttpError ? error.code : 'E_UPSTREAM_UNAVAILABLE'
     const message = error instanceof HttpError ? error.message : 'Upstream unavailable'
+    if (
+      wantsHtml(request) ||
+      singleHeader(request, 'content-type')?.startsWith('application/x-www-form-urlencoded')
+    ) {
+      const friendly =
+        code === 'E_CSRF'
+          ? '页面来源验证失败，请重新打开登录页后再提交。'
+          : code === 'E_BODY_TOO_LARGE'
+            ? '提交的内容过长，请缩短输入后重试。'
+            : code === 'E_NETWORK_DENIED' || code === 'E_INVALID_HOST'
+              ? '当前访问地址或网络未获允许，请使用管理员提供的地址。'
+              : error instanceof HttpError
+                ? '请求格式不正确，请返回登录页重新输入。'
+                : '服务暂时不可用，请稍后重试；如果仍然失败，请联系管理员检查服务日志。'
+      sendAuthPage(
+        response,
+        { returnTo: '/', initialized: true, username: '', error: friendly },
+        status,
+      )
+      return
+    }
     sendJson(response, status, { error: code, message })
   }
 
@@ -1034,13 +1080,6 @@ export class AuthSidecar implements AuthGateway {
   }
 }
 
-interface AuthPageOptions {
-  readonly returnTo: string
-  readonly initialized: boolean
-  readonly username: string
-  readonly error?: string
-}
-
 function sendAuthPage(
   response: ServerResponse,
   options: AuthPageOptions,
@@ -1055,7 +1094,7 @@ function sendAuthPage(
       "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     'content-type': 'text/html; charset=utf-8',
     'content-length': String(payload.length),
-    'referrer-policy': 'no-referrer',
+    'referrer-policy': 'same-origin',
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
     ...headers,
@@ -1393,59 +1432,6 @@ function clearAuthCookies(secure: boolean): string[] {
     (name) =>
       `${name}=; Path=/; Max-Age=0; SameSite=Lax${name === AUTH_COOKIE_NAME ? '; HttpOnly' : ''}${secureAttribute}`,
   )
-}
-
-function renderLoginPage(options: AuthPageOptions): string {
-  const escapedReturnTo = escapeHtml(options.returnTo)
-  const escapedUsername = escapeHtml(options.username)
-  const state = options.initialized
-    ? `<form method="post" action="${LOGIN_ROUTE}">
-        <input type="hidden" name="returnTo" value="${escapedReturnTo}">
-        <label>Username<input name="user" value="${escapedUsername}" autocomplete="username" required></label>
-        <label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required></label>
-        <button type="submit">Sign in</button>
-      </form>`
-    : `<p class="notice">Create the first administrator to finish setting up Luban.</p>
-      <form method="post" action="${LOGIN_ROUTE}">
-        <input type="hidden" name="returnTo" value="${escapedReturnTo}">
-        <label>Administrator username<input name="user" value="${escapedUsername}" autocomplete="username" minlength="3" maxlength="64" pattern="[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}" required></label>
-        <label>Password<input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="1024" required></label>
-        <label>Confirm password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="1024" required></label>
-        <button type="submit">Create administrator</button>
-      </form>
-      <p class="hint">Complete this step only on a trusted local network.</p>`
-  const errorMarkup =
-    options.error === undefined || options.error === ''
-      ? ''
-      : `<p class="error" role="alert">${escapeHtml(options.error)}</p>`
-  const title = options.initialized ? 'Sign in to Luban' : 'Set up Luban'
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(title)}</title><style>
-body{font:16px system-ui;background:#10151d;color:#edf3fa;display:grid;place-items:center;min-height:100vh;margin:0}
-main{width:min(24rem,calc(100% - 2rem));background:#18222e;padding:2rem;border-radius:1rem;box-shadow:0 1rem 3rem #0008}
-label{display:grid;gap:.4rem;margin:1rem 0}input,button{font:inherit;padding:.7rem;border-radius:.45rem;border:1px solid #65758b}
-button{width:100%;background:#4e9df5;color:#07111e;border:0;font-weight:700}.error{color:#ffb2b2}.notice,.hint{line-height:1.5}.hint{color:#aebdce;font-size:.9rem;margin-bottom:0}
-</style></head><body><main><h1>${escapeHtml(title)}</h1>${errorMarkup}${state}</main></body></html>`
-}
-
-function initialSetupInputMessage(error: TypeError): string {
-  if (error.message.includes('username')) {
-    return 'Username must contain 3-64 letters, digits, dots, dashes, or underscores.'
-  }
-  if (error.message.includes('password')) {
-    return 'Password must contain 8-1024 characters.'
-  }
-  return 'The administrator details are invalid.'
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
 }
 
 function isAuthRole(value: unknown): value is AuthRole {

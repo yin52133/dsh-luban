@@ -113,7 +113,7 @@ dsh plugin --profile web add @yin52133/dsh-luban-taskboard @yin52133/dsh-luban-h
 [Ubuntu 部署](design/05-deployment/deploy-ubuntu.md)。
 
 首次启动后打开 `http://127.0.0.1:42600/luban-auth/login`，按页面提示创建管理员并自动登录；
-不需要预先设置密码环境变量。无界面自动化部署仍可选择使用 `LUBAN_ADMIN_PASSWORD` 完成初始化。
+账号创建通过页面完成；启动时不会读取密码环境变量或自动创建账号。格式错误会标出具体字段，保留用户名并提示重新输入密码。
 
 ## 网络与安全
 
