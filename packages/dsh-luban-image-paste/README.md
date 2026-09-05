@@ -6,7 +6,7 @@ session injection for Windows and Ubuntu.
 ## Features
 
 - Focusable Web drop zone for Ctrl+V image paste and file drag-and-drop.
-- Settings-slot registration and paste/drop source routing are covered by client
+- Workbench page registration and paste/drop source routing are covered by client
   contract tests; multi-file input skips invalid or oversized entries.
 - `luban-img` CLI capture with fixed PowerShell, `wl-paste`, or `xclip` commands;
   commands use argument arrays, `shell: false`, a timeout, and bounded output.
@@ -91,7 +91,7 @@ not invoke a shell and does not probe any other program.
 
 ## Demo
 
-Sign in at `/luban-auth/login`, open **Settings → Images**, enter an optional DSH
+Sign in at `/luban-auth/login`, open **鲁班工作台 → 图片与附件**, enter an optional DSH
 session id, focus the drop zone, and press Ctrl+V. The recent-image card shows
 the stored relative path, preview, resize status, and reference count. A
 referenced card cannot be deleted; **Clean expired** removes only unreferenced

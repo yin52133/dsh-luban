@@ -1,4 +1,10 @@
 import { createServer } from 'node:http'
+import type * as WorkbenchClient from '@yin52133/dsh-luban-core/client'
+import { registerWorkbenchPage } from '@yin52133/dsh-luban-core/client'
+vi.mock('@yin52133/dsh-luban-core/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof WorkbenchClient>()),
+  registerWorkbenchPage: vi.fn(),
+}))
 import type { AddressInfo } from 'node:net'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -299,28 +305,12 @@ describe('taskctl', (): void => {
 })
 
 describe('Taskboard client entry', (): void => {
-  it('registers one settings section through the slots service', (): void => {
-    let registered: Readonly<Record<string, unknown>> | undefined
-    let component: unknown
-    const context = {
-      slots: {
-        inject(_name: string, factory: () => void): void {
-          factory()
-        },
-        register(options: Readonly<Record<string, unknown>>, value: unknown): () => void {
-          registered = options
-          component = value
-          return (): void => undefined
-        },
-      },
-    }
+  it('registers a business page in the workbench', (): void => {
+    const context = { effect: (execute: () => () => void): (() => void) => execute() }
     applyClient(context as unknown as Context)
-    expect(registered).toMatchObject({
-      name: 'settings.section',
-      id: 'luban-taskboard',
-      label: 'Taskboard',
-    })
-    expect(component).toBe(TaskboardSection)
+    const registered = vi.mocked(registerWorkbenchPage).mock.calls.at(-1)?.[1]
+    expect(registered).toMatchObject({ id: 'luban-taskboard', title: '任务看板' })
+    expect(registered?.component).toBe(TaskboardSection)
   })
 
   it('persists drag-and-drop through the authenticated versioned transition API', async (): Promise<void> => {

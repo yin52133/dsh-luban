@@ -1,4 +1,10 @@
 import { readFile } from 'node:fs/promises'
+import type * as WorkbenchClient from '@yin52133/dsh-luban-core/client'
+import { registerWorkbenchPage } from '@yin52133/dsh-luban-core/client'
+vi.mock('@yin52133/dsh-luban-core/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof WorkbenchClient>()),
+  registerWorkbenchPage: vi.fn(),
+}))
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -13,30 +19,12 @@ afterEach((): void => {
 })
 
 describe('server-mode client and package contract', (): void => {
-  it('registers one Settings section with sessions injected for log handoff', (): void => {
-    let registration: Readonly<Record<string, unknown>> | undefined
-    const context = {
-      effect(execute: () => () => void): () => void {
-        return execute()
-      },
-      slots: {
-        inject(_name: string, callback: () => unknown): unknown {
-          return callback()
-        },
-        register(config: Readonly<Record<string, unknown>>, _component: unknown): () => void {
-          registration = config
-          return (): void => undefined
-        },
-      },
-      sessions: {},
-    }
+  it('registers a business page in the workbench', (): void => {
+    const context = { effect: (execute: () => () => void): (() => void) => execute() }
     applyClient(context as unknown as ClientContext)
+    const registered = vi.mocked(registerWorkbenchPage).mock.calls.at(-1)?.[1]
+    expect(registered).toMatchObject({ id: 'luban-server-mode', title: '构建管理' })
     expect(clientInject).toEqual(['slots', 'sessions'])
-    expect(registration).toMatchObject({
-      name: 'settings.section',
-      id: 'luban-server-mode',
-      label: 'Server Mode',
-    })
   })
 
   it('uses the current DSH manifest and publish whitelist', async (): Promise<void> => {

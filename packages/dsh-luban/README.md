@@ -24,6 +24,14 @@ The public npm registry requires no GitHub account or PAT for installation.
 The explicit build allowlist covers only the pinned native terminal and serial
 bindings. Omit the serial binding when COM support is not required.
 
+## Workbench
+
+Open **鲁班工作台** in the main sidebar after signing in. It opens the taskboard
+by default; plans and builds are under 工作, shared sessions under 协作, and
+images or supported device tools under 工具. Only installed/enabled pages appear.
+Use **返回对话** or Escape to return to the existing DSH conversation.
+Business pages no longer appear as separate Settings sections.
+
 ## Configuration
 
 The bundled `cordis.patch.yml` uses the same row IDs and defaults as the

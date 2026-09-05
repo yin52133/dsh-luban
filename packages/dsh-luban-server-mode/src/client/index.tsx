@@ -1,7 +1,6 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
 import type { FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -238,7 +237,7 @@ export function ArtifactLinks({ job }: { readonly job: UiJob }): ReactNode {
   )
 }
 
-export function ServerModeSection(_props: SettingsSectionOwnerProps): ReactNode {
+export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
   const [jobs, setJobs] = useState<UiJob[]>([])
   const [templates, setTemplates] = useState<UiTemplate[]>([])
   const [resource, setResource] = useState<UiResource | null>(null)
@@ -411,7 +410,7 @@ export function ServerModeSection(_props: SettingsSectionOwnerProps): ReactNode 
 
 export const inject = ['slots', 'sessions']
 
-/** Add an Ubuntu build-operations page to DSH Settings. */
+/** Add an Ubuntu build-operations page to the Luban workbench. */
 export function apply(ctx: ClientContext): void {
   const runtime = ctx as ServerClientContext
   runtimeContext = runtime
@@ -421,15 +420,12 @@ export function apply(ctx: ClientContext): void {
     },
     'luban-server-mode: client context lifecycle',
   )
-  ctx.slots.inject('settings.section', () =>
-    ctx.slots.register(
-      {
-        name: 'settings.section',
-        id: 'luban-server-mode',
-        order: 90,
-        label: 'Server Mode',
-      },
-      ServerModeSection,
-    ),
-  )
+  registerWorkbenchPage(ctx, {
+    id: 'luban-server-mode',
+    title: '构建管理',
+    group: '工作',
+    order: 30,
+    description: '在 Ubuntu 服务器排队构建，查看状态与下载产物。',
+    component: ServerModeSection,
+  })
 }

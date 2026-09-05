@@ -1,4 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises'
+import type * as WorkbenchClient from '@yin52133/dsh-luban-core/client'
+import { registerWorkbenchPage } from '@yin52133/dsh-luban-core/client'
+vi.mock('@yin52133/dsh-luban-core/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof WorkbenchClient>()),
+  registerWorkbenchPage: vi.fn(),
+}))
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -787,29 +793,11 @@ describe('authenticated Windows debug API', (): void => {
 })
 
 describe('DSH client entry', (): void => {
-  it('registers one lazy settings section without channel-kind-specific slots', (): void => {
-    let registered: Readonly<Record<string, unknown>> | undefined
-    let component: unknown
-    const context = {
-      slots: {
-        inject(_name: string, factory: () => void): void {
-          factory()
-        },
-        register(options: Readonly<Record<string, unknown>>, value: unknown): () => void {
-          registered = options
-          component = value
-          return (): void => undefined
-        },
-      },
-    }
-
+  it('registers a business page in the workbench', (): void => {
+    const context = { effect: (execute: () => () => void): (() => void) => execute() }
     applyClient(context as unknown as Context)
-
-    expect(registered).toMatchObject({
-      name: 'settings.section',
-      id: 'luban-win-debug',
-      label: 'Windows Debug',
-    })
-    expect(component).toBe(WinDebugSection)
+    const registered = vi.mocked(registerWorkbenchPage).mock.calls.at(-1)?.[1]
+    expect(registered).toMatchObject({ id: 'luban-win-debug', title: '设备调试' })
+    expect(registered?.component).toBe(WinDebugSection)
   })
 })

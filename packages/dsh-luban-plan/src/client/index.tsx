@@ -1,7 +1,6 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
 import type { FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -275,7 +274,7 @@ function ReviewCard({
   )
 }
 
-export function PlanReviewSection(_props: SettingsSectionOwnerProps): ReactNode {
+export function PlanReviewSection(_props: WorkbenchPageProps): ReactNode {
   const [plans, setPlans] = useState<UiPlan[]>([])
   const [workspace, setWorkspace] = useState('.')
   const [slug, setSlug] = useState('planned-change')
@@ -416,17 +415,14 @@ export function PlanReviewSection(_props: SettingsSectionOwnerProps): ReactNode 
 
 export const inject = ['slots']
 
-/** Contribute the authenticated plan review page to DSH Settings. */
+/** Contribute the authenticated plan review page to the Luban workbench. */
 export function apply(ctx: ClientContext): void {
-  ctx.slots.inject('settings.section', () =>
-    ctx.slots.register(
-      {
-        name: 'settings.section',
-        id: 'luban-plan',
-        order: 50,
-        label: 'Plans',
-      },
-      PlanReviewSection,
-    ),
-  )
+  registerWorkbenchPage(ctx, {
+    id: 'luban-plan',
+    title: '计划审批',
+    group: '工作',
+    order: 20,
+    description: '查看修改范围、审批计划，确认后再执行。',
+    component: PlanReviewSection,
+  })
 }

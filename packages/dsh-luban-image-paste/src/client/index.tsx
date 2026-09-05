@@ -1,7 +1,6 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
 import type { ClipboardEvent, DragEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -257,7 +256,7 @@ async function cleanExpired(): Promise<void> {
   )
 }
 
-export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode {
+export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
   const [images, setImages] = useState<UiImage[]>([])
   const [sessionId, setSessionId] = useState('')
   const [style, setStyle] = useState<InjectStyle>('markdown')
@@ -435,17 +434,14 @@ export function ImagePasteSection(_props: SettingsSectionOwnerProps): ReactNode 
 
 export const inject = ['slots']
 
-/** Contribute authenticated paste/drop and recent-preview controls to DSH Settings. */
+/** Contribute authenticated paste/drop and recent-preview controls to the Luban workbench. */
 export function apply(ctx: ClientContext): void {
-  ctx.slots.inject('settings.section', () =>
-    ctx.slots.register(
-      {
-        name: 'settings.section',
-        id: 'luban-image-paste',
-        order: 60,
-        label: 'Images',
-      },
-      ImagePasteSection,
-    ),
-  )
+  registerWorkbenchPage(ctx, {
+    id: 'luban-image-paste',
+    title: '图片与附件',
+    group: '工具',
+    order: 50,
+    description: '上传、粘贴图片，并将附件加入当前对话。',
+    component: ImagePasteSection,
+  })
 }

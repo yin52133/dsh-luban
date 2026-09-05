@@ -1,7 +1,6 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
 import type { DragEvent, FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -387,7 +386,7 @@ export function TaskCard({
   )
 }
 
-export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
+export function TaskboardSection(_props: WorkbenchPageProps): ReactNode {
   const [tasks, setTasks] = useState<UiTask[]>([])
   const [planLinks, setPlanLinks] = useState<ReadonlyMap<string, readonly UiTaskPlanLink[]>>(
     new Map(),
@@ -605,17 +604,14 @@ export function TaskboardSection(_props: SettingsSectionOwnerProps): ReactNode {
 
 export const inject = ['slots']
 
-/** Contribute a full responsive Taskboard page to DSH Settings. */
+/** Contribute a full responsive Taskboard page to the Luban workbench. */
 export function apply(ctx: ClientContext): void {
-  ctx.slots.inject('settings.section', () =>
-    ctx.slots.register(
-      {
-        name: 'settings.section',
-        id: 'luban-taskboard',
-        order: 40,
-        label: 'Taskboard',
-      },
-      TaskboardSection,
-    ),
-  )
+  registerWorkbenchPage(ctx, {
+    id: 'luban-taskboard',
+    title: '任务看板',
+    group: '工作',
+    order: 10,
+    description: '从待办到完成，集中管理任务与验收条件。',
+    component: TaskboardSection,
+  })
 }

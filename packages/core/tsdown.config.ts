@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown'
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: ['src/index.ts', 'src/client.ts'],
   outDir: 'dist',
   format: ['esm'],
   platform: 'node',
@@ -11,6 +11,6 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   deps: {
-    neverBundle: ['yaml'],
+    neverBundle: ['yaml', /^react(?:\/|$)/u, /^@deepseek-ai\//u],
   },
 })

@@ -39,7 +39,7 @@ dsh plugin --profile web add @yin52133/dsh-luban-auth @yin52133/dsh-luban-taskbo
 
 Keep the DSH WebServer on loopback and access the profile through the
 `@yin52133/dsh-luban-auth` sidecar. The taskboard route is `/luban-taskboard`; the browser
-section appears under Settings as **Taskboard**.
+page appears under **鲁班工作台 → 任务看板** in the main sidebar.
 
 ## Configuration
 

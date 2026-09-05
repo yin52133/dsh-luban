@@ -1,7 +1,6 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
 import type { FormEvent, ReactNode } from 'react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -127,7 +126,7 @@ function jsonStringMap(value: string): Readonly<Record<string, string>> {
   return row as Readonly<Record<string, string>>
 }
 
-export function WinDebugSection(_props: SettingsSectionOwnerProps): ReactNode {
+export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
   const [endpoints, setEndpoints] = useState<UiEndpoint[]>([])
   const [channels, setChannels] = useState<UiChannel[]>([])
   const [templates, setTemplates] = useState<UiTemplate[]>([])
@@ -652,10 +651,12 @@ export function WinDebugSection(_props: SettingsSectionOwnerProps): ReactNode {
 export const inject = ['slots']
 
 export function apply(ctx: ClientContext): void {
-  ctx.slots.inject('settings.section', () =>
-    ctx.slots.register(
-      { name: 'settings.section', id: 'luban-win-debug', order: 90, label: 'Windows Debug' },
-      WinDebugSection,
-    ),
-  )
+  registerWorkbenchPage(ctx, {
+    id: 'luban-win-debug',
+    title: '设备调试',
+    group: '工具',
+    order: 60,
+    description: '在 Windows 主机使用串口、日志片段和调试工具。',
+    component: WinDebugSection,
+  })
 }

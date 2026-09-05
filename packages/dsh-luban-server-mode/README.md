@@ -113,7 +113,7 @@ blindly starting a duplicate build.
 Resource probes have a five-second scheduler-side deadline. A rejected or timed-out probe fails
 closed: new starts remain queued, the resource report is marked paused, and an optional M02 alert
 card is created. The same pause applies when disk or load crosses its threshold. Failed builds
-retain a bounded excerpt. The Settings page can send that excerpt directly to the currently open
+retain a bounded excerpt. The workbench page can send that excerpt directly to the currently open
 DSH session for diagnosis.
 
 ## Demo
@@ -137,7 +137,7 @@ curl -X POST http://127.0.0.1:3081/luban-server-mode/jobs \
 curl -N http://127.0.0.1:3081/luban-server-mode/events -b cookies.txt
 ```
 
-The Settings → Server Mode page offers the same queue, resource, error-log, and artifact workflow.
+The 鲁班工作台 → 构建管理 page offers the same queue, resource, error-log, and artifact workflow.
 
 ## Compatibility
 

@@ -8,7 +8,7 @@ Approval-gated plans for DSH. The plugin persists a strict plan state machine, w
 
 - **M04-F001** — guarded `draft → in-review → approved → executing → completed` workflow, with `rejected` and `revising` branches, optimistic versions, and a real DSH monotonic tool guard.
 - **M04-F002** — workspace documents at `docs/plans/<date>-<slug>.md`, plus task/session ids, authenticated document routes, and task-card links resolved by `taskId`.
-- **M04-F003** — authenticated Settings approve/reject/revise controls and REST/SSE decisions; approval feedback is delivered as an identified `luban.plan.feedback` agent message.
+- **M04-F003** — authenticated workbench approve/reject/revise controls and REST/SSE decisions; approval feedback is delivered as an identified `luban.plan.feedback` agent message.
 - **M04-F004** — bundled template and mandatory background, impact scope, change locations, and verification sections.
 
 ## Compatibility
@@ -56,7 +56,7 @@ curl -b cookies.txt -H 'content-type: application/json' \
   http://127.0.0.1:3081/luban-plan/plans/P-YYYYMMDD-ID/decision
 ```
 
-The Settings **Plans** page provides the same submit/review flow, lets a reviewer edit all four required sections after rejection, and opens the generated `docs/plans/<date>-<slug>.md` document. The Settings **Taskboard** page links cards directly to documents for plans carrying the same `taskId`.
+The **鲁班工作台 → 计划审批** page provides the same submit/review flow, lets a reviewer edit all four required sections after rejection, and opens the generated `docs/plans/<date>-<slug>.md` document. The **鲁班工作台 → 任务看板** page links cards directly to documents for plans carrying the same `taskId`.
 
 ## Configuration
 
@@ -91,7 +91,7 @@ All endpoints are under `/luban-plan`:
 - `GET /events` (bounded SSE feedback stream)
 - `GET /template`
 
-The DSH Settings page exposes plan submission, plan-document links, approve/reject controls, comments, four-section revision for `rejected`/`revising` plans, and live refresh. Revision requests include the displayed optimistic version; stale-version and other endpoint errors remain visible in the page alert. Browser writes reuse the authenticated session's request token. Plans, decisions, and document links are intended to be scoped to the M01 `accountId`.
+The workbench page exposes plan submission, plan-document links, approve/reject controls, comments, four-section revision for `rejected`/`revising` plans, and live refresh. Revision requests include the displayed optimistic version; stale-version and other endpoint errors remain visible in the page alert. Browser writes reuse the authenticated session's request token. Plans, decisions, and document links are intended to be scoped to the M01 `accountId`.
 
 ## Persistence and stability
 

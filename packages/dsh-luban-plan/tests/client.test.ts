@@ -1,4 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type * as WorkbenchClient from '@yin52133/dsh-luban-core/client'
+import { registerWorkbenchPage } from '@yin52133/dsh-luban-core/client'
+vi.mock('@yin52133/dsh-luban-core/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof WorkbenchClient>()),
+  registerWorkbenchPage: vi.fn(),
+}))
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -23,30 +29,12 @@ afterEach((): void => {
 })
 
 describe('Plan client entry', (): void => {
-  it('registers the plan review React section through the slots service', (): void => {
-    let registered: Readonly<Record<string, unknown>> | undefined
-    let component: unknown
-    const context = {
-      slots: {
-        inject(_name: string, factory: () => void): void {
-          factory()
-        },
-        register(options: Readonly<Record<string, unknown>>, value: unknown): () => void {
-          registered = options
-          component = value
-          return (): void => undefined
-        },
-      },
-    }
-
+  it('registers a business page in the workbench', (): void => {
+    const context = { effect: (execute: () => () => void): (() => void) => execute() }
     applyClient(context as unknown as Context)
-
-    expect(registered).toMatchObject({
-      name: 'settings.section',
-      id: 'luban-plan',
-      label: 'Plans',
-    })
-    expect(component).toBe(PlanReviewSection)
+    const registered = vi.mocked(registerWorkbenchPage).mock.calls.at(-1)?.[1]
+    expect(registered).toMatchObject({ id: 'luban-plan', title: '计划审批' })
+    expect(registered?.component).toBe(PlanReviewSection)
   })
 
   it('defines revisable statuses and renders all required revision inputs', (): void => {

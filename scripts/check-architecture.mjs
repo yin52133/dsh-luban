@@ -71,9 +71,8 @@ for (const entry of await readdir(packagesDirectory, { withFileTypes: true })) {
     const source = await readFile(file, 'utf8')
     if (/['"`]\/luban\//u.test(source))
       findings.push(`${manifest.name}: legacy /luban/ route in ${file}`)
-    const implementationImport = /from\s+['"]@yin52133\/dsh-luban-(?!core['"])[^'"]+['"]/u.exec(
-      source,
-    )
+    const implementationImport =
+      /from\s+['"]@yin52133\/dsh-luban-(?!core(?:\/client)?['"])[^'"]+['"]/u.exec(source)
     if (implementationImport !== null) {
       findings.push(
         `${manifest.name}: cross-plugin implementation import ${implementationImport[0]}`,

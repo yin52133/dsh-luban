@@ -1,4 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type * as WorkbenchClient from '@yin52133/dsh-luban-core/client'
+import { registerWorkbenchPage } from '@yin52133/dsh-luban-core/client'
+vi.mock('@yin52133/dsh-luban-core/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof WorkbenchClient>()),
+  registerWorkbenchPage: vi.fn(),
+}))
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { run } from '../src/cli.js'
 import {
@@ -22,31 +28,12 @@ afterEach((): void => {
 })
 
 describe('browser capture helpers', () => {
-  it('registers the image paste section through the DSH settings slot', (): void => {
-    let registered: Readonly<Record<string, unknown>> | undefined
-    let component: unknown
-    const context = {
-      slots: {
-        inject(name: string, factory: () => void): void {
-          expect(name).toBe('settings.section')
-          factory()
-        },
-        register(options: Readonly<Record<string, unknown>>, value: unknown): () => void {
-          registered = options
-          component = value
-          return (): void => undefined
-        },
-      },
-    }
-
+  it('registers a business page in the workbench', (): void => {
+    const context = { effect: (execute: () => () => void): (() => void) => execute() }
     applyClient(context as unknown as Context)
-
-    expect(registered).toMatchObject({
-      name: 'settings.section',
-      id: 'luban-image-paste',
-      label: 'Images',
-    })
-    expect(component).toBe(ImagePasteSection)
+    const registered = vi.mocked(registerWorkbenchPage).mock.calls.at(-1)?.[1]
+    expect(registered).toMatchObject({ id: 'luban-image-paste', title: '图片与附件' })
+    expect(registered?.component).toBe(ImagePasteSection)
   })
 
   it('accepts only bounded supported browser files', () => {

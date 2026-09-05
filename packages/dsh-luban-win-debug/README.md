@@ -9,7 +9,7 @@ redacted file-plus-excerpt for a DSH session.
 
 - Optional `serialport` HAL with COM enumeration, baud configuration, bounded
   data streams, and non-overlapping hot-plug polling.
-- One responsive Settings panel for every channel kind, with live scrolling,
+- One responsive workbench page for every channel kind, with live scrolling,
   timestamps, literal/regex filters, highlighting, range selection, and DSH
   session injection.
 - Built-in OpenOCD, J-Link, esptool, STM32CubeProgrammer, adb, and fastboot
@@ -130,7 +130,7 @@ the configured command or arguments.
 
 ## Demo
 
-1. Open **Settings → Windows Debug**, choose `COM3`, set `115200`, and select
+1. Open **鲁班工作台 → 设备调试**, choose `COM3`, set `115200`, and select
    **Open**. Plug/unplug changes appear without reloading.
 2. Filter for `fatal|assert` with **Regex**, click the first and last relevant
    line, enter a DSH session id, then select **Save & inject**. The session gets
@@ -162,7 +162,7 @@ versions for each hardware profile before enabling its templates.
 
 ## Platform Support
 
-The Cordis plugin and Settings panel deliberately reject non-Windows hosts with
+The Cordis plugin and workbench page deliberately reject non-Windows hosts with
 `E_PLATFORM_UNSUPPORTED`. The raw TCP/telnet abstractions are portable code, but
 this package does not mount them on Ubuntu. Native serial support depends on a
 compatible optional `serialport` build for the installed Node ABI.

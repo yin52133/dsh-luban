@@ -63,7 +63,7 @@ preserved and no control operation is routed through the conflicting peer.
 
 ## Demo
 
-Sign in at `/luban-auth/login` on both hosts. Open **Session Share** on Windows
+Sign in at `/luban-auth/login` on both hosts. Open **鲁班工作台 → 会话共享** on Windows
 to observe an Ubuntu session, choose **Request control**, then confirm the
 pending request from the Ubuntu view. The Windows side becomes the sole input
 holder until release.

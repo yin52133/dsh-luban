@@ -1,41 +1,24 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type * as WorkbenchClient from '@yin52133/dsh-luban-core/client'
+import { registerWorkbenchPage } from '@yin52133/dsh-luban-core/client'
+vi.mock('@yin52133/dsh-luban-core/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof WorkbenchClient>()),
+  registerWorkbenchPage: vi.fn(),
+}))
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  apply,
-  inject,
-  approveTakeover,
-  injectSessionInput,
-  SessionShareSection,
-} from '../src/client.js'
+import { apply, approveTakeover, injectSessionInput, SessionShareSection } from '../src/client.js'
 
 afterEach((): void => {
   vi.unstubAllGlobals()
 })
 
 describe('Session Share client entry', (): void => {
-  it('registers the lazy Settings section', (): void => {
-    expect(inject).toEqual(['slots'])
-    let registered: Readonly<Record<string, unknown>> | undefined
-    let component: unknown
-    const context = {
-      slots: {
-        inject(_name: string, factory: () => void): void {
-          factory()
-        },
-        register(options: Readonly<Record<string, unknown>>, value: unknown): () => void {
-          registered = options
-          component = value
-          return (): void => undefined
-        },
-      },
-    }
+  it('registers a business page in the workbench', (): void => {
+    const context = { effect: (execute: () => () => void): (() => void) => execute() }
     apply(context as unknown as Context)
-    expect(registered).toMatchObject({
-      name: 'settings.section',
-      id: 'luban-session-share',
-      label: 'Session Share',
-    })
-    expect(component).toBe(SessionShareSection)
+    const registered = vi.mocked(registerWorkbenchPage).mock.calls.at(-1)?.[1]
+    expect(registered).toMatchObject({ id: 'luban-session-share', title: '会话共享' })
+    expect(registered?.component).toBe(SessionShareSection)
   })
 
   it('uses the luban-prefixed authenticated mutation API and CSRF token', async (): Promise<void> => {

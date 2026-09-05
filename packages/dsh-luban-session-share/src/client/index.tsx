@@ -1,7 +1,6 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
 import type { FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -144,7 +143,7 @@ function eventLine(event: UiSessionEvent): string {
   return `\n[${new Date(event.at).toLocaleTimeString()}] ${event.status ?? 'status changed'}\n`
 }
 
-export function SessionShareSection(_props: SettingsSectionOwnerProps): ReactNode {
+export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
   const [sessions, setSessions] = useState<UiSession[]>([])
   const [takeovers, setTakeovers] = useState<UiTakeover[]>([])
   const [selectedId, setSelectedId] = useState('')
@@ -386,17 +385,14 @@ export function SessionShareSection(_props: SettingsSectionOwnerProps): ReactNod
 
 export const inject = ['slots']
 
-/** Contribute a responsive shared-session observer and takeover page to Settings. */
+/** Contribute a responsive shared-session observer and takeover page to the Luban workbench. */
 export function apply(ctx: ClientContext): void {
-  ctx.slots.inject('settings.section', () =>
-    ctx.slots.register(
-      {
-        name: 'settings.section',
-        id: 'luban-session-share',
-        order: 60,
-        label: 'Session Share',
-      },
-      SessionShareSection,
-    ),
-  )
+  registerWorkbenchPage(ctx, {
+    id: 'luban-session-share',
+    title: '会话共享',
+    group: '协作',
+    order: 40,
+    description: '观察共享会话、查看接管申请与控制权限。',
+    component: SessionShareSection,
+  })
 }
