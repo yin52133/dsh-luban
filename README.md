@@ -97,9 +97,11 @@ dsh plugin --profile web add @yin52133/dsh-luban@0.1.3 --allow-build=node-pty@1.
 
 完整套件还会安装以下固定版本的配套插件：
 
-- [`dshmarket@1.36.0`](https://github.com/dsh-market/dsh-market)
-- [`dsh-better-sidebar@0.17.1`](https://github.com/omdsh-dev/DSH-better-sidebar)
+- [`dshmarket@1.42.0`](https://github.com/dsh-market/dsh-market)
+- [`dsh-better-sidebar@0.18.0`](https://github.com/omdsh-dev/DSH-better-sidebar)
 - [`@furongjun1999/dsh-memory@0.4.0`](https://github.com/FuRongJun-1999/dsh-memory)
+
+记忆插件需要单独准备 Python / `aeis` 环境，因此默认安装但不启动。配置 Python 路径后再启用，见[聚合包配置](packages/dsh-luban/README.md#configuration)。市场和侧栏默认启用。
 
 也可以只安装需要的插件，例如：
 

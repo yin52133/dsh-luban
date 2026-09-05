@@ -12,3 +12,6 @@ allowBuilds:
   node-pty: false
   protobufjs: false
   sharp: true
+
+minimumReleaseAgeExclude:
+  - dshmarket@1.42.0

@@ -17,8 +17,8 @@
 
 | 项目 | 地址/包名 | License（状态） | 用途 | 安装方式 | 边界 |
 | --- | --- | --- | --- | --- | --- |
-| dsh-market | npm `dshmarket@1.36.0`（github.com/dsh-market/dsh-market） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | 插件市场 UI/热启停/备份恢复 | `install-3rd-party` 脚本经 `dsh plugin add` 安装原版 | 不 fork 不改；只通过其公开 Update API 集成 |
-| dsh-better-sidebar | npm `dsh-better-sidebar@0.17.1`（github.com/omdsh-dev/DSH-better-sidebar） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | Trae 式 diff 展示回退、VSCode 式工作区树（相对路径） | 同上；仅允许锁定的 `node-pty@1.1.0` 原生构建 | 同上；界面体验直接使用原版，不复制其代码 |
+| dsh-market | npm `dshmarket@1.42.0`（github.com/dsh-market/dsh-market） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | 插件市场 UI/热启停/备份恢复 | `install-3rd-party` 脚本经 `dsh plugin add` 安装原版 | 不 fork 不改；只通过其公开 Update API 集成 |
+| dsh-better-sidebar | npm `dsh-better-sidebar@0.18.0`（github.com/omdsh-dev/DSH-better-sidebar） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | Trae 式 diff 展示回退、VSCode 式工作区树（相对路径） | 同上；仅允许锁定的 `node-pty@1.1.0` 原生构建 | 同上；界面体验直接使用原版，不复制其代码 |
 | @furongjun1999/dsh-memory | npm `@furongjun1999/dsh-memory@0.4.0`（github.com/FuRongJun-1999/dsh-memory） | MIT（npm metadata/lock v3 已核对；安装后 LICENSE 证据待生成） | 长期记忆（本套件不做记忆功能，避免重复） | 同上 | 同上 |
 
 > lock v3 记录三项顶层包及 `node-pty@1.1.0` 的包名、精确版本与 license metadata；安装器在 apply

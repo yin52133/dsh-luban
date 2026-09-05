@@ -7,8 +7,8 @@ plugin together with the pinned companion plugins used by the suite.
 
 - Installs all eleven standalone `@yin52133/dsh-luban-*` plugins in one step.
 - Installs the suite's companion projects at reviewed, exact versions:
-  [`dshmarket@1.36.0`](https://github.com/dsh-market/dsh-market),
-  [`dsh-better-sidebar@0.17.1`](https://github.com/omdsh-dev/DSH-better-sidebar), and
+  [`dshmarket@1.42.0`](https://github.com/dsh-market/dsh-market),
+  [`dsh-better-sidebar@0.18.0`](https://github.com/omdsh-dev/DSH-better-sidebar), and
   [`@furongjun1999/dsh-memory@0.4.0`](https://github.com/FuRongJun-1999/dsh-memory).
 - Keeps every standalone package available for selective installation.
 
@@ -33,6 +33,23 @@ such as `luban-auth`, `luban-taskboard`, and `better-sidebar`.
 Use `http://127.0.0.1:42600/luban-auth/login` locally or
 `http://<host-ip>:42600/luban-auth/login` on the LAN. Port `3080` remains a
 loopback-only DSH upstream and is not a second user entry point.
+
+On first visit, the page guides you through creating an administrator username
+and password. After signing in, the bottom status bar shows your account and a
+logout button. No bootstrap password environment variable is required.
+
+The optional memory companion is installed but disabled by default because it
+requires a separate Python environment with `aeis`. After preparing that
+environment, enable it in your profile's `cordis.patch.yml` and set its Python path:
+
+```yaml
+- id: dsh-memory
+  disabled: false
+  config:
+    python: /absolute/path/to/venv/bin/python
+```
+
+On Windows, use the absolute path to the environment's `Scripts/python.exe`.
 
 ## Demo
 

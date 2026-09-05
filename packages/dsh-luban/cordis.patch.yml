@@ -148,3 +148,5 @@
 - insert:
     - id: dsh-memory
       name: '@furongjun1999/dsh-memory'
+      # Requires a separately configured Python/aeis environment. Enable explicitly.
+      disabled: true

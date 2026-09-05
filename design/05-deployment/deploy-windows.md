@@ -38,7 +38,7 @@ flowchart LR
    `dsh plugin --profile win-debug add @yin52133/dsh-luban-auth @yin52133/dsh-luban-taskboard ...`
    安装不需要 GitHub 账号或 PAT；也可使用 GitHub Release 的本地 `.tgz` 联调。
 4. **A 档直装**：先运行 `scripts/install-3rd-party.ps1 -Profile win-debug -DryRun` 审核本地
-   lock v3 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
+   lock v3 计划；默认固定 `dshmarket@1.42.0`、`dsh-better-sidebar@0.18.0`、
    `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Windows 宿主提供绝对且非根目录的
    `-DshHome` 与 `-ApprovedBy`；变更 lock 中的版本前必须重新 dry-run 并明确确认计划。
 5. **保活注册**：M03-F002 注册计划任务（登录时启动/开机按用户选择）；账本与配置目录 `%DSH_HOME%\luban\`。

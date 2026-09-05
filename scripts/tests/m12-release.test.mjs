@@ -490,8 +490,8 @@ describe('M12 install and safety plans', () => {
   it('resolves deterministic A-class specs and keeps installation dry by default', async () => {
     const lock = await loadVersionLock()
     expect(resolvePackageSpecs(lock)).toEqual([
-      'dshmarket@1.36.0',
-      'dsh-better-sidebar@0.17.1',
+      'dshmarket@1.42.0',
+      'dsh-better-sidebar@0.18.0',
       '@furongjun1999/dsh-memory@0.4.0',
     ])
     expect(resolvePackageSpecs(lock, 'latest')).toEqual([

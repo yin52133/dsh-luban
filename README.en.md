@@ -89,9 +89,13 @@ Run the same command again if an earlier installation skipped these builds.
 
 The complete suite also installs these companion plugins at fixed versions:
 
-- [`dshmarket@1.36.0`](https://github.com/dsh-market/dsh-market)
-- [`dsh-better-sidebar@0.17.1`](https://github.com/omdsh-dev/DSH-better-sidebar)
+- [`dshmarket@1.42.0`](https://github.com/dsh-market/dsh-market)
+- [`dsh-better-sidebar@0.18.0`](https://github.com/omdsh-dev/DSH-better-sidebar)
 - [`@furongjun1999/dsh-memory@0.4.0`](https://github.com/FuRongJun-1999/dsh-memory)
+
+The memory companion is installed but disabled until its separate Python / `aeis`
+environment is configured. See [bundle configuration](packages/dsh-luban/README.md#configuration).
+The market and sidebar are enabled by default.
 
 Alternatively, install only the plugins you need:
 

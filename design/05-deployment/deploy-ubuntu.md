@@ -43,7 +43,7 @@ flowchart LR
    `dsh plugin --profile ubuntu-server add @yin52133/dsh-luban-auth ... @yin52133/dsh-luban-server-mode`；
    安装不需要 GitHub 账号或 PAT；也可使用 GitHub Release 的本地 `.tgz`。
 4. **A 档直装**：先运行 `scripts/install-3rd-party.sh --profile ubuntu-server --dry-run` 审核
-   本地 lock v3 计划；默认固定 `dshmarket@1.36.0`、`dsh-better-sidebar@0.17.1`、
+   本地 lock v3 计划；默认固定 `dshmarket@1.42.0`、`dsh-better-sidebar@0.18.0`、
    `@furongjun1999/dsh-memory@0.4.0`。apply 必须在 Linux 宿主提供绝对且非根目录的
    `--dsh-home` 与 `--approved-by`；变更 lock 中的版本前必须重新 dry-run 并明确确认计划。
 5. **服务注册**：M09-F001 安装 user 级 unit：

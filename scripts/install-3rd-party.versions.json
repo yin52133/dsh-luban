@@ -1,19 +1,19 @@
 {
   "schemaVersion": 3,
-  "verifiedAt": "2026-08-30",
+  "verifiedAt": "2026-09-05",
   "registry": "https://registry.npmjs.org/",
   "packages": [
     {
       "name": "dshmarket",
-      "version": "1.36.0",
-      "integrity": "sha512-xX8CCoXdIALaxtLosj+5qGg8r1cykW2zo1AOPJcSQepg2r4Vd2K0NmERldDqfeyFV0pCuZsUoAPe1Q/BW7De/g==",
+      "version": "1.42.0",
+      "integrity": "sha512-XvIEdvYxQsWGV2gbtGyuzore4Zfkv6dMW+51aMtEOZ2QbEKgCsJdDGCHKRK3gaHDaOSiYiNI84+er+mcyQJPzQ==",
       "license": "MIT",
       "repository": "git+https://github.com/dsh-market/dsh-market.git"
     },
     {
       "name": "dsh-better-sidebar",
-      "version": "0.17.1",
-      "integrity": "sha512-7me2X6w+ecbzAMEHtuWkSPUrfLDLTBvL9qugzgBbg1FyWyy2dzS9QNDvnZjjkst4kr4LjUJTTG4rsXBcz41YzQ==",
+      "version": "0.18.0",
+      "integrity": "sha512-6sGUIpgrFLXikACKBXLSiyngULceZCIr5M4bLw2IdCJ3KWHcbNsJJl+TLHJw0lM9voRw0etbr5fC16VQ9YvshQ==",
       "license": "MIT",
       "repository": "https://github.com/omdsh-dev/DSH-better-sidebar"
     },

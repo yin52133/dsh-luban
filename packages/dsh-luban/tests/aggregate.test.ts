@@ -16,9 +16,16 @@ describe('@yin52133/dsh-luban aggregate', () => {
 
   it('keeps companion packages at reviewed versions', (): void => {
     expect(manifest.dependencies).toMatchObject({
-      dshmarket: '1.36.0',
-      'dsh-better-sidebar': '0.17.1',
+      dshmarket: '1.42.0',
+      'dsh-better-sidebar': '0.18.0',
       '@furongjun1999/dsh-memory': '0.4.0',
     })
+  })
+
+  it('does not start an unconfigured external memory process on first launch', async (): Promise<void> => {
+    const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    expect(patch).toMatch(
+      /id: dsh-memory\s+name: '@furongjun1999\/dsh-memory'\s+#[^\n]+\s+disabled: true/u,
+    )
   })
 })
