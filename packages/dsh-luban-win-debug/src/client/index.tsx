@@ -1,6 +1,10 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
+import {
+  csrfHeaders,
+  registerWorkbenchPage,
+  type WorkbenchPageProps,
+} from '@yin52133/dsh-luban-core/client'
 import type { FormEvent, ReactNode } from 'react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -43,26 +47,13 @@ interface UiOutputLine {
 }
 
 const STYLE = `
-.luban-debug{display:grid;gap:12px;color:var(--color-text,#e5e7eb);min-width:0}.luban-debug h2,.luban-debug h3{margin:0}
-.luban-debug__grid{display:grid;grid-template-columns:minmax(230px,320px) minmax(0,1fr);gap:12px}.luban-debug__panel{border:1px solid #334155;border-radius:8px;background:#0f172a;padding:10px;display:grid;gap:8px;align-content:start}
-.luban-debug__row{display:flex;gap:7px;flex-wrap:wrap;align-items:center}.luban-debug input,.luban-debug select,.luban-debug textarea,.luban-debug button{font:inherit;border:1px solid #475569;border-radius:6px;padding:7px 9px;background:#111827;color:inherit;min-width:0}.luban-debug button{cursor:pointer;background:#1d4ed8;border-color:#2563eb}.luban-debug button:disabled{opacity:.55}.luban-debug textarea{width:100%;min-height:70px;resize:vertical}
-.luban-debug__log{height:440px;overflow:auto;background:#020617;border:1px solid #334155;border-radius:6px;padding:8px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}.luban-debug__line{display:block;width:100%;text-align:left;background:transparent!important;border:0!important;padding:1px 3px!important}.luban-debug__line[data-selected=true]{background:#1e3a5f!important}.luban-debug__time{color:#64748b;margin-right:8px}.luban-debug mark{background:#f59e0b;color:#111827}.luban-debug__error{color:#fca5a5;white-space:pre-wrap}.luban-debug__ok{color:#86efac}.luban-debug__device{border-radius:999px;background:#1e293b;padding:3px 8px}.luban-debug__device[data-bad=true]{color:#fca5a5}.luban-debug__meta{font-size:12px;color:#94a3b8;overflow-wrap:anywhere}
-.luban-debug__result-line{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.luban-debug__result-line[data-level=error]{color:#fca5a5;font-weight:700}.luban-debug__result-line[data-level=warning]{color:#fde68a}
+.luban-debug{display:grid;gap:12px;color:var(--lb-text,#172033);min-width:0}.luban-debug h2,.luban-debug h3{margin:0}
+.luban-debug__grid{display:grid;grid-template-columns:minmax(230px,320px) minmax(0,1fr);gap:12px}.luban-debug__panel{border:1px solid var(--lb-border,#cbd5e1);border-radius:8px;background:var(--lb-bg,#f8fafc);padding:10px;display:grid;gap:8px;align-content:start}
+.luban-debug__row{display:flex;gap:7px;flex-wrap:wrap;align-items:center}.luban-debug input,.luban-debug select,.luban-debug textarea,.luban-debug button{font:inherit;border:1px solid var(--lb-border,#cbd5e1);border-radius:6px;padding:7px 9px;background:var(--lb-panel,#fff);color:inherit;min-width:0}.luban-debug button{cursor:pointer;background:#1d4ed8;color:#fff;border-color:#2563eb}.luban-debug button:disabled{opacity:.55}.luban-debug textarea{width:100%;min-height:70px;resize:vertical}
+.luban-debug__log{height:440px;overflow:auto;background:var(--lb-bg,#f8fafc);border:1px solid var(--lb-border,#cbd5e1);border-radius:6px;padding:8px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}.luban-debug__line{color:var(--lb-text,#172033)!important;display:block;width:100%;text-align:left;background:transparent!important;border:0!important;padding:1px 3px!important}.luban-debug__line[data-selected=true]{background:var(--lb-selected,#dbeafe)!important}.luban-debug__time{color:var(--lb-muted,#526177);margin-right:8px}.luban-debug mark{background:#f59e0b;color:#172033}.luban-debug__error{color:var(--lb-error,#b91c1c);white-space:pre-wrap}.luban-debug__ok{color:var(--lb-success,#166534)}.luban-debug__device{border-radius:999px;background:var(--lb-panel,#fff);padding:3px 8px}.luban-debug__device[data-bad=true]{color:var(--lb-error,#b91c1c)}.luban-debug__meta{font-size:12px;color:var(--lb-muted,#526177);overflow-wrap:anywhere}
+.luban-debug__result-line{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.luban-debug__result-line[data-level=error]{color:var(--lb-error,#b91c1c);font-weight:700}.luban-debug__result-line[data-level=warning]{color:var(--lb-warning,#854d0e)}
 @media(max-width:850px){.luban-debug__grid{grid-template-columns:1fr}.luban-debug__log{height:55vh}.luban-debug__row>*{flex:1 1 140px}}
 `
-
-async function csrfHeaders(): Promise<Record<string, string>> {
-  try {
-    const response = await fetch('/luban-auth/session', { headers: { accept: 'application/json' } })
-    if (!response.ok) return {}
-    const value = (await response.json()) as unknown
-    if (typeof value !== 'object' || value === null) return {}
-    const token = (value as Readonly<Record<string, unknown>>).csrfToken
-    return typeof token === 'string' && token !== '' ? { 'x-luban-csrf': token } : {}
-  } catch {
-    return {}
-  }
-}
 
 async function api(path: string, init?: RequestInit): Promise<unknown> {
   const writing = init?.method !== undefined && init.method !== 'GET'
@@ -204,8 +195,11 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
           const line = event.line as UiLine
           if (line.channelId === channelId)
             setLines((current): UiLine[] => [...current.slice(-499), line])
-        } else if (event.type === 'endpoints-changed') void refresh()
-        else if (event.type === 'resync') void Promise.all([refresh(), refreshLogs()])
+        } else if (event.type === 'endpoints-changed' || event.type === 'resync') {
+          void Promise.all([refresh(), refreshLogs()]).catch((reason: unknown): void =>
+            setError(reason instanceof Error ? reason.message : '无法刷新设备状态，请重试'),
+          )
+        }
       } catch {
         setError('Live debug event was invalid')
       }
@@ -215,7 +209,9 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
   }, [channelId, refresh, refreshLogs])
 
   useEffect(() => {
-    void refreshLogs().catch((): undefined => undefined)
+    void refreshLogs().catch((reason: unknown): void =>
+      setError(reason instanceof Error ? reason.message : '无法加载设备日志，请重试'),
+    )
   }, [refreshLogs])
   useEffect(() => {
     if (follow && logRef.current !== null) logRef.current.scrollTop = logRef.current.scrollHeight
@@ -313,12 +309,11 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
   return (
     <section className="luban-debug" aria-label="Luban Windows debug">
       <style>{STYLE}</style>
-      <h2>Windows Debug</h2>
       <div className="luban-debug__grid">
         <aside className="luban-debug__panel">
-          <h3>Unified channels</h3>
+          <h3>设备通道</h3>
           <select
-            aria-label="Endpoint"
+            aria-label="设备端点"
             value={endpointId}
             onChange={(event): void => setEndpointId(event.currentTarget.value)}
           >
@@ -330,7 +325,7 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
           </select>
           <div className="luban-debug__row">
             <input
-              aria-label="Baud rate"
+              aria-label="波特率"
               value={baudRate}
               onChange={(event): void => setBaudRate(event.currentTarget.value)}
             />
@@ -341,18 +336,18 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
                 void act(openChannel)
               }}
             >
-              Open
+              打开通道
             </button>
           </div>
           <select
-            aria-label="Active channel"
+            aria-label="当前通道"
             value={channelId}
             onChange={(event): void => {
               setChannelId(event.currentTarget.value)
               setSelection(null)
             }}
           >
-            <option value="">No active channel</option>
+            <option value="">未打开通道</option>
             {channels.map((channel) => (
               <option key={channel.id} value={channel.id}>
                 {channel.endpoint.label}
@@ -374,7 +369,7 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
                 })
               }}
             >
-              Close
+              关闭通道
             </button>
             <button
               type="button"
@@ -382,11 +377,15 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
                 void act(refresh)
               }}
             >
-              Refresh
+              刷新
             </button>
           </div>
-          <h3>Input / command</h3>
-          <textarea value={input} onChange={(event): void => setInput(event.currentTarget.value)} />
+          <h3>输入与命令</h3>
+          <textarea
+            aria-label="输入与命令"
+            value={input}
+            onChange={(event): void => setInput(event.currentTarget.value)}
+          />
           <div className="luban-debug__row">
             <button
               disabled={channelId === '' || input === ''}
@@ -395,7 +394,7 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
                 void act(async (): Promise<void> => submitInput('write'))
               }}
             >
-              Send
+              发送
             </button>
             <button
               disabled={channelId === '' || input === ''}
@@ -404,12 +403,12 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
                 void act(async (): Promise<void> => submitInput('exec'))
               }}
             >
-              Exec
+              执行命令
             </button>
           </div>
-          <h3>Capture → DSH</h3>
+          <h3>截取日志到对话</h3>
           <input
-            placeholder="Session id (optional)"
+            placeholder="对话 ID（可选）"
             value={sessionId}
             onChange={(event): void => setSessionId(event.currentTarget.value)}
           />
@@ -420,14 +419,14 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
               void act(capture)
             }}
           >
-            Save{sessionId === '' ? '' : ' & inject'}{' '}
+            保存{sessionId === '' ? '' : '并发送到对话'}{' '}
             {selection === null ? '' : `${String(selection[0])}–${String(selection[1])}`}
           </button>
         </aside>
         <main className="luban-debug__panel">
           <div className="luban-debug__row">
             <input
-              placeholder="Filter / highlight"
+              placeholder="筛选与高亮"
               value={filter}
               onChange={(event): void => setFilter(event.currentTarget.value)}
             />
@@ -437,7 +436,7 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
                 checked={regex}
                 onChange={(event): void => setRegex(event.currentTarget.checked)}
               />{' '}
-              Regex
+              正则表达式
             </label>
             <label>
               <input
@@ -445,7 +444,7 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
                 checked={follow}
                 onChange={(event): void => setFollow(event.currentTarget.checked)}
               />{' '}
-              Follow
+              跟随最新日志
             </label>
           </div>
           <div className="luban-debug__log" ref={logRef}>
@@ -475,7 +474,7 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
             void act(async (): Promise<void> => runTemplate(event))
           }}
         >
-          <h3>Flash / reset templates</h3>
+          <h3>烧录与复位模板</h3>
           <select
             value={templateId}
             onChange={(event): void => setTemplateId(event.currentTarget.value)}
@@ -488,16 +487,21 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
             ))}
           </select>
           <textarea
-            aria-label="Template params JSON"
+            aria-label="模板参数（JSON）"
             value={templateParams}
             onChange={(event): void => setTemplateParams(event.currentTarget.value)}
           />
           <input
-            placeholder="Confirmation phrase for destructive templates"
+            placeholder="高风险模板的确认短语"
             value={confirmation}
             onChange={(event): void => setConfirmation(event.currentTarget.value)}
           />
-          <button type="submit">{sessionId === '' ? 'Run template' : 'Run & ask DSH'}</button>
+          <button type="submit" disabled={templateId === ''}>
+            {sessionId === '' ? '运行模板' : '运行并发送到对话'}
+          </button>
+          {templates.length === 0 ? (
+            <p className="luban-debug__meta">尚未配置可用模板，请联系主机管理员配置后刷新。</p>
+          ) : null}
           {toolLines.map((line, index) => (
             <div
               className="luban-debug__result-line"
@@ -512,7 +516,7 @@ export function WinDebugSection(_props: WorkbenchPageProps): ReactNode {
           <h3>adb / fastboot</h3>
           <div className="luban-debug__row">
             {devices.length === 0 ? (
-              <span className="luban-debug__meta">No devices reported</span>
+              <span className="luban-debug__meta">未检测到设备，请检查连接和驱动</span>
             ) : (
               devices.map((device) => (
                 <span

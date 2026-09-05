@@ -1,6 +1,11 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
+import {
+  csrfHeaders,
+  statusLabel,
+  registerWorkbenchPage,
+  type WorkbenchPageProps,
+} from '@yin52133/dsh-luban-core/client'
 import type { FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -48,18 +53,16 @@ interface SessionControllerFace {
 
 type ServerClientContext = ClientContext & { readonly sessions: SessionControllerFace }
 
-let runtimeContext: ServerClientContext | undefined
-
 const STYLE = `
-.luban-server{display:grid;gap:12px;color:var(--color-text,#e5e7eb);max-width:1100px}
+.luban-server{display:grid;gap:12px;color:var(--lb-text,#172033);max-width:1100px}
 .luban-server__toolbar,.luban-server__form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.luban-server input,.luban-server select,.luban-server button{font:inherit;border:1px solid #475569;border-radius:6px;padding:7px 9px;background:#111827;color:inherit}
-.luban-server button{cursor:pointer;background:#1d4ed8;border-color:#2563eb}.luban-server button:disabled{opacity:.55}
-.luban-server__resource{display:flex;gap:16px;flex-wrap:wrap;padding:10px;background:#0f172a;border:1px solid #334155;border-radius:8px}
-.luban-server__paused,.luban-server__error{color:#fca5a5;white-space:pre-wrap}.luban-server__ok{color:#86efac}
-.luban-server__jobs{display:grid;gap:8px}.luban-server__job{padding:10px;background:#1e293b;border:1px solid #475569;border-radius:8px}
-.luban-server__job header{display:flex;justify-content:space-between;gap:12px}.luban-server__meta{font-size:12px;color:#94a3b8;overflow-wrap:anywhere}
-.luban-server__artifacts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.luban-server__artifacts a{color:#93c5fd}
+.luban-server input,.luban-server select,.luban-server button{font:inherit;border:1px solid var(--lb-border,#cbd5e1);border-radius:6px;padding:7px 9px;background:var(--lb-panel,#fff);color:inherit}
+.luban-server button{cursor:pointer;background:#1d4ed8;color:#fff;border-color:#2563eb}.luban-server button:disabled{opacity:.55}
+.luban-server__resource{display:flex;gap:16px;flex-wrap:wrap;padding:10px;background:var(--lb-bg,#f8fafc);border:1px solid var(--lb-border,#cbd5e1);border-radius:8px}
+.luban-server__paused,.luban-server__error{color:var(--lb-error,#b91c1c);white-space:pre-wrap}.luban-server__ok{color:var(--lb-success,#166534)}
+.luban-server__jobs{display:grid;gap:8px}.luban-server__job{padding:10px;background:var(--lb-panel,#fff);border:1px solid var(--lb-border,#cbd5e1);border-radius:8px}
+.luban-server__job header{display:flex;justify-content:space-between;gap:12px}.luban-server__meta{font-size:12px;color:var(--lb-muted,#526177);overflow-wrap:anywhere}
+.luban-server__artifacts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.luban-server__artifacts a{color:var(--lb-link,#1d4ed8)}
 @media(max-width:700px){.luban-server__form>*{flex:1 1 180px}.luban-server__job header{display:grid}}
 `
 
@@ -114,19 +117,6 @@ function parseResource(value: unknown): UiResource {
   }
 }
 
-async function csrfHeaders(): Promise<Record<string, string>> {
-  try {
-    const response = await fetch('/luban-auth/session', { headers: { accept: 'application/json' } })
-    if (!response.ok) return {}
-    const value = (await response.json()) as unknown
-    if (typeof value !== 'object' || value === null) return {}
-    const token = (value as Readonly<Record<string, unknown>>).csrfToken
-    return typeof token === 'string' && token !== '' ? { 'x-luban-csrf': token } : {}
-  } catch {
-    return {}
-  }
-}
-
 async function enqueue(templateId: string, workspace: string): Promise<void> {
   const response = await fetch('/luban-server-mode/jobs', {
     method: 'POST',
@@ -142,9 +132,10 @@ async function enqueue(templateId: string, workspace: string): Promise<void> {
 }
 
 /** Fetch a bounded server-side excerpt and queue it in the active DSH session. */
-export async function sendErrorToCurrentSession(job: UiJob): Promise<void> {
-  const ctx = runtimeContext
-  if (ctx === undefined) throw new Error('DSH session controller is unavailable')
+export async function sendErrorToCurrentSession(
+  job: UiJob,
+  ctx: ServerClientContext,
+): Promise<void> {
   const current = ctx.sessions.list.getSnapshot().current
   if (current === undefined) throw new Error('Open a DSH session first')
   const scoped = ctx.sessions.scope(current)
@@ -237,7 +228,11 @@ export function ArtifactLinks({ job }: { readonly job: UiJob }): ReactNode {
   )
 }
 
-export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
+export function ServerModeSection({
+  sendError,
+}: WorkbenchPageProps & {
+  readonly sendError?: (job: UiJob) => Promise<void>
+}): ReactNode {
   const [jobs, setJobs] = useState<UiJob[]>([])
   const [templates, setTemplates] = useState<UiTemplate[]>([])
   const [resource, setResource] = useState<UiResource | null>(null)
@@ -314,7 +309,8 @@ export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
   const sendLog = async (job: UiJob): Promise<void> => {
     setError('')
     try {
-      await sendErrorToCurrentSession(job)
+      if (sendError === undefined) throw new Error('无法连接当前对话，请重新打开构建管理页面。')
+      await sendError(job)
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Unable to send build log')
     }
@@ -323,18 +319,14 @@ export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
   return (
     <section className="luban-server" aria-label="Luban server mode">
       <style>{STYLE}</style>
-      <h2>Luban Server Mode</h2>
-      <p>
-        Queue allowlisted builds on an Ubuntu host. Build templates and allowed workspace
-        directories are configured by the host administrator.
-      </p>
+      <p>在 Ubuntu 主机排队执行构建。可用模板与允许访问的工作区由服务器管理员配置。</p>
       {resource === null ? null : (
         <div className="luban-server__resource">
-          <span>Disk free: {resource.diskFreeGb.toFixed(1)} GiB</span>
-          <span>Load (1m): {resource.load1.toFixed(2)}</span>
-          <span>Queued: {resource.queueDepth}</span>
+          <span>剩余磁盘：{resource.diskFreeGb.toFixed(1)} GiB</span>
+          <span>系统负载（1 分钟）：{resource.load1.toFixed(2)}</span>
+          <span>排队任务：{resource.queueDepth}</span>
           <strong className={resource.paused ? 'luban-server__paused' : 'luban-server__ok'}>
-            {resource.paused ? 'Queue paused by guard' : 'Queue healthy'}
+            {resource.paused ? '资源保护已暂停队列' : '队列运行正常'}
           </strong>
         </div>
       )}
@@ -345,7 +337,7 @@ export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
         }}
       >
         <select
-          aria-label="Build template"
+          aria-label="构建模板"
           value={templateId}
           onChange={(event): void => setTemplateId(event.currentTarget.value)}
         >
@@ -357,12 +349,12 @@ export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
         </select>
         <input
           required
-          placeholder="Workspace path"
+          placeholder="服务器工作区路径"
           value={workspace}
           onChange={(event): void => setWorkspace(event.currentTarget.value)}
         />
         <button disabled={busy || templateId === ''} type="submit">
-          {busy ? 'Enqueueing…' : 'Enqueue build'}
+          {busy ? '提交中…' : '加入构建队列'}
         </button>
         <button
           type="button"
@@ -372,7 +364,7 @@ export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
             )
           }}
         >
-          Refresh
+          刷新
         </button>
       </form>
       {error === '' ? null : (
@@ -385,7 +377,7 @@ export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
           <article className="luban-server__job" key={job.id}>
             <header>
               <strong>{job.templateId}</strong>
-              <span>{job.status}</span>
+              <span>{statusLabel(job.status)}</span>
             </header>
             <div className="luban-server__meta">
               {job.id} · version {job.version}
@@ -397,7 +389,7 @@ export function ServerModeSection(_props: WorkbenchPageProps): ReactNode {
                   void sendLog(job)
                 }}
               >
-                Send error to current session
+                将错误发送到当前对话
               </button>
             ) : null}
             <ArtifactLinks job={job} />
@@ -413,19 +405,17 @@ export const inject = ['slots', 'sessions']
 /** Add an Ubuntu build-operations page to the Luban workbench. */
 export function apply(ctx: ClientContext): void {
   const runtime = ctx as ServerClientContext
-  runtimeContext = runtime
-  ctx.effect(
-    () => (): void => {
-      if (runtimeContext === runtime) runtimeContext = undefined
-    },
-    'luban-server-mode: client context lifecycle',
-  )
   registerWorkbenchPage(ctx, {
     id: 'luban-server-mode',
     title: '构建管理',
     group: '工作',
     order: 30,
     description: '在 Ubuntu 服务器排队构建，查看状态与下载产物。',
-    component: ServerModeSection,
+    component: (props): ReactNode => (
+      <ServerModeSection
+        {...props}
+        sendError={(job): Promise<void> => sendErrorToCurrentSession(job, runtime)}
+      />
+    ),
   })
 }

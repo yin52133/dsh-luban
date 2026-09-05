@@ -1,6 +1,11 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
+import {
+  csrfHeaders,
+  statusLabel,
+  registerWorkbenchPage,
+  type WorkbenchPageProps,
+} from '@yin52133/dsh-luban-core/client'
 import type { FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -27,12 +32,12 @@ export interface UiPlan {
 }
 
 const STYLE = `
-.luban-plan{display:grid;gap:14px;color:var(--color-text,#e5e7eb);min-width:0}
+.luban-plan{display:grid;gap:14px;color:var(--lb-text,#172033);min-width:0}
 .luban-plan form,.luban-plan__toolbar{display:grid;gap:8px}.luban-plan__toolbar{grid-template-columns:repeat(3,minmax(0,1fr))}
-.luban-plan input,.luban-plan textarea,.luban-plan button{font:inherit;border:1px solid #475569;border-radius:6px;padding:8px;background:#111827;color:inherit}
-.luban-plan textarea{min-height:76px;resize:vertical}.luban-plan button{cursor:pointer;background:#1d4ed8;border-color:#2563eb}.luban-plan button:disabled{opacity:.55}
-.luban-plan__list{display:grid;gap:10px}.luban-plan__card{border:1px solid #334155;background:#0f172a;border-radius:8px;padding:12px;display:grid;gap:8px}
-.luban-plan__card h3{margin:0;font-size:14px}.luban-plan__meta{font-size:12px;color:#94a3b8;overflow-wrap:anywhere}.luban-plan__actions{display:flex;gap:8px;flex-wrap:wrap}.luban-plan__revision{border-top:1px solid #334155;padding-top:8px}.luban-plan__reject{background:#991b1b!important}.luban-plan__error{color:#fca5a5;white-space:pre-wrap}
+.luban-plan input,.luban-plan textarea,.luban-plan button{font:inherit;border:1px solid var(--lb-border,#cbd5e1);border-radius:6px;padding:8px;background:var(--lb-panel,#fff);color:inherit}
+.luban-plan textarea{min-height:76px;resize:vertical}.luban-plan button{cursor:pointer;background:#1d4ed8;color:#fff;border-color:#2563eb}.luban-plan button:disabled{opacity:.55}
+.luban-plan__list{display:grid;gap:10px}.luban-plan__card{border:1px solid var(--lb-border,#cbd5e1);background:var(--lb-bg,#f8fafc);border-radius:8px;padding:12px;display:grid;gap:8px}
+.luban-plan__card h3{margin:0;font-size:14px}.luban-plan__meta{font-size:12px;color:var(--lb-muted,#526177);overflow-wrap:anywhere}.luban-plan__actions{display:flex;gap:8px;flex-wrap:wrap}.luban-plan__revision{border-top:1px solid var(--lb-border,#cbd5e1);padding-top:8px}.luban-plan__reject{background:#991b1b!important}.luban-plan__error{color:var(--lb-error,#b91c1c);white-space:pre-wrap}
 @media(max-width:760px){.luban-plan__toolbar{grid-template-columns:1fr}.luban-plan__actions>*{flex:1 1 130px}}
 `
 
@@ -56,19 +61,6 @@ export function plansFrom(value: unknown): UiPlan[] {
       throw new Error('Plan API returned an invalid plan')
     return row as unknown as UiPlan
   })
-}
-
-async function csrfHeaders(): Promise<Record<string, string>> {
-  try {
-    const response = await fetch('/luban-auth/session', { headers: { accept: 'application/json' } })
-    if (!response.ok) return {}
-    const value = (await response.json()) as unknown
-    if (typeof value !== 'object' || value === null) return {}
-    const token = (value as Readonly<Record<string, unknown>>).csrfToken
-    return typeof token === 'string' && token !== '' ? { 'x-luban-csrf': token } : {}
-  } catch {
-    return {}
-  }
 }
 
 async function writeApi(path: string, body: unknown): Promise<void> {
@@ -160,7 +152,7 @@ export function RevisionEditor({
         onChange={(event): void => onChange('verification', event.currentTarget.value)}
       />
       <button type="submit" disabled={busy}>
-        {busy ? 'Revising…' : 'Submit revision'}
+        {busy ? 'Revising…' : '提交修订'}
       </button>
     </form>
   )
@@ -209,11 +201,11 @@ function ReviewCard({
   return (
     <article className="luban-plan__card" data-plan-id={plan.id}>
       <h3>
-        {plan.id} · {plan.status}
+        {plan.id} · {statusLabel(plan.status)}
       </h3>
       <div className="luban-plan__meta">
-        {plan.taskId === undefined ? 'No task' : `Task ${plan.taskId}`}
-        {plan.sessionId === undefined ? '' : ` · Session ${plan.sessionId}`} · v{plan.version}
+        {plan.taskId === undefined ? '未关联任务' : `任务 ${plan.taskId}`}
+        {plan.sessionId === undefined ? '' : ` · 对话 ${plan.sessionId}`} · v{plan.version}
       </div>
       <div>{plan.sections.background}</div>
       <a
@@ -227,7 +219,7 @@ function ReviewCard({
         <>
           <textarea
             aria-label={`Review comment for ${plan.id}`}
-            placeholder="Required when rejecting"
+            placeholder="驳回时请填写原因，便于修改后重新提交"
             value={comment}
             onChange={(event): void => setComment(event.currentTarget.value)}
           />
@@ -239,7 +231,7 @@ function ReviewCard({
                 void decide('approve')
               }}
             >
-              Approve
+              批准
             </button>
             <button
               className="luban-plan__reject"
@@ -249,7 +241,7 @@ function ReviewCard({
                 void decide('reject')
               }}
             >
-              Reject with comment
+              驳回并附上原因
             </button>
           </div>
         </>
@@ -335,76 +327,115 @@ export function PlanReviewSection(_props: WorkbenchPageProps): ReactNode {
   return (
     <section className="luban-plan" aria-label="Luban plan review">
       <style>{STYLE}</style>
-      <h2>Luban Plan Review</h2>
-      <form
-        onSubmit={(event): void => {
-          void submit(event)
+      <button
+        type="button"
+        onClick={(): void => {
+          void refresh().catch((reason: unknown): void =>
+            setError(reason instanceof Error ? reason.message : '无法刷新计划，请重试'),
+          )
         }}
       >
-        <div className="luban-plan__toolbar">
-          <input
-            required
-            aria-label="Workspace"
-            value={workspace}
-            onChange={(event): void => setWorkspace(event.currentTarget.value)}
-          />
-          <input
-            required
-            aria-label="Plan slug"
-            value={slug}
-            onChange={(event): void => setSlug(event.currentTarget.value)}
-          />
-          <input
-            aria-label="Task id"
-            placeholder="Optional task id"
-            value={taskId}
-            onChange={(event): void => setTaskId(event.currentTarget.value)}
-          />
-          <input
-            aria-label="Session id"
-            placeholder="Optional session id"
-            value={sessionId}
-            onChange={(event): void => setSessionId(event.currentTarget.value)}
-          />
-        </div>
-        <textarea
-          required
-          aria-label="Background"
-          placeholder="1. Background / requirement"
-          value={background}
-          onChange={(event): void => setBackground(event.currentTarget.value)}
-        />
-        <textarea
-          required
-          aria-label="Impact scope"
-          placeholder="2. Impact scope"
-          value={impact}
-          onChange={(event): void => setImpact(event.currentTarget.value)}
-        />
-        <textarea
-          required
-          aria-label="Change locations"
-          placeholder="3. Exact change locations"
-          value={changes}
-          onChange={(event): void => setChanges(event.currentTarget.value)}
-        />
-        <textarea
-          required
-          aria-label="Verification"
-          placeholder="4. Verification"
-          value={verification}
-          onChange={(event): void => setVerification(event.currentTarget.value)}
-        />
-        <button type="submit" disabled={busy}>
-          {busy ? 'Submitting…' : 'Submit for review'}
-        </button>
-      </form>
+        刷新计划
+      </button>
+      <details>
+        <summary>新建计划</summary>
+        <form
+          onSubmit={(event): void => {
+            void submit(event)
+          }}
+        >
+          <div className="luban-plan__toolbar">
+            <label style={{ display: 'grid', gap: 4 }}>
+              工作区
+              <input
+                required
+                aria-label="工作区"
+                value={workspace}
+                onChange={(event): void => setWorkspace(event.currentTarget.value)}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              计划文件名
+              <input
+                required
+                aria-label="计划文件名"
+                value={slug}
+                onChange={(event): void => setSlug(event.currentTarget.value)}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              任务 ID
+              <input
+                aria-label="任务 ID"
+                placeholder="关联任务 ID（可选）"
+                value={taskId}
+                onChange={(event): void => setTaskId(event.currentTarget.value)}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              对话 ID
+              <input
+                aria-label="对话 ID"
+                placeholder="关联对话 ID（可选）"
+                value={sessionId}
+                onChange={(event): void => setSessionId(event.currentTarget.value)}
+              />
+            </label>
+          </div>
+          <label style={{ display: 'grid', gap: 4 }}>
+            需求背景
+            <textarea
+              required
+              aria-label="需求背景"
+              placeholder="1. 背景与需求"
+              value={background}
+              onChange={(event): void => setBackground(event.currentTarget.value)}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            影响范围
+            <textarea
+              required
+              aria-label="影响范围"
+              placeholder="2. 影响范围"
+              value={impact}
+              onChange={(event): void => setImpact(event.currentTarget.value)}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            修改位置
+            <textarea
+              required
+              aria-label="修改位置"
+              placeholder="3. 具体修改位置"
+              value={changes}
+              onChange={(event): void => setChanges(event.currentTarget.value)}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            验证方式
+            <textarea
+              required
+              aria-label="验证方式"
+              placeholder="4. 验证方式"
+              value={verification}
+              onChange={(event): void => setVerification(event.currentTarget.value)}
+            />
+          </label>
+          <button type="submit" disabled={busy}>
+            {busy ? '提交中…' : '提交审批'}
+          </button>
+        </form>
+      </details>
       {error === '' ? null : (
         <div className="luban-plan__error" role="alert">
           {error}
         </div>
       )}
       <div className="luban-plan__list">
+        {plans.length === 0 && error === '' ? (
+          <p>暂无计划。展开“新建计划”，填写修改范围与验证方式后提交审批。</p>
+        ) : null}
         {plans.map((plan) => (
           <ReviewCard key={plan.id} plan={plan} refresh={refresh} reportError={setError} />
         ))}

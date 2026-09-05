@@ -1,6 +1,10 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
+import {
+  csrfHeaders,
+  registerWorkbenchPage,
+  type WorkbenchPageProps,
+} from '@yin52133/dsh-luban-core/client'
 import type { ClipboardEvent, DragEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -32,12 +36,12 @@ const MAX_JSON_RESPONSE_BYTES = 1024 * 1024
 const ACCEPTED_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 
 const STYLE = `
-.luban-image{display:grid;gap:14px;color:var(--color-text,#e5e7eb);min-width:0}
-.luban-image__controls{display:flex;gap:8px;flex-wrap:wrap}.luban-image input,.luban-image select,.luban-image button{font:inherit;border:1px solid #475569;border-radius:6px;padding:8px;background:#111827;color:inherit}
-.luban-image button{cursor:pointer;background:#1d4ed8;border-color:#2563eb}.luban-image button:disabled{opacity:.55;cursor:not-allowed}
-.luban-image__drop{display:grid;place-items:center;min-height:130px;border:2px dashed #64748b;border-radius:10px;background:#0f172a;padding:18px;text-align:center;outline:none}.luban-image__drop:focus{border-color:#60a5fa}
-.luban-image__list{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}.luban-image__card{display:grid;gap:7px;border:1px solid #334155;border-radius:8px;background:#0f172a;padding:9px;min-width:0}
-.luban-image__card img{width:100%;height:150px;object-fit:contain;background:#020617;border-radius:5px}.luban-image__meta{font-size:11px;color:#94a3b8;overflow-wrap:anywhere}.luban-image__error{color:#fca5a5;white-space:pre-wrap}.luban-image__ok{color:#86efac}
+.luban-image{display:grid;gap:14px;color:var(--lb-text,#172033);min-width:0}
+.luban-image__controls{display:flex;gap:8px;flex-wrap:wrap}.luban-image input,.luban-image select,.luban-image button{font:inherit;border:1px solid var(--lb-border,#cbd5e1);border-radius:6px;padding:8px;background:var(--lb-panel,#fff);color:inherit}
+.luban-image button{cursor:pointer;background:#1d4ed8;color:#fff;border-color:#2563eb}.luban-image button:disabled{opacity:.55;cursor:not-allowed}
+.luban-image__drop{display:grid;place-items:center;min-height:130px;border:2px dashed var(--lb-muted,#526177);border-radius:10px;background:var(--lb-bg,#f8fafc);padding:18px;text-align:center;outline:none}.luban-image__drop:focus{border-color:#60a5fa}
+.luban-image__list{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}.luban-image__card{display:grid;gap:7px;border:1px solid var(--lb-border,#cbd5e1);border-radius:8px;background:var(--lb-bg,#f8fafc);padding:9px;min-width:0}
+.luban-image__card img{width:100%;height:150px;object-fit:contain;background:var(--lb-bg,#f8fafc);border-radius:5px}.luban-image__meta{font-size:11px;color:var(--lb-muted,#526177);overflow-wrap:anywhere}.luban-image__error{color:var(--lb-error,#b91c1c);white-space:pre-wrap}.luban-image__ok{color:var(--lb-success,#166534)}
 @media(max-width:760px){.luban-image__controls>*{flex:1 1 140px}.luban-image__list{grid-template-columns:1fr}}
 `
 
@@ -175,21 +179,6 @@ function requestOk(input: string, init: RequestInit, operation: string): Promise
   })
 }
 
-async function csrfHeaders(): Promise<Record<string, string>> {
-  try {
-    const value = await requestJson(
-      '/luban-auth/session',
-      { headers: { accept: 'application/json' } },
-      'Authentication session',
-    )
-    if (typeof value !== 'object' || value === null) return {}
-    const token = (value as Readonly<Record<string, unknown>>).csrfToken
-    return typeof token === 'string' && token !== '' ? { 'x-luban-csrf': token } : {}
-  } catch {
-    return {}
-  }
-}
-
 /** Upload one browser paste/drop image through the authenticated M06 API. */
 export async function uploadImage(file: File, source: ImageSource): Promise<UiImage> {
   if (!acceptedImageFile(file)) throw new Error('Choose a PNG, JPEG, or WebP image up to 10 MB')
@@ -291,8 +280,8 @@ export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
       if (sessionId.trim() !== '') image = await injectImage(image.id, sessionId.trim(), style)
       setNotice(
         sessionId.trim() === ''
-          ? `Stored ${image.relPath}`
-          : `Stored and injected ${image.relPath}`,
+          ? `已保存：${image.relPath}`
+          : `已保存并发送到对话：${image.relPath}`,
       )
       await refresh()
     } catch (reason: unknown) {
@@ -327,13 +316,9 @@ export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
   return (
     <section className="luban-image" aria-label="Luban image paste">
       <style>{STYLE}</style>
-      <h2>Luban Image Paste</h2>
-      <p>
-        Choose, paste or drop a PNG, JPEG or WebP image up to 10 MB. Leave Session id empty to store
-        it without sending it to a session.
-      </p>
+      <p>选择、粘贴或拖入 PNG、JPEG、WebP 图片，最大 10 MB。对话 ID 留空时仅保存，不发送到对话。</p>
       <label>
-        Choose image
+        选择图片
         <input
           type="file"
           accept="image/png,image/jpeg,image/webp"
@@ -346,19 +331,31 @@ export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
         />
       </label>
       <div className="luban-image__controls">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={(): void => {
+            setError('')
+            void refresh().catch((reason: unknown): void =>
+              setError(reason instanceof Error ? reason.message : '无法加载图片，请重试'),
+            )
+          }}
+        >
+          刷新图片
+        </button>
         <input
-          aria-label="Session id"
-          placeholder="Optional DSH session id"
+          aria-label="对话 ID"
+          placeholder="对话 ID（留空仅保存）"
           value={sessionId}
           onChange={(event): void => setSessionId(event.currentTarget.value)}
         />
         <select
-          aria-label="Injection style"
+          aria-label="发送格式"
           value={style}
           onChange={(event): void => setStyle(event.currentTarget.value as InjectStyle)}
         >
-          <option value="markdown">Markdown reference</option>
-          <option value="path">Absolute path</option>
+          <option value="markdown">Markdown 引用</option>
+          <option value="path">绝对路径</option>
         </select>
         <button
           type="button"
@@ -371,7 +368,7 @@ export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
               )
           }}
         >
-          Clean expired
+          清理过期图片
         </button>
       </div>
       <div
@@ -383,7 +380,7 @@ export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
         onDragOver={(event): void => event.preventDefault()}
         onDrop={drop}
       >
-        {busy ? 'Uploading…' : 'Focus here and press Ctrl+V, or drop an image'}
+        {busy ? '上传中…' : '点击此处后按 Ctrl+V 粘贴，或将图片拖到这里'}
       </div>
       {error === '' ? null : (
         <div className="luban-image__error" role="alert">
@@ -395,7 +392,7 @@ export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
           {notice}
         </div>
       )}
-      {images.length === 0 ? <p>No images stored yet.</p> : null}
+      {images.length === 0 ? <p>暂无图片。上传后可在此预览和管理。</p> : null}
       <div className="luban-image__list" aria-label="Recent images">
         {images.map((image) => (
           <article className="luban-image__card" key={image.id}>
@@ -408,11 +405,7 @@ export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
             <button
               type="button"
               disabled={busy || image.referencedBy.length > 0}
-              title={
-                image.referencedBy.length > 0
-                  ? 'Referenced attachments are retained'
-                  : 'Delete attachment'
-              }
+              title={image.referencedBy.length > 0 ? '已被对话引用的附件会保留' : '删除附件'}
               onClick={(): void => {
                 setBusy(true)
                 void deleteImage(image.id)
@@ -423,7 +416,7 @@ export function ImagePasteSection(_props: WorkbenchPageProps): ReactNode {
                   .finally((): void => setBusy(false))
               }}
             >
-              Delete
+              删除
             </button>
           </article>
         ))}

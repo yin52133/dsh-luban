@@ -204,7 +204,7 @@ describe('image paste Settings component', (): void => {
 
       await waitForUi((): void => {
         expect(mounted.container.textContent).toContain(
-          'Stored .luban/attachments/paste-image-1.png',
+          '已保存：.luban/attachments/paste-image-1.png',
         )
         const preview = requiredElement(mounted.container, 'img[alt="pasted scope.png"]')
         // HTTP authentication for this URL is covered by http-api.test.ts.
@@ -238,7 +238,7 @@ describe('image paste Settings component', (): void => {
       )
 
       await act(async (): Promise<void> => {
-        requiredButton(mounted.container, 'Delete').click()
+        requiredButton(mounted.container, '删除').click()
         await Promise.resolve()
       })
       await waitForUi((): void => {
@@ -256,7 +256,7 @@ describe('image paste Settings component', (): void => {
         (call): boolean => call.path === '/luban-image-paste/images' && call.method === 'GET',
       ).length
       await act(async (): Promise<void> => {
-        requiredButton(mounted.container, 'Clean expired').click()
+        requiredButton(mounted.container, '清理过期图片').click()
         await Promise.resolve()
       })
       await waitForUi((): void => {

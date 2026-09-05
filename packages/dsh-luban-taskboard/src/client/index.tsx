@@ -1,6 +1,10 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
+import {
+  csrfHeaders,
+  registerWorkbenchPage,
+  type WorkbenchPageProps,
+} from '@yin52133/dsh-luban-core/client'
 import type { DragEvent, FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -28,12 +32,12 @@ export interface UiTaskPlanLink {
 }
 
 const COLUMNS: readonly { readonly status: TaskStatus; readonly title: string }[] = [
-  { status: 'backlog', title: 'Backlog' },
-  { status: 'todo', title: 'Todo' },
-  { status: 'doing', title: 'Doing' },
-  { status: 'review', title: 'Review' },
-  { status: 'done', title: 'Done' },
-  { status: 'dropped', title: 'Dropped' },
+  { status: 'backlog', title: '待整理' },
+  { status: 'todo', title: '待办' },
+  { status: 'doing', title: '进行中' },
+  { status: 'review', title: '待验收' },
+  { status: 'done', title: '已完成' },
+  { status: 'dropped', title: '已取消' },
 ]
 
 const TRANSITION_TARGETS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = Object.freeze({
@@ -50,18 +54,18 @@ function isTaskStatus(value: string): value is TaskStatus {
 }
 
 const STYLE = `
-.luban-board{display:grid;gap:12px;color:var(--color-text,#e5e7eb);min-width:0}
-.luban-board__toolbar,.luban-board__form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.luban-board input,.luban-board select,.luban-board button{font:inherit;border:1px solid #475569;border-radius:6px;padding:7px 9px;background:#111827;color:inherit}
-.luban-board button{cursor:pointer;background:#1d4ed8;border-color:#2563eb}.luban-board button:disabled{opacity:.55;cursor:not-allowed}
+.luban-board{display:grid;gap:12px;color:var(--lb-text,#172033);min-width:0}
+.luban-board__form input{flex:1 1 240px}.luban-board__toolbar,.luban-board__form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.luban-board input,.luban-board select,.luban-board button{font:inherit;border:1px solid var(--lb-border,#cbd5e1);border-radius:6px;padding:7px 9px;background:var(--lb-panel,#fff);color:inherit}
+.luban-board button{cursor:pointer;background:#1d4ed8;color:#fff;border-color:#2563eb}.luban-board button:disabled{opacity:.55;cursor:not-allowed}
 .luban-board__columns{display:grid;grid-template-columns:repeat(6,minmax(220px,1fr));gap:10px;overflow-x:auto;padding-bottom:8px}
-.luban-board__column{background:#0f172a;border:1px solid #334155;border-radius:8px;min-height:220px;padding:8px}
-.luban-board__column h3{font-size:13px;margin:2px 4px 8px;color:#cbd5e1;display:flex;justify-content:space-between}
-.luban-board__card{background:#1e293b;border:1px solid #475569;border-radius:7px;padding:9px;margin-bottom:8px;cursor:grab}
-.luban-board__card strong{display:block;font-size:13px}.luban-board__meta{font-size:11px;color:#94a3b8;margin-top:6px;overflow-wrap:anywhere}.luban-board__plans{display:flex;gap:6px;flex-wrap:wrap}.luban-board__plans a{color:#93c5fd}
+.luban-board__column{background:var(--lb-bg,#f8fafc);border:1px solid var(--lb-border,#cbd5e1);border-radius:8px;min-height:220px;padding:8px}
+.luban-board__column h3{font-size:13px;margin:2px 4px 8px;color:var(--lb-muted,#526177);display:flex;justify-content:space-between}
+.luban-board__card{background:var(--lb-panel,#fff);border:1px solid var(--lb-border,#cbd5e1);border-radius:7px;padding:9px;margin-bottom:8px;cursor:grab}
+.luban-board__card strong{display:block;font-size:13px}.luban-board__meta{font-size:11px;color:var(--lb-muted,#526177);margin-top:6px;overflow-wrap:anywhere}.luban-board__plans{display:flex;gap:6px;flex-wrap:wrap}.luban-board__plans a{color:var(--lb-link,#1d4ed8)}
 .luban-board__transition{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;margin-top:8px}.luban-board__transition select,.luban-board__transition button{min-width:0;padding:5px 7px;font-size:12px}
-.luban-board__tag{display:inline-block;background:#334155;border-radius:999px;padding:1px 6px;margin:4px 4px 0 0;font-size:10px}
-.luban-board__auto{color:#fde68a}.luban-board__error{color:#fca5a5;white-space:pre-wrap}.luban-board__empty{color:#64748b;font-size:12px;padding:8px}
+.luban-board__tag{display:inline-block;background:var(--lb-border,#cbd5e1);border-radius:999px;padding:1px 6px;margin:4px 4px 0 0;font-size:10px}
+.luban-board__auto{color:var(--lb-warning,#854d0e)}.luban-board__error{color:var(--lb-error,#b91c1c);white-space:pre-wrap}.luban-board__empty{color:var(--lb-muted,#526177);font-size:12px;padding:8px}
 @media(max-width:760px){.luban-board__columns{grid-template-columns:repeat(6,minmax(82vw,1fr))}.luban-board__toolbar>*{flex:1 1 140px}}
 `
 
@@ -124,19 +128,6 @@ export async function loadTaskPlanLinks(): Promise<ReadonlyMap<string, readonly 
   if (response.status === 404) return new Map()
   if (!response.ok) throw new Error(`Unable to load linked plans (${String(response.status)})`)
   return taskPlanLinksFrom(await response.json())
-}
-
-async function csrfHeaders(): Promise<Record<string, string>> {
-  try {
-    const response = await fetch('/luban-auth/session', { headers: { accept: 'application/json' } })
-    if (!response.ok) return {}
-    const value = (await response.json()) as unknown
-    if (typeof value !== 'object' || value === null) return {}
-    const token = (value as Readonly<Record<string, unknown>>).csrfToken
-    return typeof token === 'string' && token !== '' ? { 'x-luban-csrf': token } : {}
-  } catch {
-    return {}
-  }
 }
 
 async function writeApi(path: string, method: string, body: unknown): Promise<void> {
@@ -290,12 +281,12 @@ export function TaskTransitionControl({
       >
         {targets.map((status) => (
           <option value={status} key={status}>
-            Move to {COLUMNS.find((column) => column.status === status)?.title ?? status}
+            移至 {COLUMNS.find((column) => column.status === status)?.title ?? status}
           </option>
         ))}
       </select>
       <button type="submit" disabled={busy}>
-        {busy ? 'Moving…' : 'Move'}
+        {busy ? '移动中…' : '移动'}
       </button>
     </form>
   )
@@ -362,10 +353,10 @@ export function TaskCard({
         {task.workspace === undefined ? '' : ` · ${task.workspace}`}
       </div>
       {task.acceptance === undefined ? null : (
-        <div className="luban-board__meta">Acceptance: {task.acceptance}</div>
+        <div className="luban-board__meta">验收条件：{task.acceptance}</div>
       )}
       {task.autoDone === true ? (
-        <div className="luban-board__auto">Auto-completed · review required</div>
+        <div className="luban-board__auto">自动完成 · 请人工验收</div>
       ) : null}
       <TaskPlanLinks taskId={task.id} plans={plans} />
       <div>
@@ -411,6 +402,7 @@ export function TaskboardSection(_props: WorkbenchPageProps): ReactNode {
     if (!response.ok) throw new Error(`Unable to load tasks (${String(response.status)})`)
     setTasks(tasksFrom(await response.json()))
     setPlanLinks(await loadTaskPlanLinks())
+    setError('')
   }, [])
 
   useEffect(() => {
@@ -451,11 +443,15 @@ export function TaskboardSection(_props: WorkbenchPageProps): ReactNode {
 
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
+    if (title.trim() === '') {
+      setError('任务标题不能为空，请输入标题后重新提交。')
+      return
+    }
     setCreating(true)
     setError('')
     try {
       await writeApi('/tasks', 'POST', {
-        title,
+        title: title.trim(),
         description: '',
         status: acceptance.trim() === '' ? 'backlog' : 'todo',
         hostScope: 'any',
@@ -500,35 +496,36 @@ export function TaskboardSection(_props: WorkbenchPageProps): ReactNode {
   return (
     <section className="luban-board" aria-label="Luban taskboard">
       <style>{STYLE}</style>
-      <h2>Luban Taskboard</h2>
       <div className="luban-board__toolbar" aria-label="Task filters">
         <select
           value={hostFilter}
           onChange={(event): void => setHostFilter(event.currentTarget.value)}
         >
-          <option value="">All hosts</option>
+          <option value="">全部主机</option>
           <option value="win">Windows</option>
           <option value="ubuntu">Ubuntu</option>
         </select>
         <input
-          aria-label="Workspace filter"
-          placeholder="Workspace"
+          aria-label="按工作区筛选"
+          placeholder="工作区"
           value={workspaceFilter}
           onChange={(event): void => setWorkspaceFilter(event.currentTarget.value)}
         />
         <input
-          aria-label="Tag filter"
-          placeholder="Tag"
+          aria-label="按标签筛选"
+          placeholder="标签"
           value={tagFilter}
           onChange={(event): void => setTagFilter(event.currentTarget.value)}
         />
         <button
           type="button"
           onClick={(): void => {
-            void refresh()
+            void refresh().catch((reason: unknown): void =>
+              setError(reason instanceof Error ? reason.message : '无法刷新任务，请重试'),
+            )
           }}
         >
-          Refresh
+          刷新
         </button>
       </div>
       <form
@@ -540,18 +537,18 @@ export function TaskboardSection(_props: WorkbenchPageProps): ReactNode {
         <input
           required
           maxLength={200}
-          placeholder="New task"
+          placeholder="任务标题"
           value={title}
           onChange={(event): void => setTitle(event.currentTarget.value)}
         />
         <input
           maxLength={10000}
-          placeholder="Acceptance criteria (creates Todo)"
+          placeholder="验收条件（填写后进入待办）"
           value={acceptance}
           onChange={(event): void => setAcceptance(event.currentTarget.value)}
         />
         <button type="submit" disabled={creating}>
-          {creating ? 'Adding…' : 'Add'}
+          {creating ? '添加中…' : '添加任务'}
         </button>
       </form>
       {error === '' ? null : (
@@ -576,7 +573,7 @@ export function TaskboardSection(_props: WorkbenchPageProps): ReactNode {
                 <span>{columnTasks.length}</span>
               </h3>
               {columnTasks.length === 0 ? (
-                <div className="luban-board__empty">Drop tasks here</div>
+                <div className="luban-board__empty">暂无任务，可拖入任务卡片</div>
               ) : (
                 columnTasks.map((task) => (
                   <TaskCard

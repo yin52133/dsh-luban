@@ -110,7 +110,7 @@ describe('server-mode artifact links', (): void => {
       })
       expect(FakeEventSource.instances).toHaveLength(0)
       const refresh = [...mounted.container.querySelectorAll('button')].find(
-        (button) => button.textContent === 'Refresh',
+        (button) => button.textContent === '刷新',
       )
       await act(async (): Promise<void> => {
         refresh?.click()

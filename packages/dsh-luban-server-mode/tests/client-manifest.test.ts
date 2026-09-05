@@ -66,7 +66,7 @@ describe('server-mode client and package contract', (): void => {
       mode: 'queue',
     ) => Promise<{ readonly ok: true }>
     const prompt = vi.fn<Prompt>().mockResolvedValue({ ok: true })
-    const current = { id: 'session-1' }
+    const current = 'session-1'
     let cleanup: (() => void) | undefined
     const context = {
       effect(execute: () => () => void): () => void {
@@ -93,12 +93,15 @@ describe('server-mode client and package contract', (): void => {
     vi.stubGlobal('fetch', fetcher)
     applyClient(context as unknown as ClientContext)
 
-    await sendErrorToCurrentSession({
-      id: 'job/unsafe',
-      templateId: 'cmake-build',
-      status: 'failed',
-      version: 3,
-    })
+    await sendErrorToCurrentSession(
+      {
+        id: 'job/unsafe',
+        templateId: 'cmake-build',
+        status: 'failed',
+        version: 3,
+      },
+      context as unknown as Parameters<typeof sendErrorToCurrentSession>[1],
+    )
 
     expect(fetcher).toHaveBeenCalledWith('/luban-server-mode/jobs/job%2Funsafe/error-log', {
       headers: { accept: 'application/json' },

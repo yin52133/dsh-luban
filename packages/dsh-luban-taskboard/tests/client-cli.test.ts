@@ -305,6 +305,13 @@ describe('taskctl', (): void => {
 })
 
 describe('Taskboard client entry', (): void => {
+  it('does not send a task mutation when the login has expired', async (): Promise<void> => {
+    const request = vi.fn().mockResolvedValue(new Response('', { status: 401 }))
+    vi.stubGlobal('fetch', request)
+    await expect(moveTask('T-1', 'review', 1)).rejects.toThrow('登录已失效')
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith('/luban-auth/session', expect.any(Object))
+  })
   it('registers a business page in the workbench', (): void => {
     const context = { effect: (execute: () => () => void): (() => void) => execute() }
     applyClient(context as unknown as Context)
@@ -389,7 +396,7 @@ describe('Taskboard client entry', (): void => {
     ).toBe(true)
     expect(
       (busyControls[1] as ReactElement<Readonly<Record<string, unknown>>>).props.children,
-    ).toBe('Moving…')
+    ).toBe('移动中…')
   })
 
   it('uses the selected target and current version while managing busy state', async (): Promise<void> => {

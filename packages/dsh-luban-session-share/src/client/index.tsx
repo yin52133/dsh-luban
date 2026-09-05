@@ -1,6 +1,11 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { registerWorkbenchPage, type WorkbenchPageProps } from '@yin52133/dsh-luban-core/client'
+import {
+  csrfHeaders,
+  statusLabel,
+  registerWorkbenchPage,
+  type WorkbenchPageProps,
+} from '@yin52133/dsh-luban-core/client'
 import type { FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -33,12 +38,12 @@ interface UiSessionEvent {
 }
 
 const STYLE = `
-.luban-share{display:grid;gap:12px;color:var(--color-text,#e5e7eb);min-width:0}
+.luban-share{display:grid;gap:12px;color:var(--lb-text,#172033);min-width:0}
 .luban-share__grid{display:grid;grid-template-columns:minmax(260px,1fr) minmax(320px,2fr);gap:12px}
-.luban-share__list,.luban-share__detail{display:grid;gap:8px;align-content:start}.luban-share__card{border:1px solid #334155;background:#0f172a;border-radius:8px;padding:10px;text-align:left;color:inherit}
-.luban-share button,.luban-share input{font:inherit;border:1px solid #475569;border-radius:6px;padding:8px;background:#111827;color:inherit}.luban-share button{cursor:pointer;background:#1d4ed8;border-color:#2563eb}.luban-share button:disabled{opacity:.55;cursor:not-allowed}
-.luban-share__meta{font-size:12px;color:#94a3b8;overflow-wrap:anywhere}.luban-share__healthy{color:#86efac}.luban-share__unhealthy,.luban-share__error{color:#fca5a5}.luban-share__log{margin:0;min-height:220px;max-height:420px;overflow:auto;white-space:pre-wrap;background:#020617;border:1px solid #334155;border-radius:8px;padding:10px;font:12px/1.45 ui-monospace,monospace}
-.luban-share__actions,.luban-share__input{display:flex;gap:8px;flex-wrap:wrap}.luban-share__input input{flex:1 1 240px}.luban-share__takeover{border-left:3px solid #f59e0b;padding-left:9px}.luban-share__empty{color:#64748b;font-size:12px}
+.luban-share__list,.luban-share__detail{display:grid;gap:8px;align-content:start}.luban-share__card{border:1px solid var(--lb-border,#cbd5e1);background:var(--lb-bg,#f8fafc);border-radius:8px;padding:10px;text-align:left;color:inherit}
+.luban-share button,.luban-share input{font:inherit;border:1px solid var(--lb-border,#cbd5e1);border-radius:6px;padding:8px;background:var(--lb-panel,#fff);color:inherit}.luban-share button{cursor:pointer;background:#1d4ed8;color:#fff;border-color:#2563eb}.luban-share button.luban-share__card{background:var(--lb-panel,#fff);color:var(--lb-text,#172033);border-color:var(--lb-border,#cbd5e1)}.luban-share button.luban-share__card[aria-pressed=true]{outline:2px solid var(--lb-link,#1d4ed8)}.luban-share button:disabled{opacity:.55;cursor:not-allowed}
+.luban-share__meta{font-size:12px;color:var(--lb-muted,#526177);overflow-wrap:anywhere}.luban-share__healthy{color:var(--lb-success,#166534)}.luban-share__unhealthy,.luban-share__error{color:var(--lb-error,#b91c1c)}.luban-share__log{margin:0;min-height:220px;max-height:420px;overflow:auto;white-space:pre-wrap;background:var(--lb-bg,#f8fafc);border:1px solid var(--lb-border,#cbd5e1);border-radius:8px;padding:10px;font:12px/1.45 ui-monospace,monospace}
+.luban-share__actions,.luban-share__input{display:flex;gap:8px;flex-wrap:wrap}.luban-share__input input{flex:1 1 240px}.luban-share__takeover{border-left:3px solid #f59e0b;padding-left:9px}.luban-share__empty{color:var(--lb-muted,#526177);font-size:12px}
 @media(max-width:760px){.luban-share__grid{grid-template-columns:1fr}.luban-share__actions>*{flex:1 1 120px}}
 `
 
@@ -93,19 +98,6 @@ function sessionEventFrom(value: unknown): UiSessionEvent {
     throw new Error('Session Share returned an invalid session event')
   }
   return valueRow as unknown as UiSessionEvent
-}
-
-async function csrfHeaders(): Promise<Record<string, string>> {
-  try {
-    const response = await fetch('/luban-auth/session', { headers: { accept: 'application/json' } })
-    if (!response.ok) return {}
-    const value = (await response.json()) as unknown
-    if (typeof value !== 'object' || value === null) return {}
-    const token = (value as Readonly<Record<string, unknown>>).csrfToken
-    return typeof token === 'string' && token !== '' ? { 'x-luban-csrf': token } : {}
-  } catch {
-    return {}
-  }
 }
 
 async function writeApi(path: string, body: unknown): Promise<void> {
@@ -251,7 +243,17 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
   return (
     <section className="luban-share" aria-label="Luban shared sessions">
       <style>{STYLE}</style>
-      <h2>Luban Session Share</h2>
+      <div className="luban-share__actions">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={(): void => {
+            void mutate(refresh)
+          }}
+        >
+          刷新会话
+        </button>
+      </div>
       {error === '' ? null : (
         <div className="luban-share__error" role="alert">
           {error}
@@ -269,7 +271,7 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
                 void mutate(() => approveTakeover(request.id, request.sessionVersion, 'approve'))
               }}
             >
-              Approve
+              批准
             </button>
             <button
               type="button"
@@ -278,7 +280,7 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
                 void mutate(() => approveTakeover(request.id, request.sessionVersion, 'deny'))
               }}
             >
-              Deny
+              拒绝
             </button>
           </div>
         </div>
@@ -286,23 +288,28 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
       <div className="luban-share__grid">
         <div className="luban-share__list">
           {sessions.length === 0 ? (
-            <div className="luban-share__empty">No live local or peer sessions.</div>
+            <div className="luban-share__empty">
+              暂无本机或已连接主机的对话。可以先返回首页新建对话。
+            </div>
           ) : (
             sessions.map((session) => (
               <button
                 className="luban-share__card"
                 type="button"
                 key={`${session.host}/${session.id}`}
+                aria-pressed={selectedId === session.id}
                 onClick={(): void => setSelectedId(session.id)}
               >
                 <strong>{session.id}</strong>
                 <div className="luban-share__meta">
-                  {session.host} · {session.role} · v{session.version}
+                  {session.host} · {statusLabel(session.role)} · v{session.version}
                 </div>
                 <div
                   className={session.healthy ? 'luban-share__healthy' : 'luban-share__unhealthy'}
                 >
-                  {session.healthy ? session.status : `Unhealthy · ${session.status}`}
+                  {session.healthy
+                    ? statusLabel(session.status)
+                    : `连接异常 · ${statusLabel(session.status)}`}
                 </div>
               </button>
             ))
@@ -310,7 +317,7 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
         </div>
         <div className="luban-share__detail">
           {selected === undefined ? (
-            <div className="luban-share__empty">Select a session.</div>
+            <div className="luban-share__empty">从左侧选择要查看或接管的对话。</div>
           ) : (
             <>
               <h3>
@@ -333,7 +340,7 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
                       )
                     }}
                   >
-                    Request control
+                    申请控制权
                   </button>
                 ) : null}
                 {selected.role === 'operator' ? (
@@ -346,7 +353,7 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
                       )
                     }}
                   >
-                    Release control
+                    释放控制权
                   </button>
                 ) : null}
               </div>
@@ -357,13 +364,11 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
                 }}
               >
                 <input
-                  aria-label="Session input"
+                  aria-label="对话输入"
                   maxLength={65_536}
                   disabled={selected.role === 'observer' || busy}
                   placeholder={
-                    selected.role === 'observer'
-                      ? 'Request control to send input'
-                      : 'Send follow-up'
+                    selected.role === 'observer' ? '先申请控制权，再发送消息' : '输入后续消息'
                   }
                   value={input}
                   onChange={(event): void => setInput(event.currentTarget.value)}
@@ -372,7 +377,7 @@ export function SessionShareSection(_props: WorkbenchPageProps): ReactNode {
                   type="submit"
                   disabled={selected.role === 'observer' || busy || input.trim() === ''}
                 >
-                  Send
+                  发送
                 </button>
               </form>
             </>

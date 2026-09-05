@@ -140,7 +140,7 @@ describe('Plan client entry', (): void => {
       const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input
       return Promise.resolve(
         url === '/luban-auth/session'
-          ? new Response('{}', { status: 200 })
+          ? Response.json({ csrfToken: 'test-csrf' })
           : new Response('Plan changed since version 2', { status: 409 }),
       )
     }

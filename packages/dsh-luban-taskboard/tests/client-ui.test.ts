@@ -411,10 +411,10 @@ describe('Taskboard React integration', (): void => {
         await waitForUi((): void => {
           const card = requiredElement(mounted.container, `[data-task-id="${task.id}"]`)
           expect(card.closest('.luban-board__column')?.querySelector('h3')?.textContent).toContain(
-            'Review',
+            '待验收',
           )
           expect(requiredElement(card, '.luban-board__auto').textContent).toBe(
-            'Auto-completed · review required',
+            '自动完成 · 请人工验收',
           )
         })
 
@@ -422,7 +422,7 @@ describe('Taskboard React integration', (): void => {
           const card = requiredElement(mounted.container, `[data-task-id="${task.id}"]`)
           const doneColumn = [
             ...mounted.container.querySelectorAll<HTMLElement>('.luban-board__column'),
-          ].find((column): boolean => column.querySelector('h3 span')?.textContent === 'Done')
+          ].find((column): boolean => column.querySelector('h3 span')?.textContent === '已完成')
           if (doneColumn === undefined) throw new Error('Done column was not rendered')
           const values = new Map<string, string>()
           const dataTransfer = {
@@ -445,7 +445,7 @@ describe('Taskboard React integration', (): void => {
         await waitForUi((): void => {
           const card = requiredElement(mounted.container, `[data-task-id="${task.id}"]`)
           expect(card.closest('.luban-board__column')?.querySelector('h3')?.textContent).toContain(
-            'Done',
+            '已完成',
           )
           expect(card.querySelector('.luban-board__auto')).toBeNull()
         })
@@ -577,11 +577,11 @@ describe('Taskboard React integration', (): void => {
 
         const title = requiredElement(
           mounted.container,
-          'input[placeholder="New task"]',
+          'input[placeholder="任务标题"]',
         ) as HTMLInputElement
         const acceptance = requiredElement(
           mounted.container,
-          'input[placeholder="Acceptance criteria (creates Todo)"]',
+          'input[placeholder="验收条件（填写后进入待办）"]',
         ) as HTMLInputElement
         const form = requiredElement(mounted.container, '.luban-board__form') as HTMLFormElement
         await act(async (): Promise<void> => {
