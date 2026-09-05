@@ -6,10 +6,8 @@ export default defineConfig({
   format: ['esm'],
   platform: 'node',
   target: 'node22',
+  fixedExtension: false,
   dts: true,
   sourcemap: true,
   clean: true,
-  outputOptions: {
-    entryFileNames: 'index.js',
-  },
 })

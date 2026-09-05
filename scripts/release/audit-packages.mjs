@@ -40,6 +40,17 @@ export function auditPackedFiles(manifest, packedPaths, policy) {
     if (!normalized.includes(required))
       issues.push(`${manifest.name}: packed payload is missing runtime export ${required}`)
   }
+  const typePaths = new Set(typeof manifest.types === 'string' ? [manifest.types] : [])
+  for (const value of Object.values(manifest.exports ?? {})) {
+    if (value !== null && typeof value === 'object' && typeof value.types === 'string') {
+      typePaths.add(value.types)
+    }
+  }
+  for (const path of typePaths) {
+    const required = path.replace(/^\.\//, '')
+    if (!normalized.includes(required))
+      issues.push(`${manifest.name}: packed payload is missing type export ${required}`)
+  }
   if (manifest.dsh?.client !== undefined) {
     const value = manifest.exports?.['./client']
     const clientPath = (typeof value === 'string' ? value : value?.default)?.replace(/^\.\//, '')

@@ -29,6 +29,20 @@ import { resolvePublishedVersion, verifyArtifactManifest } from '../release/publ
 import { validateDshEngineRange, validateRepository } from '../release/validate-release.mjs'
 import { createStagedDirectoryPublisher, pathIsWithin } from '../path-boundary.mjs'
 
+it('rejects tarballs with missing declaration entry points', () => {
+  const manifest = {
+    name: 'sample',
+    types: './dist/index.d.ts',
+    exports: { './client': { types: './dist/client.d.ts' } },
+  }
+  const policy = { packAllowlist: ['dist/'] }
+  expect(auditPackedFiles(manifest, ['dist/index.ts'], policy)).toEqual([
+    'sample: packed payload is missing type export dist/index.d.ts',
+    'sample: packed payload is missing type export dist/client.d.ts',
+  ])
+  expect(auditPackedFiles(manifest, ['dist/index.d.ts', 'dist/client.d.ts'], policy)).toEqual([])
+})
+
 const TEST_DIR = fileURLToPath(new URL('.', import.meta.url))
 const REPOSITORY_ROOT = resolve(TEST_DIR, '..', '..')
 const temporaryRoots = []
