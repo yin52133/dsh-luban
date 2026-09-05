@@ -58,7 +58,9 @@ jobs:
       - run: pnpm test:integration
       - name: Verify recovery terminal input
         if: runner.os == 'Linux'
-        run: python3 packages/dsh-luban-auth/tests/recovery-terminal.py
+        run: |
+          python3 packages/dsh-luban-auth/tests/recovery-terminal.py
+          python3 packages/dsh-luban-auth/tests/recovery-systemd.py
       - run: uv lock --check --project tools/browser-bridge
       - run: uv run --project tools/browser-bridge --locked ruff check tools/browser-bridge/src tools/browser-bridge/tests
       - run: uv run --project tools/browser-bridge --locked ruff format --check tools/browser-bridge/src tools/browser-bridge/tests
