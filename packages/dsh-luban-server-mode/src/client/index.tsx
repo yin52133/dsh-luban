@@ -172,29 +172,61 @@ export async function sendErrorToCurrentSession(job: UiJob): Promise<void> {
   if (!result.ok) throw new Error(result.error.message)
 }
 
-function ArtifactLinks({ job }: { readonly job: UiJob }): ReactNode {
+export function ArtifactLinks({ job }: { readonly job: UiJob }): ReactNode {
   const [artifacts, setArtifacts] = useState<UiArtifact[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     if (job.status !== 'done') return
+    const controller = new AbortController()
+    setLoading(true)
+    setError('')
+    setArtifacts([])
     void fetch(`/luban-server-mode/jobs/${encodeURIComponent(job.id)}/artifacts`, {
       headers: { accept: 'application/json' },
+      signal: controller.signal,
     })
       .then(async (response): Promise<void> => {
-        if (!response.ok) throw new Error('Unable to load artifacts')
+        if (!response.ok)
+          throw new Error(
+            response.status === 401
+              ? '登录已过期，请重新登录后重试。'
+              : `无法加载构建产物（HTTP ${String(response.status)}），请重试。`,
+          )
         const rows = parseRows(await response.json(), 'artifacts', (value): value is UiArtifact => {
           if (typeof value !== 'object' || value === null) return false
           const row = value as Readonly<Record<string, unknown>>
           return (
             typeof row.name === 'string' &&
             typeof row.sizeBytes === 'number' &&
-            typeof row.downloadUrl === 'string'
+            typeof row.downloadUrl === 'string' &&
+            row.downloadUrl.startsWith('/luban-server-mode/jobs/')
           )
         })
-        setArtifacts(rows)
+        if (!controller.signal.aborted) setArtifacts(rows)
       })
-      .catch((): void => setArtifacts([]))
-  }, [job.id, job.status])
-  if (artifacts.length === 0) return null
+      .catch((reason: unknown): void => {
+        if (!controller.signal.aborted)
+          setError(reason instanceof Error ? reason.message : '无法加载构建产物，请重试。')
+      })
+      .finally((): void => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return (): void => controller.abort()
+  }, [job.id, job.status, attempt])
+  if (job.status !== 'done') return null
+  if (loading) return <p role="status">正在加载构建产物…</p>
+  if (error !== '')
+    return (
+      <div role="alert" className="luban-server__error">
+        <p>{error}</p>
+        <button type="button" onClick={(): void => setAttempt((value) => value + 1)}>
+          重试加载产物
+        </button>
+      </div>
+    )
+  if (artifacts.length === 0) return <p className="luban-server__meta">此构建没有可下载的产物。</p>
   return (
     <div className="luban-server__artifacts">
       {artifacts.map((artifact) => (

@@ -3,7 +3,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ServerModeSection } from '../src/client/index.js'
+import { ArtifactLinks, ServerModeSection } from '../src/client/index.js'
 
 class FakeEventSource {
   public static readonly instances: FakeEventSource[] = []
@@ -66,6 +66,36 @@ afterEach((): void => {
 })
 
 describe('server-mode artifact links', (): void => {
+  it('shows a failed download listing and retries instead of reporting empty artifacts', async (): Promise<void> => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ artifacts: [] }))
+    vi.stubGlobal('fetch', fetcher)
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    try {
+      await act(async (): Promise<void> => {
+        root.render(
+          createElement(ArtifactLinks, {
+            job: { id: 'job-1', templateId: 'test', status: 'done', version: 1 },
+          }),
+        )
+        await Promise.resolve()
+      })
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain('503')
+      expect(container.textContent).not.toContain('没有可下载')
+      await act(async (): Promise<void> => {
+        container.querySelector('button')?.click()
+        await Promise.resolve()
+      })
+      expect(container.textContent).toContain('没有可下载的产物')
+      expect(fetcher).toHaveBeenCalledTimes(2)
+    } finally {
+      await unmount({ container, root })
+    }
+  })
   it('explains an unavailable host without starting a failing event stream', async (): Promise<void> => {
     vi.stubGlobal('fetch', (): Promise<Response> =>
       Promise.resolve(new Response(null, { status: 404 })),
@@ -146,10 +176,11 @@ describe('server-mode artifact links', (): void => {
       )
       if (anchor === null) throw new Error('artifact link was not rendered')
 
-      expect(requests).toContainEqual({
-        path: '/luban-server-mode/jobs/job%2F42/artifacts',
-        init: { headers: { accept: 'application/json' } },
-      })
+      const artifactRequest = requests.find(
+        (request) => request.path === '/luban-server-mode/jobs/job%2F42/artifacts',
+      )
+      expect(artifactRequest?.init?.headers).toEqual({ accept: 'application/json' })
+      expect(artifactRequest?.init?.signal).toBeInstanceOf(AbortSignal)
       expect(anchor.getAttribute('href')).toBe(signedDownloadUrl)
       expect(new URL(anchor.href).origin).toBe(window.location.origin)
 
